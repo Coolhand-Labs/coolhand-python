@@ -28,7 +28,7 @@ keywords = [
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Developers",
-    "License :: OSI Approved :: MIT License",
+    "License :: OSI Approved :: Apache Software License",
     "Operating System :: OS Independent",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.7",
@@ -64,11 +64,9 @@ test = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/coolhand-dev/coolhand-python"
-Documentation = "https://docs.coolhand.dev/python"
-Repository = "https://github.com/coolhand-dev/coolhand-python.git"
-"Bug Tracker" = "https://github.com/coolhand-dev/coolhand-python/issues"
-Changelog = "https://github.com/coolhand-dev/coolhand-python/blob/main/CHANGELOG.md"
+Homepage = "https://github.com/Coolhand-Labs/coolhand-python"
+Repository = "https://github.com/Coolhand-Labs/coolhand-python.git"
+"Bug Tracker" = "https://github.com/Coolhand-Labs/coolhand-python/issues"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/coolhand"]

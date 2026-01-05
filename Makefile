@@ -68,11 +68,14 @@ check: lint type-check test
 build: clean
 	python -m build
 
+# Use local .pypirc if it exists, otherwise use default
+PYPIRC := $(shell if [ -f .pypirc ]; then echo "--config-file .pypirc"; fi)
+
 publish: build
-	python -m twine upload dist/*
+	python -m twine upload $(PYPIRC) dist/*
 
 publish-test: build
-	python -m twine upload --repository testpypi dist/*
+	python -m twine upload $(PYPIRC) --repository testpypi dist/*
 
 # Development workflow
 dev: format lint type-check test

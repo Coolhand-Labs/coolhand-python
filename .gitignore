@@ -147,3 +147,4 @@ Thumbs.db
 # Coolhand specific
 coolhand.log
 *.coolhand.log
+.pypirc

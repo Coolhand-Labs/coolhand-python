@@ -1,28 +1,30 @@
 """Tests for coolhand.interceptor module."""
 
 import sys
-import pytest
 from unittest.mock import MagicMock
+
+import pytest
 
 # AsyncMock is only available in Python 3.8+
 if sys.version_info >= (3, 8):
     from unittest.mock import AsyncMock
 else:
+
     class AsyncMock(MagicMock):
         async def __call__(self, *args, **kwargs):
             return super().__call__(*args, **kwargs)
 
+
 from coolhand.interceptor import (
-    _is_localhost,
+    LLM_API_DOMAINS,
     _is_llm_api,
+    _is_localhost,
     _is_streaming_content_type,
     _read_response_body,
-    set_handler,
-    patch as patch_httpx,
-    unpatch,
     is_patched,
-    LLM_API_DOMAINS,
 )
+from coolhand.interceptor import patch as patch_httpx
+from coolhand.interceptor import set_handler, unpatch
 
 
 class TestIsLocalhost:
@@ -30,25 +32,25 @@ class TestIsLocalhost:
 
     def test_localhost(self):
         """Detects localhost."""
-        assert _is_localhost('http://localhost:8000/api') is True
-        assert _is_localhost('https://localhost/test') is True
+        assert _is_localhost("http://localhost:8000/api") is True
+        assert _is_localhost("https://localhost/test") is True
 
     def test_127_0_0_1(self):
         """Detects 127.0.0.1."""
-        assert _is_localhost('http://127.0.0.1:3000/api') is True
+        assert _is_localhost("http://127.0.0.1:3000/api") is True
 
     def test_0_0_0_0(self):
         """Detects 0.0.0.0."""
-        assert _is_localhost('http://0.0.0.0:8080/') is True
+        assert _is_localhost("http://0.0.0.0:8080/") is True
 
     def test_ipv6_localhost(self):
         """Detects IPv6 localhost."""
-        assert _is_localhost('http://[::1]:8000/api') is True
+        assert _is_localhost("http://[::1]:8000/api") is True
 
     def test_not_localhost(self):
         """Rejects non-localhost URLs."""
-        assert _is_localhost('https://api.openai.com/v1/chat') is False
-        assert _is_localhost('https://example.com') is False
+        assert _is_localhost("https://api.openai.com/v1/chat") is False
+        assert _is_localhost("https://example.com") is False
 
 
 class TestIsLlmApi:
@@ -56,22 +58,22 @@ class TestIsLlmApi:
 
     def test_openai(self):
         """Detects api.openai.com."""
-        assert _is_llm_api('https://api.openai.com/v1/chat/completions') is True
+        assert _is_llm_api("https://api.openai.com/v1/chat/completions") is True
 
     def test_anthropic(self):
         """Detects api.anthropic.com."""
-        assert _is_llm_api('https://api.anthropic.com/v1/messages') is True
+        assert _is_llm_api("https://api.anthropic.com/v1/messages") is True
 
     def test_non_llm_api(self):
         """Rejects non-LLM API URLs."""
-        assert _is_llm_api('https://api.github.com/repos') is False
-        assert _is_llm_api('https://example.com/api') is False
-        assert _is_llm_api('https://anagramica.com/solve') is False
+        assert _is_llm_api("https://api.github.com/repos") is False
+        assert _is_llm_api("https://example.com/api") is False
+        assert _is_llm_api("https://anagramica.com/solve") is False
 
     def test_all_domains_in_list(self):
         """All defined LLM domains are detected."""
         for domain in LLM_API_DOMAINS:
-            url = f'https://{domain}/v1/test'
+            url = f"https://{domain}/v1/test"
             assert _is_llm_api(url) is True, f"Failed for {domain}"
 
 
@@ -80,17 +82,17 @@ class TestIsStreamingContentType:
 
     def test_event_stream(self):
         """Detects text/event-stream."""
-        assert _is_streaming_content_type('text/event-stream') is True
-        assert _is_streaming_content_type('text/event-stream; charset=utf-8') is True
+        assert _is_streaming_content_type("text/event-stream") is True
+        assert _is_streaming_content_type("text/event-stream; charset=utf-8") is True
 
     def test_ndjson(self):
         """Detects application/x-ndjson."""
-        assert _is_streaming_content_type('application/x-ndjson') is True
+        assert _is_streaming_content_type("application/x-ndjson") is True
 
     def test_non_streaming(self):
         """Rejects non-streaming content types."""
-        assert _is_streaming_content_type('application/json') is False
-        assert _is_streaming_content_type('text/plain') is False
+        assert _is_streaming_content_type("application/json") is False
+        assert _is_streaming_content_type("text/plain") is False
 
 
 class TestReadResponseBody:
@@ -99,20 +101,20 @@ class TestReadResponseBody:
     def test_streaming_returns_placeholder(self):
         """Streaming responses return [streaming] placeholder."""
         response = MagicMock()
-        response.headers = {'content-type': 'text/event-stream'}
-        assert _read_response_body(response) == '[streaming]'
+        response.headers = {"content-type": "text/event-stream"}
+        assert _read_response_body(response) == "[streaming]"
 
     def test_reads_content_attribute(self):
         """Reads from _content if available."""
         response = MagicMock()
-        response.headers = {'content-type': 'application/json'}
+        response.headers = {"content-type": "application/json"}
         response._content = b'{"result": "success"}'
         assert _read_response_body(response) == b'{"result": "success"}'
 
     def test_reads_content_property(self):
         """Falls back to content property."""
         response = MagicMock()
-        response.headers = {'content-type': 'application/json'}
+        response.headers = {"content-type": "application/json"}
         response._content = None
         response.content = b'{"result": "fallback"}'
         assert _read_response_body(response) == b'{"result": "fallback"}'
@@ -178,23 +180,23 @@ class TestRequestCapture:
         set_handler(handler)
         patch_httpx()
 
-        mock_httpx_request.url = 'http://localhost:8000/api'
+        mock_httpx_request.url = "http://localhost:8000/api"
 
         # The patched send should call original without capturing
         # Just verify the logic - actual httpx interaction is mocked
-        assert _is_localhost('http://localhost:8000/api') is True
+        assert _is_localhost("http://localhost:8000/api") is True
 
         unpatch()
 
     def test_ignores_non_llm_api(self, reset_global_instance):
         """Non-LLM API requests are not captured."""
-        assert _is_llm_api('https://api.github.com/repos') is False
-        assert _is_llm_api('https://example.com/api') is False
+        assert _is_llm_api("https://api.github.com/repos") is False
+        assert _is_llm_api("https://example.com/api") is False
 
     def test_captures_llm_api(self, reset_global_instance):
         """LLM API requests are captured."""
-        assert _is_llm_api('https://api.openai.com/v1/chat/completions') is True
-        assert _is_llm_api('https://api.anthropic.com/v1/messages') is True
+        assert _is_llm_api("https://api.openai.com/v1/chat/completions") is True
+        assert _is_llm_api("https://api.anthropic.com/v1/messages") is True
 
 
 class TestSyncRequestCapture:
@@ -218,7 +220,7 @@ class TestSyncRequestCapture:
 
             mock_response = MagicMock()
             mock_response.status_code = 200
-            mock_response.headers = {'content-type': 'application/json'}
+            mock_response.headers = {"content-type": "application/json"}
             mock_response._content = b'{"result": "ok"}'
             mock_response.content = b'{"result": "ok"}'
 
@@ -227,9 +229,9 @@ class TestSyncRequestCapture:
             interceptor._original_send = MagicMock(return_value=mock_response)
 
             mock_request = MagicMock()
-            mock_request.method = 'POST'
-            mock_request.url = 'https://api.openai.com/v1/chat/completions'
-            mock_request.headers = {'Content-Type': 'application/json'}
+            mock_request.method = "POST"
+            mock_request.url = "https://api.openai.com/v1/chat/completions"
+            mock_request.headers = {"Content-Type": "application/json"}
             mock_request.content = b'{"model": "gpt-4"}'
 
             client = httpx.Client()
@@ -241,9 +243,9 @@ class TestSyncRequestCapture:
 
             assert len(captured_requests) == 1
             req, res, err = captured_requests[0]
-            assert req['method'] == 'POST'
-            assert req['url'] == 'https://api.openai.com/v1/chat/completions'
-            assert res['status_code'] == 200
+            assert req["method"] == "POST"
+            assert req["url"] == "https://api.openai.com/v1/chat/completions"
+            assert res["status_code"] == 200
             assert err is None
 
         finally:
@@ -266,11 +268,12 @@ class TestAsyncRequestCapture:
 
         try:
             import httpx
+
             from coolhand import interceptor
 
             mock_response = MagicMock()
             mock_response.status_code = 200
-            mock_response.headers = {'content-type': 'application/json'}
+            mock_response.headers = {"content-type": "application/json"}
             mock_response._content = b'{"result": "ok"}'
             mock_response.content = b'{"result": "ok"}'
 
@@ -279,9 +282,9 @@ class TestAsyncRequestCapture:
             interceptor._original_async_send = AsyncMock(return_value=mock_response)
 
             mock_request = MagicMock()
-            mock_request.method = 'POST'
-            mock_request.url = 'https://api.anthropic.com/v1/messages'
-            mock_request.headers = {'Content-Type': 'application/json'}
+            mock_request.method = "POST"
+            mock_request.url = "https://api.anthropic.com/v1/messages"
+            mock_request.headers = {"Content-Type": "application/json"}
             mock_request.content = b'{"model": "claude-3"}'
 
             async with httpx.AsyncClient() as client:
@@ -291,9 +294,9 @@ class TestAsyncRequestCapture:
 
             assert len(captured_requests) == 1
             req, res, err = captured_requests[0]
-            assert req['method'] == 'POST'
-            assert 'anthropic' in req['url']
-            assert res['status_code'] == 200
+            assert req["method"] == "POST"
+            assert "anthropic" in req["url"]
+            assert res["status_code"] == 200
 
         finally:
             unpatch()
@@ -314,16 +317,19 @@ class TestErrorHandling:
 
         try:
             import httpx
+
             from coolhand import interceptor
 
             # Mock original send to raise an exception
-            interceptor._original_send = MagicMock(side_effect=Exception("Connection failed"))
+            interceptor._original_send = MagicMock(
+                side_effect=Exception("Connection failed")
+            )
 
             mock_request = MagicMock()
-            mock_request.method = 'POST'
-            mock_request.url = 'https://api.openai.com/v1/chat/completions'
+            mock_request.method = "POST"
+            mock_request.url = "https://api.openai.com/v1/chat/completions"
             mock_request.headers = {}
-            mock_request.content = b'{}'
+            mock_request.content = b"{}"
 
             client = httpx.Client()
 
@@ -370,14 +376,14 @@ class TestInterceptorEdgeCases:
     def test_is_localhost_with_invalid_url(self):
         """_is_localhost handles invalid URLs gracefully."""
         # These should not raise exceptions
-        assert _is_localhost('') is False
-        assert _is_localhost('not-a-valid-url') is False
+        assert _is_localhost("") is False
+        assert _is_localhost("not-a-valid-url") is False
 
     def test_is_llm_api_with_invalid_url(self):
         """_is_llm_api handles invalid URLs gracefully."""
         # These should not raise exceptions
-        assert _is_llm_api('') is False
-        assert _is_llm_api('not-a-valid-url') is False
+        assert _is_llm_api("") is False
+        assert _is_llm_api("not-a-valid-url") is False
 
 
 class TestAsyncStreamingCapture:
@@ -396,17 +402,18 @@ class TestAsyncStreamingCapture:
 
         try:
             import httpx
+
             from coolhand import interceptor
 
             # Create mock streaming response
             mock_response = MagicMock()
             mock_response.status_code = 200
-            mock_response.headers = {'content-type': 'text/event-stream'}
+            mock_response.headers = {"content-type": "text/event-stream"}
 
             async def mock_aiter_lines():
                 yield 'data: {"chunk": 1}'
                 yield 'data: {"chunk": 2}'
-                yield ''
+                yield ""
 
             mock_response.aiter_lines = mock_aiter_lines
             mock_response.aiter_bytes = None
@@ -418,9 +425,9 @@ class TestAsyncStreamingCapture:
             interceptor._original_async_send = AsyncMock(return_value=mock_response)
 
             mock_request = MagicMock()
-            mock_request.method = 'POST'
-            mock_request.url = 'https://api.openai.com/v1/chat/completions'
-            mock_request.headers = {'Content-Type': 'application/json'}
+            mock_request.method = "POST"
+            mock_request.url = "https://api.openai.com/v1/chat/completions"
+            mock_request.headers = {"Content-Type": "application/json"}
             mock_request.content = b'{"stream": true}'
 
             async with httpx.AsyncClient() as client:
@@ -434,7 +441,7 @@ class TestAsyncStreamingCapture:
             # Should have captured the streaming response
             assert len(captured_requests) == 1
             req, res, err = captured_requests[0]
-            assert res['is_streaming'] is True
+            assert res["is_streaming"] is True
 
         finally:
             unpatch()
@@ -452,6 +459,7 @@ class TestAsyncStreamingCapture:
 
         try:
             import httpx
+
             from coolhand import interceptor
 
             # Save original for restoration
@@ -464,10 +472,10 @@ class TestAsyncStreamingCapture:
             interceptor._original_async_send = raising_send
 
             mock_request = MagicMock()
-            mock_request.method = 'POST'
-            mock_request.url = 'https://api.anthropic.com/v1/messages'
+            mock_request.method = "POST"
+            mock_request.url = "https://api.anthropic.com/v1/messages"
             mock_request.headers = {}
-            mock_request.content = b'{}'
+            mock_request.content = b"{}"
 
             async with httpx.AsyncClient() as client:
                 with pytest.raises(Exception, match="Async connection failed"):
@@ -492,13 +500,13 @@ class TestReadResponseBodyEdgeCases:
     def test_read_response_body_no_content(self):
         """_read_response_body returns None when no content available."""
         response = MagicMock()
-        response.headers = {'content-type': 'application/json'}
+        response.headers = {"content-type": "application/json"}
         response._content = None
         del response.content  # Remove the content attribute
 
         result = _read_response_body(response)
         # Should handle missing content gracefully
-        assert result is None or result == b''
+        assert result is None or result == b""
 
     def test_read_response_body_exception(self):
         """_read_response_body handles exceptions gracefully."""

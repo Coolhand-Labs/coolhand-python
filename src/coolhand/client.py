@@ -16,26 +16,32 @@ from .version import __version__
 logger = logging.getLogger(__name__)
 
 # Sensitive headers to mask
-SENSITIVE_HEADERS = ['authorization', 'api-key', 'x-api-key', 'openai-api-key', 'anthropic-api-key']
+SENSITIVE_HEADERS = [
+    "authorization",
+    "api-key",
+    "x-api-key",
+    "openai-api-key",
+    "anthropic-api-key",
+]
 
 
-BASE_URL = 'https://coolhandlabs.com'
+BASE_URL = "https://coolhandlabs.com"
 
 
 def _get_default_config() -> Config:
     """Get default configuration from environment."""
     return {
-        'api_key': os.getenv('COOLHAND_API_KEY', 'demo-key'),
-        'silent': os.getenv('COOLHAND_SILENT', 'true').lower() == 'true',
-        'auto_submit': True,
-        'session_id': f"session_{int(time.time() * 1000)}",
+        "api_key": os.getenv("COOLHAND_API_KEY", "demo-key"),
+        "silent": os.getenv("COOLHAND_SILENT", "true").lower() == "true",
+        "auto_submit": True,
+        "session_id": f"session_{int(time.time() * 1000)}",
     }
 
 
 def _mask_value(value: str) -> str:
     """Mask a sensitive value, keeping first/last 4 chars."""
     if len(value) <= 8:
-        return '*' * len(value)
+        return "*" * len(value)
     return f"{value[:4]}{'*' * (len(value) - 8)}{value[-4:]}"
 
 
@@ -62,7 +68,7 @@ def _parse_body(body: Optional[Union[str, bytes, Dict]]) -> Optional[Union[str, 
     # Convert bytes to string
     if isinstance(body, bytes):
         try:
-            body = body.decode('utf-8')
+            body = body.decode("utf-8")
         except Exception:
             return str(body)
 
@@ -78,7 +84,11 @@ def _parse_body(body: Optional[Union[str, bytes, Dict]]) -> Optional[Union[str, 
 
 def _to_iso8601(timestamp: float) -> str:
     """Convert Unix timestamp to ISO 8601 string."""
-    return datetime.fromtimestamp(timestamp, tz=timezone.utc).isoformat().replace('+00:00', 'Z')
+    return (
+        datetime.fromtimestamp(timestamp, tz=timezone.utc)
+        .isoformat()
+        .replace("+00:00", "Z")
+    )
 
 
 class CoolhandClient:
@@ -94,12 +104,12 @@ class CoolhandClient:
         self._queue: List[Dict[str, Any]] = []
         self._interaction_count = 0
 
-        if not self.config.get('silent'):
+        if not self.config.get("silent"):
             logging.basicConfig(level=logging.INFO)
 
     @property
     def session_id(self) -> str:
-        return self.config.get('session_id', '')
+        return self.config.get("session_id", "")
 
     def log_interaction(
         self,
@@ -111,37 +121,41 @@ class CoolhandClient:
         self._interaction_count += 1
 
         # Get timestamps
-        req_timestamp = request.get('timestamp', time.time())
-        res_timestamp = response.get('timestamp', time.time()) if response else time.time()
-        duration_seconds = response.get('duration', 0.0) if response else 0.0
+        req_timestamp = request.get("timestamp", time.time())
+        res_timestamp = (
+            response.get("timestamp", time.time()) if response else time.time()
+        )
+        duration_seconds = response.get("duration", 0.0) if response else 0.0
 
         # Build flat interaction data (matching Ruby/Node format)
         interaction = {
-            'id': str(uuid.uuid4()),
-            'timestamp': _to_iso8601(req_timestamp),
-            'method': request.get('method', '').lower(),
-            'url': request.get('url', ''),
-            'headers': _sanitize_headers(request.get('headers', {})),
-            'request_body': _parse_body(request.get('body')),
-            'response_headers': _sanitize_headers(response.get('headers', {})) if response else {},
-            'response_body': _parse_body(response.get('body')) if response else None,
-            'status_code': response.get('status_code', 0) if response else 0,
-            'duration_ms': round(duration_seconds * 1000, 2),
-            'completed_at': _to_iso8601(res_timestamp),
-            'is_streaming': response.get('is_streaming', False) if response else False,
+            "id": str(uuid.uuid4()),
+            "timestamp": _to_iso8601(req_timestamp),
+            "method": request.get("method", "").lower(),
+            "url": request.get("url", ""),
+            "headers": _sanitize_headers(request.get("headers", {})),
+            "request_body": _parse_body(request.get("body")),
+            "response_headers": _sanitize_headers(response.get("headers", {}))
+            if response
+            else {},
+            "response_body": _parse_body(response.get("body")) if response else None,
+            "status_code": response.get("status_code", 0) if response else 0,
+            "duration_ms": round(duration_seconds * 1000, 2),
+            "completed_at": _to_iso8601(res_timestamp),
+            "is_streaming": response.get("is_streaming", False) if response else False,
         }
 
         # Debug output when not silent
-        if not self.config.get('silent'):
-            url = request.get('url', 'unknown')
-            method = request.get('method', 'unknown')
-            status = response.get('status_code') if response else 'error'
+        if not self.config.get("silent"):
+            url = request.get("url", "unknown")
+            method = request.get("method", "unknown")
+            status = response.get("status_code") if response else "error"
             logger.info(f"Captured: {method} {url} -> {status}")
 
         self._queue.append(interaction)
 
         # Auto-submit if enabled
-        if self.config.get('auto_submit') and len(self._queue) >= 1:
+        if self.config.get("auto_submit") and len(self._queue) >= 1:
             self.flush()
 
     def flush(self) -> bool:
@@ -149,8 +163,8 @@ class CoolhandClient:
         if not self._queue:
             return True
 
-        api_key = self.config.get('api_key')
-        if not api_key or api_key == 'demo-key':
+        api_key = self.config.get("api_key")
+        if not api_key or api_key == "demo-key":
             logger.debug("No API key configured, skipping submission")
             self._queue.clear()
             return True
@@ -160,21 +174,21 @@ class CoolhandClient:
         for interaction in self._queue:
             try:
                 payload = {
-                    'llm_request_log': {
-                        'raw_request': interaction,
-                        'collector': f'coolhand-python-{__version__}-auto-monitor',
+                    "llm_request_log": {
+                        "raw_request": interaction,
+                        "collector": f"coolhand-python-{__version__}-auto-monitor",
                     }
                 }
 
                 request = Request(
                     url=f"{BASE_URL}/api/v2/llm_request_logs",
-                    data=json.dumps(payload, default=str).encode('utf-8'),
+                    data=json.dumps(payload, default=str).encode("utf-8"),
                     headers={
-                        'X-API-Key': api_key,
-                        'Content-Type': 'application/json',
-                        'User-Agent': f'coolhand-python/{__version__}',
+                        "X-API-Key": api_key,
+                        "Content-Type": "application/json",
+                        "User-Agent": f"coolhand-python/{__version__}",
                     },
-                    method='POST',
+                    method="POST",
                 )
 
                 with urlopen(request, timeout=10) as resp:
@@ -188,7 +202,9 @@ class CoolhandClient:
 
         if success_count > 0:
             queue_len = len(self._queue)
-            logger.info(f"Successfully submitted {success_count}/{queue_len} interactions")
+            logger.info(
+                f"Successfully submitted {success_count}/{queue_len} interactions"
+            )
 
         self._queue.clear()
         return success_count == len(self._queue)
@@ -199,23 +215,24 @@ class CoolhandClient:
         patched_libs = []
         try:
             from . import interceptor
+
             if interceptor.is_patched():
-                patched_libs = ['httpx.Client.send', 'httpx.AsyncClient.send']
+                patched_libs = ["httpx.Client.send", "httpx.AsyncClient.send"]
         except Exception:
             pass
 
         return {
-            'config': {
-                'has_api_key': bool(self.config.get('api_key')),
+            "config": {
+                "has_api_key": bool(self.config.get("api_key")),
             },
-            'monitoring': {
-                'enabled': True,
-                'patched_libraries': patched_libs,
+            "monitoring": {
+                "enabled": True,
+                "patched_libraries": patched_libs,
             },
-            'logging': {
-                'session_id': self.session_id,
-                'interaction_count': self._interaction_count,
-                'queue_size': len(self._queue),
+            "logging": {
+                "session_id": self.session_id,
+                "interaction_count": self._interaction_count,
+                "queue_size": len(self._queue),
             },
         }
 

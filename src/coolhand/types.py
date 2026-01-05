@@ -1,11 +1,13 @@
 """Minimal type definitions for Coolhand."""
 
 from typing import Any, Dict, Optional, Union
+
 from typing_extensions import TypedDict
 
 
 class RequestData(TypedDict, total=False):
     """HTTP request data."""
+
     method: str
     url: str
     headers: Dict[str, str]
@@ -15,6 +17,7 @@ class RequestData(TypedDict, total=False):
 
 class ResponseData(TypedDict, total=False):
     """HTTP response data."""
+
     status_code: int
     headers: Dict[str, str]
     body: Optional[Union[str, bytes, Dict[str, Any]]]
@@ -25,6 +28,7 @@ class ResponseData(TypedDict, total=False):
 
 class Config(TypedDict, total=False):
     """Coolhand configuration."""
+
     api_key: Optional[str]
     silent: bool
     auto_submit: bool
@@ -41,6 +45,7 @@ class FeedbackData(TypedDict, total=False):
     - original_output: Fuzzy match via the original LLM response text
     - client_unique_id: Match via your internal identifier
     """
+
     # Matching fields (at least one required)
     llm_request_log_id: Optional[int]
     llm_provider_unique_id: Optional[str]
@@ -56,6 +61,7 @@ class FeedbackData(TypedDict, total=False):
 
 class FeedbackResponse(TypedDict, total=False):
     """Response from the feedback API."""
+
     id: int
     llm_request_log_id: int
     like: bool

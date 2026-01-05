@@ -8,14 +8,14 @@ Usage:
     coolhand.Coolhand(api_key="your-key", debug=True)
 """
 
-from .version import __version__
-from .types import Config, RequestData, ResponseData, FeedbackData, FeedbackResponse
-from .client import CoolhandClient, get_instance, set_instance, initialize
-from .feedback_service import FeedbackService, get_feedback_service, create_feedback
-from . import interceptor
-
 import atexit
 import logging
+
+from . import interceptor
+from .client import CoolhandClient, get_instance, initialize, set_instance
+from .feedback_service import FeedbackService, create_feedback, get_feedback_service
+from .types import Config, FeedbackData, FeedbackResponse, RequestData, ResponseData
+from .version import __version__
 
 logger = logging.getLogger(__name__)
 
@@ -91,14 +91,14 @@ def status() -> dict:
 def start_monitoring():
     """Start monitoring on global instance."""
     instance = get_instance()
-    if instance and hasattr(instance, 'start_monitoring'):
+    if instance and hasattr(instance, "start_monitoring"):
         instance.start_monitoring()
 
 
 def stop_monitoring():
     """Stop monitoring on global instance."""
     instance = get_instance()
-    if instance and hasattr(instance, 'stop_monitoring'):
+    if instance and hasattr(instance, "stop_monitoring"):
         instance.stop_monitoring()
 
 
@@ -124,21 +124,21 @@ except Exception as e:
 
 
 __all__ = [
-    '__version__',
-    'Coolhand',
-    'Config',
-    'RequestData',
-    'ResponseData',
-    'FeedbackData',
-    'FeedbackResponse',
-    'FeedbackService',
-    'get_feedback_service',
-    'create_feedback',
-    'initialize',
-    'get_instance',
-    'get_global_instance',
-    'status',
-    'start_monitoring',
-    'stop_monitoring',
-    'shutdown',
+    "__version__",
+    "Coolhand",
+    "Config",
+    "RequestData",
+    "ResponseData",
+    "FeedbackData",
+    "FeedbackResponse",
+    "FeedbackService",
+    "get_feedback_service",
+    "create_feedback",
+    "initialize",
+    "get_instance",
+    "get_global_instance",
+    "status",
+    "start_monitoring",
+    "stop_monitoring",
+    "shutdown",
 ]

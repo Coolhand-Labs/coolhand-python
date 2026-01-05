@@ -12,8 +12,8 @@ from .version import __version__
 
 logger = logging.getLogger(__name__)
 
-BASE_URL = 'https://coolhandlabs.com'
-FEEDBACK_ENDPOINT = '/api/v2/llm_request_log_feedbacks'
+BASE_URL = "https://coolhandlabs.com"
+FEEDBACK_ENDPOINT = "/api/v2/llm_request_log_feedbacks"
 
 
 class FeedbackService:
@@ -40,8 +40,8 @@ class FeedbackService:
             **kwargs: Override config values (api_key, silent).
         """
         self.config: Config = {
-            'api_key': os.getenv('COOLHAND_API_KEY', ''),
-            'silent': os.getenv('COOLHAND_SILENT', 'true').lower() == 'true',
+            "api_key": os.getenv("COOLHAND_API_KEY", ""),
+            "silent": os.getenv("COOLHAND_SILENT", "true").lower() == "true",
         }
         if config:
             self.config.update(config)
@@ -50,16 +50,16 @@ class FeedbackService:
     @property
     def api_key(self) -> str:
         """Get the configured API key."""
-        return self.config.get('api_key', '')
+        return self.config.get("api_key", "")
 
     @property
     def silent(self) -> bool:
         """Check if silent mode is enabled."""
-        return self.config.get('silent', True)
+        return self.config.get("silent", True)
 
     def _get_collector_string(self) -> str:
         """Get the collector identifier string."""
-        return f'coolhand-python-{__version__}-manual'
+        return f"coolhand-python-{__version__}-manual"
 
     def _log(self, message: str) -> None:
         """Log a message if not in silent mode."""
@@ -106,19 +106,18 @@ class FeedbackService:
             ... })
         """
         # Validate required field
-        if 'like' not in feedback:
+        if "like" not in feedback:
             raise ValueError("'like' field is required in feedback data")
 
         # Check for at least one matching field
         matching_fields = [
-            'llm_request_log_id',
-            'llm_provider_unique_id',
-            'original_output',
-            'client_unique_id'
+            "llm_request_log_id",
+            "llm_provider_unique_id",
+            "original_output",
+            "client_unique_id",
         ]
         has_matching_field = any(
-            feedback.get(field) is not None
-            for field in matching_fields
+            feedback.get(field) is not None for field in matching_fields
         )
         if not has_matching_field:
             logger.warning(
@@ -134,12 +133,10 @@ class FeedbackService:
 
         # Add collector to feedback
         feedback_with_collector = dict(feedback)
-        feedback_with_collector['collector'] = self._get_collector_string()
+        feedback_with_collector["collector"] = self._get_collector_string()
 
         # Build payload
-        payload = {
-            'llm_request_log_feedback': feedback_with_collector
-        }
+        payload = {"llm_request_log_feedback": feedback_with_collector}
 
         # Log feedback info
         self._log_feedback_info(feedback)
@@ -148,18 +145,18 @@ class FeedbackService:
         try:
             request = Request(
                 url=f"{BASE_URL}{FEEDBACK_ENDPOINT}",
-                data=json.dumps(payload, default=str).encode('utf-8'),
+                data=json.dumps(payload, default=str).encode("utf-8"),
                 headers={
-                    'X-API-Key': self.api_key,
-                    'Content-Type': 'application/json',
-                    'User-Agent': f'coolhand-python/{__version__}',
+                    "X-API-Key": self.api_key,
+                    "Content-Type": "application/json",
+                    "User-Agent": f"coolhand-python/{__version__}",
                 },
-                method='POST',
+                method="POST",
             )
 
             with urlopen(request, timeout=10) as resp:
                 if resp.status in (200, 201):
-                    response_data = json.loads(resp.read().decode('utf-8'))
+                    response_data = json.loads(resp.read().decode("utf-8"))
                     self._log("Successfully created feedback")
                     return response_data
                 else:
@@ -181,19 +178,21 @@ class FeedbackService:
         if self.silent:
             return
 
-        log_id = feedback.get('llm_request_log_id', 'N/A')
-        like = feedback.get('like')
-        like_str = 'thumbs up' if like else 'thumbs down'
+        log_id = feedback.get("llm_request_log_id", "N/A")
+        like = feedback.get("like")
+        like_str = "thumbs up" if like else "thumbs down"
 
         self._log(f"Creating feedback for LLM Request Log ID: {log_id}")
         self._log(f"Sentiment: {like_str}")
 
-        explanation = feedback.get('explanation')
+        explanation = feedback.get("explanation")
         if explanation:
-            truncated = explanation[:100] + '...' if len(explanation) > 100 else explanation
+            truncated = (
+                explanation[:100] + "..." if len(explanation) > 100 else explanation
+            )
             self._log(f"Explanation: {truncated}")
 
-        if feedback.get('revised_output'):
+        if feedback.get("revised_output"):
             self._log("Includes revised output")
 
         self._log(f"Sending to: {BASE_URL}{FEEDBACK_ENDPOINT}")

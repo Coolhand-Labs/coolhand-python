@@ -147,6 +147,50 @@ Coolhand monitors HTTP requests made via **httpx**, which is used by:
 
 For non-LLM endpoints, requests pass through unchanged with zero overhead.
 
+## Feedback Service
+
+Collect user feedback on LLM responses to improve your AI outputs. The FeedbackService lets you capture thumbs up/down ratings, explanations, and corrections.
+
+> **Frontend Feedback Widget**: For browser-based feedback collection, see [coolhand-js](https://github.com/Coolhand-Labs/coolhand-js) - an accessible, lightweight JavaScript widget that leverages best UX practices to capture actionable user feedback on any AI output.
+
+### Basic Usage
+
+```python
+from coolhand import Coolhand
+
+# Initialize with your API key
+ch = Coolhand(api_key='your-api-key')
+
+# Submit positive feedback
+ch.create_feedback({
+    'llm_request_log_id': 12345,  # From Coolhand logs
+    'like': True,
+    'explanation': 'Very helpful response!'
+})
+
+# Using original output for fuzzy matching
+ch.create_feedback({
+    'original_output': 'The capital of France is London.',
+    'like': False,
+    'revised_output': 'The capital of France is Paris.'
+})
+```
+
+### Feedback Fields
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `like` | bool | Yes | Thumbs up (`True`) or down (`False`) |
+| `llm_request_log_id` | int | No* | Coolhand log ID (exact match) |
+| `llm_provider_unique_id` | str | No* | Provider's x-request-id (exact match) |
+| `original_output` | str | No* | Original response text (fuzzy match) |
+| `client_unique_id` | str | No* | Your internal identifier |
+| `explanation` | str | No | Why the response was good/bad |
+| `revised_output` | str | No | User's corrected version |
+| `creator_unique_id` | str | No | ID of user providing feedback |
+
+*At least one matching field is recommended to link feedback to the original request.
+
 ## Troubleshooting
 
 ### Enable Debug Output
@@ -166,17 +210,6 @@ Or via environment variable:
 export COOLHAND_SILENT=false
 ```
 
-### Testing
-
-In test environments, you can use a demo key:
-
-```python
-import os
-os.environ['COOLHAND_API_KEY'] = 'demo-key'  # Logs locally, no API calls
-
-import coolhand
-```
-
 ## API Key
 
 **Sign up for free** at [coolhandlabs.com](https://coolhandlabs.com/) to get your API key and start monitoring your LLM usage.
@@ -192,8 +225,9 @@ import coolhand
 - No sensitive data is exposed in logs
 - All data is sent via HTTPS to Coolhand servers
 
-## Other Languages
+## Related Packages
 
+- **Frontend (Feedback Collection Widget)**: [coolhand-js](https://github.com/Coolhand-Labs/coolhand-js) - Frontend feedback widget for collecting user sentiment on AI outputs
 - **Ruby**: [coolhand gem](https://github.com/Coolhand-Labs/coolhand-ruby) - Coolhand monitoring for Ruby applications
 - **Node.js**: [coolhand-node package](https://github.com/Coolhand-Labs/coolhand-node) - Coolhand monitoring for Node.js applications
 

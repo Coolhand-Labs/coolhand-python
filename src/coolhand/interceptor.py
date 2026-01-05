@@ -242,7 +242,7 @@ def patch() -> bool:
 
 def unpatch() -> None:
     """Restore original httpx methods."""
-    global _patched, _original_send, _original_async_send
+    global _patched
 
     if not _patched:
         return

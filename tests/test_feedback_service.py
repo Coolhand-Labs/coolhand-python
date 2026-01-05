@@ -5,7 +5,6 @@ import pytest
 from unittest.mock import MagicMock, patch
 
 from coolhand import FeedbackService, FeedbackData, create_feedback, get_feedback_service
-from coolhand.feedback_service import _default_service
 
 
 @pytest.fixture
@@ -168,7 +167,9 @@ class TestCreateFeedback:
         assert 'coolhand-python' in collector
         assert 'manual' in collector
 
-    def test_create_feedback_warns_no_matching_field(self, feedback_service, mock_feedback_urlopen, caplog):
+    def test_create_feedback_warns_no_matching_field(
+        self, feedback_service, mock_feedback_urlopen, caplog
+    ):
         """Test warning when no matching field is provided."""
         import logging
         caplog.set_level(logging.WARNING)
@@ -241,7 +242,9 @@ class TestModuleLevelFunctions:
         service2 = get_feedback_service()
         assert service1 is service2
 
-    def test_create_feedback_function(self, mock_config, mock_feedback_urlopen, reset_default_service):
+    def test_create_feedback_function(
+        self, mock_config, mock_feedback_urlopen, reset_default_service
+    ):
         """Test module-level create_feedback function."""
         feedback: FeedbackData = {
             'llm_request_log_id': 12345,
@@ -265,7 +268,9 @@ class TestCoolhandIntegration:
         assert hasattr(instance, 'feedback_service')
         assert isinstance(instance.feedback_service, FeedbackService)
 
-    def test_coolhand_create_feedback(self, reset_global_instance, mock_config, mock_feedback_urlopen):
+    def test_coolhand_create_feedback(
+        self, reset_global_instance, mock_config, mock_feedback_urlopen
+    ):
         """Test Coolhand.create_feedback method."""
         from coolhand import Coolhand
 
@@ -279,3 +284,131 @@ class TestCoolhandIntegration:
 
         result = instance.create_feedback(feedback)
         assert result is not None
+
+
+class TestFeedbackServiceLogging:
+    """Tests for FeedbackService logging behavior."""
+
+    def test_log_feedback_info_when_not_silent(self, mock_config, caplog):
+        """_log_feedback_info logs details when silent=False."""
+        import logging
+        caplog.set_level(logging.INFO)
+
+        mock_config['silent'] = False
+        service = FeedbackService(config=mock_config)
+
+        feedback: FeedbackData = {
+            'llm_request_log_id': 12345,
+            'like': True,
+            'explanation': 'This is a great response that helped me understand.',
+            'revised_output': 'Corrected version',
+        }
+
+        service._log_feedback_info(feedback)
+
+        assert 'Creating feedback for LLM Request Log ID: 12345' in caplog.text
+        assert 'thumbs up' in caplog.text
+        assert 'Explanation:' in caplog.text
+        assert 'Includes revised output' in caplog.text
+
+    def test_log_feedback_info_truncates_long_explanation(self, mock_config, caplog):
+        """_log_feedback_info truncates explanations over 100 chars."""
+        import logging
+        caplog.set_level(logging.INFO)
+
+        mock_config['silent'] = False
+        service = FeedbackService(config=mock_config)
+
+        long_explanation = 'x' * 150
+        feedback: FeedbackData = {
+            'llm_request_log_id': 12345,
+            'like': False,
+            'explanation': long_explanation,
+        }
+
+        service._log_feedback_info(feedback)
+
+        assert '...' in caplog.text
+        # Should not contain the full 150 char explanation
+        assert long_explanation not in caplog.text
+
+    def test_log_feedback_info_silent_mode(self, mock_config, caplog):
+        """_log_feedback_info does nothing when silent=True."""
+        import logging
+        caplog.set_level(logging.INFO)
+
+        mock_config['silent'] = True
+        service = FeedbackService(config=mock_config)
+
+        feedback: FeedbackData = {
+            'llm_request_log_id': 12345,
+            'like': True,
+        }
+
+        service._log_feedback_info(feedback)
+
+        assert 'Creating feedback' not in caplog.text
+
+
+class TestFeedbackServiceEdgeCases:
+    """Tests for edge cases in FeedbackService."""
+
+    def test_create_feedback_unexpected_exception(self, feedback_service, caplog):
+        """create_feedback handles unexpected exceptions gracefully."""
+        import logging
+        caplog.set_level(logging.WARNING)
+
+        with patch('coolhand.feedback_service.urlopen') as mock:
+            mock.side_effect = RuntimeError('Unexpected error')
+
+            feedback: FeedbackData = {
+                'llm_request_log_id': 12345,
+                'like': True,
+            }
+
+            result = feedback_service.create_feedback(feedback)
+            assert result is None
+            assert 'Unexpected error submitting feedback' in caplog.text
+
+    def test_create_feedback_non_success_status_code(self, feedback_service, caplog):
+        """create_feedback handles non-200/201 status codes."""
+        import logging
+        caplog.set_level(logging.WARNING)
+
+        with patch('coolhand.feedback_service.urlopen') as mock:
+            mock_response = MagicMock()
+            mock_response.status = 400
+            mock_response.__enter__ = MagicMock(return_value=mock_response)
+            mock_response.__exit__ = MagicMock(return_value=False)
+            mock.return_value = mock_response
+
+            feedback: FeedbackData = {
+                'llm_request_log_id': 12345,
+                'like': True,
+            }
+
+            result = feedback_service.create_feedback(feedback)
+            assert result is None
+            assert 'Unexpected status code: 400' in caplog.text
+
+    def test_get_collector_string_format(self, mock_config):
+        """_get_collector_string returns expected format."""
+        service = FeedbackService(config=mock_config)
+        collector = service._get_collector_string()
+
+        assert 'coolhand-python' in collector
+        assert 'manual' in collector
+
+    def test_get_feedback_service_new_when_config_provided(
+        self, mock_config, reset_default_service
+    ):
+        """get_feedback_service creates new service when config provided."""
+        # Create initial default service
+        service1 = get_feedback_service(api_key='first-key')
+
+        # Create new service with different config
+        service2 = get_feedback_service(config=mock_config)
+
+        # Should be different instances
+        assert service1 is not service2
+        assert service2.api_key == mock_config['api_key']

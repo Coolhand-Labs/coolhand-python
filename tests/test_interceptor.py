@@ -2,7 +2,7 @@
 
 import sys
 import pytest
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 # AsyncMock is only available in Python 3.8+
 if sys.version_info >= (3, 8):
@@ -153,7 +153,6 @@ class TestPatchUnpatch:
         import httpx
 
         original_send = httpx.Client.send
-        original_async_send = httpx.AsyncClient.send
 
         patch_httpx()
         assert httpx.Client.send is not original_send
@@ -182,11 +181,8 @@ class TestRequestCapture:
         mock_httpx_request.url = 'http://localhost:8000/api'
 
         # The patched send should call original without capturing
-        import httpx
-
-        with patch.object(httpx.Client, 'send') as mock_send:
-            # Just verify the logic - actual httpx interaction is mocked
-            assert _is_localhost('http://localhost:8000/api') is True
+        # Just verify the logic - actual httpx interaction is mocked
+        assert _is_localhost('http://localhost:8000/api') is True
 
         unpatch()
 
@@ -342,3 +338,172 @@ class TestErrorHandling:
 
         finally:
             unpatch()
+
+
+class TestInterceptorEdgeCases:
+    """Tests for edge cases in interceptor module."""
+
+    def test_patch_already_patched_returns_true(self, reset_global_instance):
+        """patch returns True when already patched."""
+        # First patch
+        result1 = patch_httpx()
+        assert result1 is True
+        assert is_patched() is True
+
+        # Second patch should also return True (idempotent)
+        result2 = patch_httpx()
+        assert result2 is True
+
+        unpatch()
+
+    def test_unpatch_when_not_patched(self, reset_global_instance):
+        """unpatch does nothing when not patched."""
+        from coolhand import interceptor
+
+        # Ensure not patched
+        interceptor._patched = False
+
+        # Should not raise any errors
+        unpatch()
+        assert is_patched() is False
+
+    def test_is_localhost_with_invalid_url(self):
+        """_is_localhost handles invalid URLs gracefully."""
+        # These should not raise exceptions
+        assert _is_localhost('') is False
+        assert _is_localhost('not-a-valid-url') is False
+
+    def test_is_llm_api_with_invalid_url(self):
+        """_is_llm_api handles invalid URLs gracefully."""
+        # These should not raise exceptions
+        assert _is_llm_api('') is False
+        assert _is_llm_api('not-a-valid-url') is False
+
+
+class TestAsyncStreamingCapture:
+    """Tests for async streaming response capture."""
+
+    @pytest.mark.asyncio
+    async def test_async_streaming_aiter_lines(self, reset_global_instance):
+        """Async streaming via aiter_lines is captured."""
+        captured_requests = []
+
+        def capture_handler(req, res, err):
+            captured_requests.append((req, res, err))
+
+        set_handler(capture_handler)
+        patch_httpx()
+
+        try:
+            import httpx
+            from coolhand import interceptor
+
+            # Create mock streaming response
+            mock_response = MagicMock()
+            mock_response.status_code = 200
+            mock_response.headers = {'content-type': 'text/event-stream'}
+
+            async def mock_aiter_lines():
+                yield 'data: {"chunk": 1}'
+                yield 'data: {"chunk": 2}'
+                yield ''
+
+            mock_response.aiter_lines = mock_aiter_lines
+            mock_response.aiter_bytes = None
+            mock_response.aiter_text = None
+            mock_response.aiter_raw = None
+
+            # Mock the original async send
+            original_original = interceptor._original_async_send
+            interceptor._original_async_send = AsyncMock(return_value=mock_response)
+
+            mock_request = MagicMock()
+            mock_request.method = 'POST'
+            mock_request.url = 'https://api.openai.com/v1/chat/completions'
+            mock_request.headers = {'Content-Type': 'application/json'}
+            mock_request.content = b'{"stream": true}'
+
+            async with httpx.AsyncClient() as client:
+                response = await httpx.AsyncClient.send(client, mock_request)
+                # Consume the stream
+                async for _ in response.aiter_lines():
+                    pass
+
+            interceptor._original_async_send = original_original
+
+            # Should have captured the streaming response
+            assert len(captured_requests) == 1
+            req, res, err = captured_requests[0]
+            assert res['is_streaming'] is True
+
+        finally:
+            unpatch()
+
+    @pytest.mark.asyncio
+    async def test_async_error_captured(self, reset_global_instance):
+        """Errors during async requests are captured."""
+        captured_requests = []
+
+        def capture_handler(req, res, err):
+            captured_requests.append((req, res, err))
+
+        set_handler(capture_handler)
+        patch_httpx()
+
+        try:
+            import httpx
+            from coolhand import interceptor
+
+            # Save original for restoration
+            saved_original = interceptor._original_async_send
+
+            # Create a mock that raises when awaited
+            async def raising_send(*args, **kwargs):
+                raise Exception("Async connection failed")
+
+            interceptor._original_async_send = raising_send
+
+            mock_request = MagicMock()
+            mock_request.method = 'POST'
+            mock_request.url = 'https://api.anthropic.com/v1/messages'
+            mock_request.headers = {}
+            mock_request.content = b'{}'
+
+            async with httpx.AsyncClient() as client:
+                with pytest.raises(Exception, match="Async connection failed"):
+                    await httpx.AsyncClient.send(client, mock_request)
+
+            # Restore original before unpatch
+            interceptor._original_async_send = saved_original
+
+            assert len(captured_requests) == 1
+            req, res, err = captured_requests[0]
+            assert req is not None
+            assert res is None
+            assert err == "Async connection failed"
+
+        finally:
+            unpatch()
+
+
+class TestReadResponseBodyEdgeCases:
+    """Tests for edge cases in _read_response_body."""
+
+    def test_read_response_body_no_content(self):
+        """_read_response_body returns None when no content available."""
+        response = MagicMock()
+        response.headers = {'content-type': 'application/json'}
+        response._content = None
+        del response.content  # Remove the content attribute
+
+        result = _read_response_body(response)
+        # Should handle missing content gracefully
+        assert result is None or result == b''
+
+    def test_read_response_body_exception(self):
+        """_read_response_body handles exceptions gracefully."""
+        response = MagicMock()
+        response.headers.get.side_effect = Exception("Header error")
+
+        result = _read_response_body(response)
+        assert result is None

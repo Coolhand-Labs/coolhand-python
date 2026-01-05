@@ -63,14 +63,14 @@ def _parse_body(body: Optional[Union[str, bytes, Dict]]) -> Optional[Union[str, 
     if isinstance(body, bytes):
         try:
             body = body.decode('utf-8')
-        except:
+        except Exception:
             return str(body)
 
     # Try to parse as JSON
     if isinstance(body, str):
         try:
             return json.loads(body)
-        except:
+        except Exception:
             return body
 
     return str(body)
@@ -187,7 +187,8 @@ class CoolhandClient:
                 logger.warning(f"Unexpected error submitting interaction: {e}")
 
         if success_count > 0:
-            logger.info(f"Successfully submitted {success_count}/{len(self._queue)} interactions to Coolhand")
+            queue_len = len(self._queue)
+            logger.info(f"Successfully submitted {success_count}/{queue_len} interactions")
 
         self._queue.clear()
         return success_count == len(self._queue)
@@ -200,7 +201,7 @@ class CoolhandClient:
             from . import interceptor
             if interceptor.is_patched():
                 patched_libs = ['httpx.Client.send', 'httpx.AsyncClient.send']
-        except:
+        except Exception:
             pass
 
         return {

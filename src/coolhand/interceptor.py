@@ -28,7 +28,7 @@ def _is_localhost(url: str) -> bool:
     try:
         host = urlparse(url).netloc.lower()
         return any(p in host for p in ['localhost', '127.0.0.1', '0.0.0.0', '::1'])
-    except:
+    except Exception:
         return False
 
 
@@ -37,7 +37,7 @@ def _is_llm_api(url: str) -> bool:
     try:
         host = urlparse(url).netloc.lower()
         return any(domain in host for domain in LLM_API_DOMAINS)
-    except:
+    except Exception:
         return False
 
 
@@ -57,12 +57,14 @@ def _read_response_body(response: Any) -> Any:
             return response._content
         if hasattr(response, 'content'):
             return response.content
-    except:
+    except Exception:
         pass
     return None
 
 
-def set_handler(handler: Callable[[RequestData, Optional[ResponseData], Optional[str]], None]) -> None:
+def set_handler(
+    handler: Callable[[RequestData, Optional[ResponseData], Optional[str]], None]
+) -> None:
     """Set the handler for captured requests."""
     global _handler
     _handler = handler
@@ -167,6 +169,7 @@ def patch() -> bool:
                 # Wrap aiter_bytes
                 if hasattr(response, 'aiter_bytes'):
                     orig_aiter_bytes = response.aiter_bytes
+
                     async def capturing_aiter_bytes(chunk_size=1024):
                         async for chunk in orig_aiter_bytes(chunk_size):
                             if chunk:
@@ -178,6 +181,7 @@ def patch() -> bool:
                 # Wrap aiter_lines (used by OpenAI for SSE)
                 if hasattr(response, 'aiter_lines'):
                     orig_aiter_lines = response.aiter_lines
+
                     async def capturing_aiter_lines():
                         async for line in orig_aiter_lines():
                             if line:
@@ -189,6 +193,7 @@ def patch() -> bool:
                 # Wrap aiter_text
                 if hasattr(response, 'aiter_text'):
                     orig_aiter_text = response.aiter_text
+
                     async def capturing_aiter_text():
                         async for text in orig_aiter_text():
                             if text:
@@ -200,6 +205,7 @@ def patch() -> bool:
                 # Wrap aiter_raw (lowest level)
                 if hasattr(response, 'aiter_raw'):
                     orig_aiter_raw = response.aiter_raw
+
                     async def capturing_aiter_raw(chunk_size=1024):
                         async for chunk in orig_aiter_raw(chunk_size):
                             if chunk:

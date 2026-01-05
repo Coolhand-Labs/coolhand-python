@@ -160,7 +160,7 @@ class FeedbackService:
             with urlopen(request, timeout=10) as resp:
                 if resp.status in (200, 201):
                     response_data = json.loads(resp.read().decode('utf-8'))
-                    self._log(f"Successfully created feedback")
+                    self._log("Successfully created feedback")
                     return response_data
                 else:
                     logger.warning(f"Unexpected status code: {resp.status}")

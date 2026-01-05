@@ -1,10 +1,5 @@
 """Tests for coolhand.client module."""
 
-import pytest
-import time
-import json
-from unittest.mock import patch, MagicMock
-
 from coolhand.client import (
     _mask_value,
     _sanitize_headers,
@@ -107,6 +102,14 @@ class TestParseBody:
         """Plain string is returned as-is."""
         body = 'plain text'
         assert _parse_body(body) == 'plain text'
+
+    def test_parse_bytes_invalid_utf8(self):
+        """Bytes that fail UTF-8 decode return string representation."""
+        # Invalid UTF-8 sequence
+        body = b'\xff\xfe invalid'
+        result = _parse_body(body)
+        # Should return string representation since decode fails
+        assert isinstance(result, str)
 
 
 class TestToIso8601:
@@ -334,3 +337,123 @@ class TestGlobalInstanceFunctions:
         client1 = initialize(api_key='key1')
         client2 = initialize(api_key='key2')
         assert client1 is client2
+
+
+class TestLogInteractionEdgeCases:
+    """Tests for edge cases in log_interaction."""
+
+    def test_log_interaction_with_error_no_response(
+        self, mock_request_data, reset_global_instance
+    ):
+        """log_interaction handles error with no response."""
+        client = CoolhandClient(auto_submit=False)
+        client.log_interaction(mock_request_data, response=None, error="Connection failed")
+
+        interaction = client._queue[0]
+        assert interaction['status_code'] == 0
+        assert interaction['response_body'] is None
+        assert interaction['response_headers'] == {}
+
+    def test_log_interaction_logging_when_not_silent(
+        self, mock_request_data, mock_response_data, reset_global_instance, caplog
+    ):
+        """log_interaction logs output when silent=False."""
+        import logging
+        caplog.set_level(logging.INFO)
+
+        client = CoolhandClient(auto_submit=False, silent=False)
+        client.log_interaction(mock_request_data, mock_response_data)
+
+        assert 'Captured:' in caplog.text
+        assert 'POST' in caplog.text or 'post' in caplog.text
+
+
+class TestFlushAPISubmission:
+    """Tests for flush API submission behavior."""
+
+    def test_flush_successful_submission(self, reset_global_instance, mock_urlopen):
+        """flush successfully submits to API."""
+        client = CoolhandClient(auto_submit=False, api_key='real-api-key-12345')
+        client._queue.append({
+            'id': 'test-id',
+            'method': 'post',
+            'url': 'https://api.openai.com/v1/chat',
+            'timestamp': '2024-01-01T00:00:00Z',
+        })
+
+        client.flush()
+        # Queue should be cleared after submission
+        assert len(client._queue) == 0
+        mock_urlopen.assert_called_once()
+
+    def test_flush_http_error(self, reset_global_instance, caplog):
+        """flush handles HTTP errors gracefully."""
+        from unittest.mock import patch
+        from urllib.error import HTTPError
+        import logging
+
+        caplog.set_level(logging.WARNING)
+
+        client = CoolhandClient(auto_submit=False, api_key='real-api-key-12345')
+        client._queue.append({'id': 'test-id', 'method': 'post', 'url': 'test'})
+
+        with patch('coolhand.client.urlopen') as mock:
+            mock.side_effect = HTTPError(
+                url='https://coolhandlabs.com/api/v2/llm_request_logs',
+                code=500,
+                msg='Internal Server Error',
+                hdrs={},
+                fp=None,
+            )
+            client.flush()
+
+        assert 'Failed to submit interaction' in caplog.text
+        assert len(client._queue) == 0  # Queue still cleared
+
+    def test_flush_url_error(self, reset_global_instance, caplog):
+        """flush handles URL errors gracefully."""
+        from unittest.mock import patch
+        from urllib.error import URLError
+        import logging
+
+        caplog.set_level(logging.WARNING)
+
+        client = CoolhandClient(auto_submit=False, api_key='real-api-key-12345')
+        client._queue.append({'id': 'test-id', 'method': 'post', 'url': 'test'})
+
+        with patch('coolhand.client.urlopen') as mock:
+            mock.side_effect = URLError('Connection refused')
+            client.flush()
+
+        assert 'Failed to submit interaction' in caplog.text
+        assert len(client._queue) == 0
+
+    def test_flush_unexpected_error(self, reset_global_instance, caplog):
+        """flush handles unexpected errors gracefully."""
+        from unittest.mock import patch
+        import logging
+
+        caplog.set_level(logging.WARNING)
+
+        client = CoolhandClient(auto_submit=False, api_key='real-api-key-12345')
+        client._queue.append({'id': 'test-id', 'method': 'post', 'url': 'test'})
+
+        with patch('coolhand.client.urlopen') as mock:
+            mock.side_effect = RuntimeError('Unexpected error')
+            client.flush()
+
+        assert 'Unexpected error submitting interaction' in caplog.text
+        assert len(client._queue) == 0
+
+    def test_log_interaction_with_auto_submit(
+        self, mock_request_data, mock_response_data, reset_global_instance
+    ):
+        """log_interaction triggers flush when auto_submit=True."""
+        from unittest.mock import patch
+
+        client = CoolhandClient(auto_submit=True, api_key='demo-key')
+
+        with patch.object(client, 'flush') as mock_flush:
+            mock_flush.return_value = True
+            client.log_interaction(mock_request_data, mock_response_data)
+            mock_flush.assert_called_once()

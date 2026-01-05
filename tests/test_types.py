@@ -1,6 +1,5 @@
 """Tests for coolhand.types module."""
 
-import pytest
 from coolhand.types import RequestData, ResponseData, Config
 
 

@@ -6,6 +6,7 @@ from coolhand.client import (
     _mask_value,
     _parse_body,
     _sanitize_headers,
+    _sanitize_url,
     _to_iso8601,
     get_instance,
     initialize,
@@ -69,6 +70,60 @@ class TestSanitizeHeaders:
         headers = {"AUTHORIZATION": "Bearer secret-12345678"}
         result = _sanitize_headers(headers)
         assert "****" in result["AUTHORIZATION"]
+
+
+class TestSanitizeUrl:
+    """Tests for _sanitize_url function."""
+
+    def test_redacts_key_param(self):
+        """Google Gemini-style key param is redacted."""
+        url = "https://generativelanguage.googleapis.com/v1/models:generateContent?key=AIzaSyDEADBEEF1234"
+        result = _sanitize_url(url)
+        assert "AIzaSyDEADBEEF1234" not in result
+        assert "key=%5BREDACTED%5D" in result
+        assert "generativelanguage.googleapis.com" in result
+
+    def test_redacts_api_key_param(self):
+        """api_key query param is redacted."""
+        url = "https://api.example.com/v1/endpoint?api_key=secret123"
+        result = _sanitize_url(url)
+        assert "secret123" not in result
+        assert "api_key=%5BREDACTED%5D" in result
+
+    def test_redacts_multiple_sensitive_params(self):
+        """Multiple sensitive params are all redacted."""
+        url = "https://api.example.com/v1?key=secret1&token=secret2"
+        result = _sanitize_url(url)
+        assert "secret1" not in result
+        assert "secret2" not in result
+
+    def test_preserves_non_sensitive_params(self):
+        """Non-sensitive params pass through unchanged."""
+        url = "https://api.example.com/v1?model=gpt-4&stream=true"
+        assert _sanitize_url(url) == url
+
+    def test_no_query_params(self):
+        """URL without query params passes through unchanged."""
+        url = "https://api.openai.com/v1/chat/completions"
+        assert _sanitize_url(url) == url
+
+    def test_mixed_params(self):
+        """Sensitive params redacted, others preserved."""
+        url = "https://api.example.com/v1?model=gemini&key=AIzaSySecret"
+        result = _sanitize_url(url)
+        assert "model=gemini" in result
+        assert "AIzaSySecret" not in result
+
+    def test_empty_string(self):
+        """Empty string returns empty string."""
+        assert _sanitize_url("") == ""
+
+    def test_params_are_case_sensitive(self):
+        """Query params are case-sensitive per URL spec."""
+        url = "https://api.example.com/v1?KEY=value123"
+        result = _sanitize_url(url)
+        # "KEY" != "key", so it should NOT be redacted
+        assert "value123" in result
 
 
 class TestParseBody:

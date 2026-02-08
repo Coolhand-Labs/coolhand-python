@@ -77,7 +77,8 @@ class TestSanitizeUrl:
 
     def test_redacts_key_param(self):
         """Google Gemini-style key param is redacted."""
-        url = "https://generativelanguage.googleapis.com/v1/models:generateContent?key=AIzaSyDEADBEEF1234"
+        url = ("https://generativelanguage.googleapis.com"
+               "/v1/models:generateContent?key=AIzaSyDEADBEEF1234")
         result = _sanitize_url(url)
         assert "AIzaSyDEADBEEF1234" not in result
         assert "key=%5BREDACTED%5D" in result

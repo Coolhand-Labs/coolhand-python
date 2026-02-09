@@ -8,6 +8,7 @@ import uuid
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Union
 from urllib.error import HTTPError, URLError
+from urllib.parse import parse_qs, urlencode, urlparse, urlunparse
 from urllib.request import Request, urlopen
 
 from .types import Config, RequestData, ResponseData
@@ -23,6 +24,8 @@ SENSITIVE_HEADERS = [
     "openai-api-key",
     "anthropic-api-key",
 ]
+
+SENSITIVE_QUERY_PARAMS = {"key", "api_key", "apikey", "token", "access_token", "secret"}
 
 
 BASE_URL = "https://coolhandlabs.com"
@@ -54,6 +57,25 @@ def _sanitize_headers(headers: Dict[str, str]) -> Dict[str, str]:
         else:
             result[key] = value
     return result
+
+
+def _sanitize_url(url: str) -> str:
+    """Redact sensitive query parameters from URLs."""
+    try:
+        parsed = urlparse(url)
+        if not parsed.query:
+            return url
+        params = parse_qs(parsed.query, keep_blank_values=True)
+        redacted = False
+        for param in SENSITIVE_QUERY_PARAMS:
+            if param in params:
+                params[param] = ["[REDACTED]"]
+                redacted = True
+        if not redacted:
+            return url
+        return urlunparse(parsed._replace(query=urlencode(params, doseq=True)))
+    except Exception:
+        return url
 
 
 def _parse_body(body: Optional[Union[str, bytes, Dict]]) -> Optional[Union[str, Dict]]:
@@ -132,7 +154,7 @@ class CoolhandClient:
             "id": str(uuid.uuid4()),
             "timestamp": _to_iso8601(req_timestamp),
             "method": request.get("method", "").lower(),
-            "url": request.get("url", ""),
+            "url": _sanitize_url(request.get("url", "")),
             "headers": _sanitize_headers(request.get("headers", {})),
             "request_body": _parse_body(request.get("body")),
             "response_headers": _sanitize_headers(response.get("headers", {}))
@@ -147,7 +169,7 @@ class CoolhandClient:
 
         # Debug output when not silent
         if not self.config.get("silent"):
-            url = request.get("url", "unknown")
+            url = _sanitize_url(request.get("url", "unknown"))
             method = request.get("method", "unknown")
             status = response.get("status_code") if response else "error"
             logger.info(f"Captured: {method} {url} -> {status}")

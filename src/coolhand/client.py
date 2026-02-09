@@ -157,9 +157,9 @@ class CoolhandClient:
             "url": _sanitize_url(request.get("url", "")),
             "headers": _sanitize_headers(request.get("headers", {})),
             "request_body": _parse_body(request.get("body")),
-            "response_headers": _sanitize_headers(response.get("headers", {}))
-            if response
-            else {},
+            "response_headers": (
+                _sanitize_headers(response.get("headers", {})) if response else {}
+            ),
             "response_body": _parse_body(response.get("body")) if response else None,
             "status_code": response.get("status_code", 0) if response else 0,
             "duration_ms": round(duration_seconds * 1000, 2),

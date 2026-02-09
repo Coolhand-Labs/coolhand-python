@@ -11,12 +11,11 @@ This example demonstrates:
 
 import os
 import sys
-import time
 
 # Add the src directory to the Python path for running examples directly
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
 
-import coolhand
+import coolhand  # noqa: E402
 
 
 def main():
@@ -176,7 +175,8 @@ def main():
     print("\n10. Debug information...")
     debug_data = ch.get_debug_data()
     if debug_data:
-        print(f"✓ Debug mode active - captured {len(debug_data['interaction_history'])} interactions")
+        num = len(debug_data['interaction_history'])
+        print(f"✓ Debug mode active - captured {num} interactions")
     else:
         print("✓ Debug mode not active (set log_level='DEBUG' to enable)")
 

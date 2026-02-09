@@ -11,13 +11,11 @@ This example demonstrates:
 
 import os
 import sys
-import time
 
 # Add the src directory to the Python path for running examples directly
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
 
-# Import coolhand - this triggers auto-initialization if conditions are met
-import coolhand
+import coolhand  # noqa: E402
 
 
 def simulate_openai_request():
@@ -50,7 +48,14 @@ def simulate_openai_request():
         },
         response_status=200,
         response_body={
-            "choices": [{"message": {"role": "assistant", "content": "Hello! How can I help you?"}}],
+            "choices": [
+                {
+                    "message": {
+                        "role": "assistant",
+                        "content": "Hello! How can I help you?",
+                    }
+                }
+            ],
             "usage": {"total_tokens": 20}
         },
         duration=1.1
@@ -79,7 +84,12 @@ def simulate_anthropic_request():
         },
         response_status=200,
         response_body={
-            "content": [{"text": "Quantum computing is a revolutionary computing paradigm..."}],
+            "content": [
+                {
+                    "text": "Quantum computing is a revolutionary "
+                    "computing paradigm..."
+                }
+            ],
             "usage": {"input_tokens": 10, "output_tokens": 25}
         },
         duration=0.9
@@ -100,7 +110,7 @@ def demonstrate_auto_initialization():
         print("✓ Coolhand was automatically initialized!")
         print(f"  Session ID: {instance.get_session_id()}")
         print(f"  Monitoring enabled: {instance.is_monitoring()}")
-        print(f"  Config source: Environment variables and auto-detection")
+        print("  Config source: Environment variables and auto-detection")
 
         # Show current stats
         stats = instance.get_stats()
@@ -252,7 +262,10 @@ def demonstrate_monitoring_context():
 
     print("\nUsing context manager to temporarily disable monitoring:")
     with coolhand.MonitoringContext(enabled=False):
-        print("  Inside context - monitoring disabled:", coolhand.is_monitoring_enabled())
+        print(
+            "  Inside context - monitoring disabled:",
+            coolhand.is_monitoring_enabled(),
+        )
         # Any HTTP requests here would not be monitored
 
     print("Outside context - monitoring restored:", coolhand.is_monitoring_enabled())
@@ -302,7 +315,8 @@ def main():
 
     final_stats = instance.get_stats()
     print(f"Session ID: {instance.get_session_id()}")
-    print(f"Total interactions logged: {final_stats['logging'].get('interaction_count', 0)}")
+    count = final_stats['logging'].get('interaction_count', 0)
+    print(f"Total interactions logged: {count}")
     print(f"Monitoring active: {final_stats['monitoring']['enabled']}")
 
     # 8. Cleanup

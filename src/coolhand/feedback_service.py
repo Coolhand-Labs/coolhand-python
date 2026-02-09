@@ -121,8 +121,9 @@ class FeedbackService:
         )
         if not has_matching_field:
             logger.warning(
-                "No matching field provided. Feedback may not be linked to an LLM request. "
-                "Consider providing one of: llm_request_log_id, llm_provider_unique_id, "
+                "No matching field provided. Feedback may not be "
+                "linked to an LLM request. Consider providing one "
+                "of: llm_request_log_id, llm_provider_unique_id, "
                 "original_output, or client_unique_id"
             )
 

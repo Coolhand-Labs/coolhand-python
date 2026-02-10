@@ -22,6 +22,7 @@ from coolhand.httpx_interceptor import (
     _is_streaming_content_type,
     _read_response_body,
     is_patched,
+    set_intercept_addresses,
 )
 from coolhand.httpx_interceptor import patch as patch_httpx
 from coolhand.httpx_interceptor import set_handler, set_intercept_addresses, unpatch
@@ -93,6 +94,23 @@ class TestIsLlmApi:
         )
         assert _is_llm_api(url) is True
 
+    def test_gemini_count_tokens(self):
+        """Detects Gemini :countTokens endpoint."""
+        url = (
+            "https://generativelanguage.googleapis.com"
+            "/v1beta/models/gemini-pro:countTokens"
+        )
+        assert _is_llm_api(url) is True
+
+    def test_gemini_with_api_key_param(self):
+        """Detects Gemini URL with ?key= query param."""
+        url = (
+            "https://generativelanguage.googleapis.com"
+            "/v1beta/models/gemini-pro:generateContent"
+            "?key=AIzaSyDEADBEEF"
+        )
+        assert _is_llm_api(url) is True
+
     def test_vertex_ai_generate_content(self):
         """Detects Vertex AI :generateContent endpoint."""
         url = (
@@ -125,7 +143,7 @@ class TestIsLlmApi:
         """All default intercept addresses are detected."""
         for addr in DEFAULT_INTERCEPT_ADDRESSES:
             if addr.startswith(":"):
-                url = "https://example.googleapis.com" f"/v1/models/gemini{addr}"
+                url = f"https://example.googleapis.com/v1/models/gemini{addr}"
             else:
                 url = f"https://{addr}/v1/test"
             assert _is_llm_api(url) is True, f"Failed for {addr}"
@@ -141,6 +159,7 @@ class TestCustomInterceptAddresses:
         assert _is_llm_api("https://api.custom-llm.com/chat") is True
         assert _is_llm_api("https://example.com/v1/inference") is True
 
+        # Default addresses should no longer match
         assert _is_llm_api("https://api.openai.com/v1/chat/completions") is False
         assert _is_llm_api("https://api.anthropic.com/v1/messages") is False
 

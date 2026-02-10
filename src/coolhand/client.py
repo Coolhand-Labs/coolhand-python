@@ -23,6 +23,7 @@ SENSITIVE_HEADERS = [
     "x-api-key",
     "openai-api-key",
     "anthropic-api-key",
+    "x-goog-api-key",
 ]
 
 SENSITIVE_QUERY_PARAMS = {"key", "api_key", "apikey", "token", "access_token", "secret"}

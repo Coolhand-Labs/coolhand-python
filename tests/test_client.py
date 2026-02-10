@@ -71,6 +71,13 @@ class TestSanitizeHeaders:
         result = _sanitize_headers(headers)
         assert "****" in result["AUTHORIZATION"]
 
+    def test_masks_goog_api_key_header(self):
+        """x-goog-api-key header is masked."""
+        headers = {"x-goog-api-key": "AIzaSyDEADBEEF1234567890"}
+        result = _sanitize_headers(headers)
+        assert "****" in result["x-goog-api-key"]
+        assert "AIzaSyDEADBEEF1234567890" != result["x-goog-api-key"]
+
 
 class TestSanitizeUrl:
     """Tests for _sanitize_url function."""
@@ -520,3 +527,25 @@ class TestFlushAPISubmission:
             mock_flush.return_value = True
             client.log_interaction(mock_request_data, mock_response_data)
             mock_flush.assert_called_once()
+
+
+class TestGeminiCapture:
+    """Tests for Gemini API capture and sanitization."""
+
+    def test_gemini_url_sanitization(self):
+        """Gemini ?key=API_KEY query param is redacted."""
+        url = (
+            "https://generativelanguage.googleapis.com"
+            "/v1beta/models/gemini-pro:generateContent?key=AIzaSyDEADBEEF1234"
+        )
+        result = _sanitize_url(url)
+        assert "AIzaSyDEADBEEF1234" not in result
+        assert "generativelanguage.googleapis.com" in result
+
+    def test_gemini_response_parsed_as_json(self):
+        """Gemini JSON response is parsed correctly via _parse_body."""
+        body = b'{"candidates": [{"content": {"parts": [{"text": "Hello"}]}}]}'
+        result = _parse_body(body)
+        assert isinstance(result, dict)
+        assert "candidates" in result
+        assert result["candidates"][0]["content"]["parts"][0]["text"] == "Hello"

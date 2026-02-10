@@ -16,12 +16,13 @@ else:
 
 
 from coolhand.interceptor import (
-    LLM_API_DOMAINS,
+    DEFAULT_INTERCEPT_ADDRESSES,
     _is_llm_api,
     _is_localhost,
     _is_streaming_content_type,
     _read_response_body,
     is_patched,
+    set_intercept_addresses,
 )
 from coolhand.interceptor import patch as patch_httpx
 from coolhand.interceptor import set_handler, unpatch
@@ -64,17 +65,76 @@ class TestIsLlmApi:
         """Detects api.anthropic.com."""
         assert _is_llm_api("https://api.anthropic.com/v1/messages") is True
 
+    def test_gemini(self):
+        """Detects generativelanguage.googleapis.com for :generateContent."""
+        assert _is_llm_api("https://generativelanguage.googleapis.com/v1beta/models/gemini-pro:generateContent") is True
+
+    def test_gemini_streaming(self):
+        """Detects Gemini streaming endpoint :streamGenerateContent."""
+        assert _is_llm_api("https://generativelanguage.googleapis.com/v1beta/models/gemini-pro:streamGenerateContent?alt=sse") is True
+
+    def test_gemini_count_tokens(self):
+        """Detects Gemini :countTokens endpoint."""
+        assert _is_llm_api("https://generativelanguage.googleapis.com/v1beta/models/gemini-pro:countTokens") is True
+
+    def test_gemini_with_api_key_param(self):
+        """Detects Gemini URL with ?key= query param."""
+        assert _is_llm_api("https://generativelanguage.googleapis.com/v1beta/models/gemini-pro:generateContent?key=AIzaSyDEADBEEF") is True
+
     def test_non_llm_api(self):
         """Rejects non-LLM API URLs."""
         assert _is_llm_api("https://api.github.com/repos") is False
         assert _is_llm_api("https://example.com/api") is False
         assert _is_llm_api("https://anagramica.com/solve") is False
 
+    def test_vertex_ai_generate_content(self):
+        """Detects Vertex AI :generateContent endpoint."""
+        assert _is_llm_api("https://us-central1-aiplatform.googleapis.com/v1/projects/my-project/locations/us-central1/publishers/google/models/gemini-pro:generateContent") is True
+
+    def test_vertex_ai_streaming(self):
+        """Detects Vertex AI :streamGenerateContent endpoint."""
+        assert _is_llm_api("https://us-central1-aiplatform.googleapis.com/v1/projects/my-project/locations/us-central1/publishers/google/models/gemini-pro:streamGenerateContent") is True
+
+    def test_vertex_ai_unknown_path_not_matched(self):
+        """Rejects Vertex AI URL with non-matching path."""
+        assert _is_llm_api("https://us-central1-aiplatform.googleapis.com/v1/projects/my-project/locations/us-central1/publishers/google/models/gemini-pro:predict") is False
+
     def test_all_domains_in_list(self):
-        """All defined LLM domains are detected."""
-        for domain in LLM_API_DOMAINS:
-            url = f"https://{domain}/v1/test"
-            assert _is_llm_api(url) is True, f"Failed for {domain}"
+        """All default intercept addresses are detected."""
+        for addr in DEFAULT_INTERCEPT_ADDRESSES:
+            if addr.startswith(":"):
+                # Path substring pattern — use in a URL path
+                url = f"https://example.googleapis.com/v1/models/gemini{addr}"
+            else:
+                # Domain entry
+                url = f"https://{addr}/v1/test"
+            assert _is_llm_api(url) is True, f"Failed for {addr}"
+
+
+class TestCustomInterceptAddresses:
+    """Tests for custom intercept addresses."""
+
+    def test_custom_intercept_addresses(self, reset_global_instance):
+        """Custom intercept addresses override defaults."""
+        set_intercept_addresses(["api.custom-llm.com", "/v1/inference"])
+
+        # Custom address should match
+        assert _is_llm_api("https://api.custom-llm.com/chat") is True
+        assert _is_llm_api("https://example.com/v1/inference") is True
+
+        # Default addresses should no longer match
+        assert _is_llm_api("https://api.openai.com/v1/chat/completions") is False
+        assert _is_llm_api("https://api.anthropic.com/v1/messages") is False
+
+    def test_default_restored_after_reset(self, reset_global_instance):
+        """Resetting _intercept_addresses to None restores defaults."""
+        from coolhand import interceptor
+
+        set_intercept_addresses(["api.custom-llm.com"])
+        assert _is_llm_api("https://api.openai.com/v1/chat/completions") is False
+
+        interceptor._intercept_addresses = None
+        assert _is_llm_api("https://api.openai.com/v1/chat/completions") is True
 
 
 class TestIsStreamingContentType:

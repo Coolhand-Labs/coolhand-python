@@ -75,11 +75,13 @@ def reset_global_instance():
     original_instance = client._instance
     original_patched = interceptor._patched
     original_handler = interceptor._handler
+    original_intercept_addresses = interceptor._intercept_addresses
 
     # Reset before test
     client._instance = None
     interceptor._patched = False
     interceptor._handler = None
+    interceptor._intercept_addresses = None
 
     yield
 
@@ -87,6 +89,7 @@ def reset_global_instance():
     client._instance = original_instance
     interceptor._patched = original_patched
     interceptor._handler = original_handler
+    interceptor._intercept_addresses = original_intercept_addresses
 
     # Unpatch if patched during test
     if interceptor._patched:

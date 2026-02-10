@@ -11,12 +11,11 @@ This example demonstrates:
 
 import os
 import sys
-import time
 
 # Add the src directory to the Python path for running examples directly
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
-import coolhand
+import coolhand  # noqa: E402
 
 
 def main():
@@ -59,9 +58,7 @@ def main():
         },
         body={
             "model": "gpt-4",
-            "messages": [
-                {"role": "user", "content": "What is the capital of France?"}
-            ],
+            "messages": [{"role": "user", "content": "What is the capital of France?"}],
             "max_tokens": 100,
         },
         response_status=200,
@@ -73,11 +70,11 @@ def main():
                 {
                     "message": {
                         "role": "assistant",
-                        "content": "The capital of France is Paris."
+                        "content": "The capital of France is Paris.",
                     }
                 }
             ],
-            "usage": {"total_tokens": 25}
+            "usage": {"total_tokens": 25},
         },
         duration=1.2,
     )
@@ -94,7 +91,7 @@ def main():
     ch.submit_feedback(
         rating=9,
         comment="Excellent response quality and speed",
-        metadata={"interaction_type": "completion", "model": "gpt-4"}
+        metadata={"interaction_type": "completion", "model": "gpt-4"},
     )
     print("✓ Submitted detailed feedback")
 
@@ -131,14 +128,14 @@ def main():
         method="GET",
         url="https://api.anthropic.com/v1/messages",
         headers={"x-api-key": "sk-ant-example"},
-        body={"model": "claude-3-sonnet-20240229", "messages": []}
+        body={"model": "claude-3-sonnet-20240229", "messages": []},
     )
 
     response_data = ch.logging_service.create_response_data(
         status_code=200,
         headers={"Content-Type": "application/json"},
         body={"content": [{"text": "Hello! How can I help you today?"}]},
-        duration=0.8
+        duration=0.8,
     )
 
     ch.logging_service.log_interaction(request_data, response_data)
@@ -176,7 +173,8 @@ def main():
     print("\n10. Debug information...")
     debug_data = ch.get_debug_data()
     if debug_data:
-        print(f"✓ Debug mode active - captured {len(debug_data['interaction_history'])} interactions")
+        num = len(debug_data["interaction_history"])
+        print(f"✓ Debug mode active - captured {num} interactions")
     else:
         print("✓ Debug mode not active (set log_level='DEBUG' to enable)")
 
@@ -207,4 +205,5 @@ if __name__ == "__main__":
     except Exception as e:
         print(f"\nExample failed with error: {e}")
         import traceback
+
         traceback.print_exc()

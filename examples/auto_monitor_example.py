@@ -11,13 +11,11 @@ This example demonstrates:
 
 import os
 import sys
-import time
 
 # Add the src directory to the Python path for running examples directly
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
-# Import coolhand - this triggers auto-initialization if conditions are met
-import coolhand
+import coolhand  # noqa: E402
 
 
 def simulate_openai_request():
@@ -50,10 +48,17 @@ def simulate_openai_request():
         },
         response_status=200,
         response_body={
-            "choices": [{"message": {"role": "assistant", "content": "Hello! How can I help you?"}}],
-            "usage": {"total_tokens": 20}
+            "choices": [
+                {
+                    "message": {
+                        "role": "assistant",
+                        "content": "Hello! How can I help you?",
+                    }
+                }
+            ],
+            "usage": {"total_tokens": 20},
         },
-        duration=1.1
+        duration=1.1,
     )
 
     print("✓ Request completed and automatically logged")
@@ -79,10 +84,15 @@ def simulate_anthropic_request():
         },
         response_status=200,
         response_body={
-            "content": [{"text": "Quantum computing is a revolutionary computing paradigm..."}],
-            "usage": {"input_tokens": 10, "output_tokens": 25}
+            "content": [
+                {
+                    "text": "Quantum computing is a revolutionary "
+                    "computing paradigm..."
+                }
+            ],
+            "usage": {"input_tokens": 10, "output_tokens": 25},
         },
-        duration=0.9
+        duration=0.9,
     )
 
     print("✓ Request completed and automatically logged")
@@ -100,7 +110,7 @@ def demonstrate_auto_initialization():
         print("✓ Coolhand was automatically initialized!")
         print(f"  Session ID: {instance.get_session_id()}")
         print(f"  Monitoring enabled: {instance.is_monitoring()}")
-        print(f"  Config source: Environment variables and auto-detection")
+        print("  Config source: Environment variables and auto-detection")
 
         # Show current stats
         stats = instance.get_stats()
@@ -117,11 +127,9 @@ def demonstrate_auto_initialization():
 
         # Force initialization for the demo
         print("Force initializing for demonstration...")
-        instance = coolhand.force_initialize({
-            "api_key": "demo-api-key",
-            "enabled": True,
-            "log_level": "INFO"
-        })
+        instance = coolhand.force_initialize(
+            {"api_key": "demo-api-key", "enabled": True, "log_level": "INFO"}
+        )
         print("✓ Coolhand force-initialized")
 
     return instance
@@ -224,12 +232,13 @@ def demonstrate_environment_detection():
     # Check for interactive environment
     try:
         from IPython import get_ipython
+
         if get_ipython():
             print("✓ Jupyter notebook environment detected")
         else:
             print("○ Not in Jupyter notebook")
     except ImportError:
-        if hasattr(sys, 'ps1'):
+        if hasattr(sys, "ps1"):
             print("✓ Interactive Python session detected")
         else:
             print("○ Not in interactive session")
@@ -252,7 +261,10 @@ def demonstrate_monitoring_context():
 
     print("\nUsing context manager to temporarily disable monitoring:")
     with coolhand.MonitoringContext(enabled=False):
-        print("  Inside context - monitoring disabled:", coolhand.is_monitoring_enabled())
+        print(
+            "  Inside context - monitoring disabled:",
+            coolhand.is_monitoring_enabled(),
+        )
         # Any HTTP requests here would not be monitored
 
     print("Outside context - monitoring restored:", coolhand.is_monitoring_enabled())
@@ -288,10 +300,7 @@ def main():
     coolhand.submit_feedback(
         rating=9,
         comment="Love how it automatically detects my AI usage",
-        metadata={
-            "feature": "auto_initialization",
-            "environment": "demo"
-        }
+        metadata={"feature": "auto_initialization", "environment": "demo"},
     )
 
     print("✓ Collected feedback on auto-monitoring experience")
@@ -302,7 +311,8 @@ def main():
 
     final_stats = instance.get_stats()
     print(f"Session ID: {instance.get_session_id()}")
-    print(f"Total interactions logged: {final_stats['logging'].get('interaction_count', 0)}")
+    count = final_stats["logging"].get("interaction_count", 0)
+    print(f"Total interactions logged: {count}")
     print(f"Monitoring active: {final_stats['monitoring']['enabled']}")
 
     # 8. Cleanup
@@ -346,6 +356,7 @@ if __name__ == "__main__":
     except Exception as e:
         print(f"\nExample failed with error: {e}")
         import traceback
+
         traceback.print_exc()
     finally:
         # Ensure clean shutdown

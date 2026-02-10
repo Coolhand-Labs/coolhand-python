@@ -67,19 +67,36 @@ class TestIsLlmApi:
 
     def test_gemini(self):
         """Detects generativelanguage.googleapis.com for :generateContent."""
-        assert _is_llm_api("https://generativelanguage.googleapis.com/v1beta/models/gemini-pro:generateContent") is True
+        url = (
+            "https://generativelanguage.googleapis.com"
+            "/v1beta/models/gemini-pro:generateContent"
+        )
+        assert _is_llm_api(url) is True
 
     def test_gemini_streaming(self):
         """Detects Gemini streaming endpoint :streamGenerateContent."""
-        assert _is_llm_api("https://generativelanguage.googleapis.com/v1beta/models/gemini-pro:streamGenerateContent?alt=sse") is True
+        url = (
+            "https://generativelanguage.googleapis.com"
+            "/v1beta/models/gemini-pro:streamGenerateContent?alt=sse"
+        )
+        assert _is_llm_api(url) is True
 
     def test_gemini_count_tokens(self):
         """Detects Gemini :countTokens endpoint."""
-        assert _is_llm_api("https://generativelanguage.googleapis.com/v1beta/models/gemini-pro:countTokens") is True
+        url = (
+            "https://generativelanguage.googleapis.com"
+            "/v1beta/models/gemini-pro:countTokens"
+        )
+        assert _is_llm_api(url) is True
 
     def test_gemini_with_api_key_param(self):
         """Detects Gemini URL with ?key= query param."""
-        assert _is_llm_api("https://generativelanguage.googleapis.com/v1beta/models/gemini-pro:generateContent?key=AIzaSyDEADBEEF") is True
+        url = (
+            "https://generativelanguage.googleapis.com"
+            "/v1beta/models/gemini-pro:generateContent"
+            "?key=AIzaSyDEADBEEF"
+        )
+        assert _is_llm_api(url) is True
 
     def test_non_llm_api(self):
         """Rejects non-LLM API URLs."""
@@ -89,15 +106,31 @@ class TestIsLlmApi:
 
     def test_vertex_ai_generate_content(self):
         """Detects Vertex AI :generateContent endpoint."""
-        assert _is_llm_api("https://us-central1-aiplatform.googleapis.com/v1/projects/my-project/locations/us-central1/publishers/google/models/gemini-pro:generateContent") is True
+        url = (
+            "https://us-central1-aiplatform.googleapis.com/v1"
+            "/projects/my-project/locations/us-central1"
+            "/publishers/google/models/gemini-pro:generateContent"
+        )
+        assert _is_llm_api(url) is True
 
     def test_vertex_ai_streaming(self):
         """Detects Vertex AI :streamGenerateContent endpoint."""
-        assert _is_llm_api("https://us-central1-aiplatform.googleapis.com/v1/projects/my-project/locations/us-central1/publishers/google/models/gemini-pro:streamGenerateContent") is True
+        url = (
+            "https://us-central1-aiplatform.googleapis.com/v1"
+            "/projects/my-project/locations/us-central1"
+            "/publishers/google/models"
+            "/gemini-pro:streamGenerateContent"
+        )
+        assert _is_llm_api(url) is True
 
     def test_vertex_ai_unknown_path_not_matched(self):
         """Rejects Vertex AI URL with non-matching path."""
-        assert _is_llm_api("https://us-central1-aiplatform.googleapis.com/v1/projects/my-project/locations/us-central1/publishers/google/models/gemini-pro:predict") is False
+        url = (
+            "https://us-central1-aiplatform.googleapis.com/v1"
+            "/projects/my-project/locations/us-central1"
+            "/publishers/google/models/gemini-pro:predict"
+        )
+        assert _is_llm_api(url) is False
 
     def test_all_domains_in_list(self):
         """All default intercept addresses are detected."""

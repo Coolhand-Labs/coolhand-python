@@ -119,10 +119,7 @@ class TestIsLlmApi:
         """All default intercept addresses are detected."""
         for addr in DEFAULT_INTERCEPT_ADDRESSES:
             if addr.startswith(":"):
-                url = (
-                    "https://example.googleapis.com"
-                    f"/v1/models/gemini{addr}"
-                )
+                url = "https://example.googleapis.com" f"/v1/models/gemini{addr}"
             else:
                 url = f"https://{addr}/v1/test"
             assert _is_llm_api(url) is True, f"Failed for {addr}"
@@ -138,29 +135,18 @@ class TestCustomInterceptAddresses:
         assert _is_llm_api("https://api.custom-llm.com/chat") is True
         assert _is_llm_api("https://example.com/v1/inference") is True
 
-        assert (
-            _is_llm_api("https://api.openai.com/v1/chat/completions")
-            is False
-        )
-        assert (
-            _is_llm_api("https://api.anthropic.com/v1/messages") is False
-        )
+        assert _is_llm_api("https://api.openai.com/v1/chat/completions") is False
+        assert _is_llm_api("https://api.anthropic.com/v1/messages") is False
 
     def test_default_restored_after_reset(self, reset_global_instance):
         """Resetting _intercept_addresses to None restores defaults."""
         from coolhand import interceptor
 
         set_intercept_addresses(["api.custom-llm.com"])
-        assert (
-            _is_llm_api("https://api.openai.com/v1/chat/completions")
-            is False
-        )
+        assert _is_llm_api("https://api.openai.com/v1/chat/completions") is False
 
         interceptor._intercept_addresses = None
-        assert (
-            _is_llm_api("https://api.openai.com/v1/chat/completions")
-            is True
-        )
+        assert _is_llm_api("https://api.openai.com/v1/chat/completions") is True
 
 
 class TestIsStreamingContentType:

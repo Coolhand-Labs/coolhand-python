@@ -1,6 +1,6 @@
 """Minimal type definitions for Coolhand."""
 
-from typing import Any, Dict, Optional, Union
+from typing import Any, Dict, List, Optional, Union
 
 from typing_extensions import TypedDict
 
@@ -33,6 +33,7 @@ class Config(TypedDict, total=False):
     silent: bool
     auto_submit: bool
     session_id: Optional[str]
+    intercept_addresses: Optional[List[str]]
 
 
 class FeedbackData(TypedDict, total=False):

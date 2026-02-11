@@ -22,10 +22,9 @@ from coolhand.interceptor import (
     _is_streaming_content_type,
     _read_response_body,
     is_patched,
-    set_intercept_addresses,
 )
 from coolhand.interceptor import patch as patch_httpx
-from coolhand.interceptor import set_handler, unpatch
+from coolhand.interceptor import set_handler, set_intercept_addresses, unpatch
 
 
 class TestIsLocalhost:

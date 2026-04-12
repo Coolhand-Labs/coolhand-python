@@ -13,7 +13,7 @@ import os
 import sys
 
 # Add the src directory to the Python path for running examples directly
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
 import coolhand  # noqa: E402
 
@@ -56,9 +56,9 @@ def simulate_openai_request():
                     }
                 }
             ],
-            "usage": {"total_tokens": 20}
+            "usage": {"total_tokens": 20},
         },
-        duration=1.1
+        duration=1.1,
     )
 
     print("✓ Request completed and automatically logged")
@@ -90,9 +90,9 @@ def simulate_anthropic_request():
                     "computing paradigm..."
                 }
             ],
-            "usage": {"input_tokens": 10, "output_tokens": 25}
+            "usage": {"input_tokens": 10, "output_tokens": 25},
         },
-        duration=0.9
+        duration=0.9,
     )
 
     print("✓ Request completed and automatically logged")
@@ -127,11 +127,9 @@ def demonstrate_auto_initialization():
 
         # Force initialization for the demo
         print("Force initializing for demonstration...")
-        instance = coolhand.force_initialize({
-            "api_key": "demo-api-key",
-            "enabled": True,
-            "log_level": "INFO"
-        })
+        instance = coolhand.force_initialize(
+            {"api_key": "demo-api-key", "enabled": True, "log_level": "INFO"}
+        )
         print("✓ Coolhand force-initialized")
 
     return instance
@@ -234,12 +232,13 @@ def demonstrate_environment_detection():
     # Check for interactive environment
     try:
         from IPython import get_ipython
+
         if get_ipython():
             print("✓ Jupyter notebook environment detected")
         else:
             print("○ Not in Jupyter notebook")
     except ImportError:
-        if hasattr(sys, 'ps1'):
+        if hasattr(sys, "ps1"):
             print("✓ Interactive Python session detected")
         else:
             print("○ Not in interactive session")
@@ -301,10 +300,7 @@ def main():
     coolhand.submit_feedback(
         rating=9,
         comment="Love how it automatically detects my AI usage",
-        metadata={
-            "feature": "auto_initialization",
-            "environment": "demo"
-        }
+        metadata={"feature": "auto_initialization", "environment": "demo"},
     )
 
     print("✓ Collected feedback on auto-monitoring experience")
@@ -315,7 +311,7 @@ def main():
 
     final_stats = instance.get_stats()
     print(f"Session ID: {instance.get_session_id()}")
-    count = final_stats['logging'].get('interaction_count', 0)
+    count = final_stats["logging"].get("interaction_count", 0)
     print(f"Total interactions logged: {count}")
     print(f"Monitoring active: {final_stats['monitoring']['enabled']}")
 
@@ -360,6 +356,7 @@ if __name__ == "__main__":
     except Exception as e:
         print(f"\nExample failed with error: {e}")
         import traceback
+
         traceback.print_exc()
     finally:
         # Ensure clean shutdown

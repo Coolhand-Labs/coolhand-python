@@ -42,6 +42,9 @@ class Coolhand(CoolhandClient):
 
     def start_monitoring(self):
         """Start HTTP monitoring."""
+        addresses = self.config.get("intercept_addresses")
+        if addresses:
+            interceptor.set_intercept_addresses(addresses)
         interceptor.set_handler(self.log_interaction)
         interceptor.patch()
         logger.info("HTTP monitoring started")

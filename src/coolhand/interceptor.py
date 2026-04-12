@@ -2,7 +2,7 @@
 
 import logging
 import time
-from typing import Any, Callable, Optional
+from typing import Any, Callable, List, Optional
 from urllib.parse import urlparse
 
 from .types import RequestData, ResponseData
@@ -16,13 +16,23 @@ _original_async_send: Optional[Callable] = None
 _handler: Optional[
     Callable[[RequestData, Optional[ResponseData], Optional[str]], None]
 ] = None
+_intercept_addresses: Optional[List[str]] = None
 
 
-# Known LLM API domains to monitor
-LLM_API_DOMAINS = [
+# Default intercept addresses (domains and path substrings)
+DEFAULT_INTERCEPT_ADDRESSES = [
     "api.openai.com",
     "api.anthropic.com",
+    "generativelanguage.googleapis.com",
+    ":generateContent",
+    ":streamGenerateContent",
 ]
+
+
+def set_intercept_addresses(addresses: List[str]) -> None:
+    """Set custom intercept addresses (domains and/or path substrings)."""
+    global _intercept_addresses
+    _intercept_addresses = addresses
 
 
 def _is_localhost(url: str) -> bool:
@@ -35,10 +45,10 @@ def _is_localhost(url: str) -> bool:
 
 
 def _is_llm_api(url: str) -> bool:
-    """Check if URL is a known LLM API endpoint."""
+    """Check if URL matches any intercept address (substring match)."""
     try:
-        host = urlparse(url).netloc.lower()
-        return any(domain in host for domain in LLM_API_DOMAINS)
+        addresses = _intercept_addresses or DEFAULT_INTERCEPT_ADDRESSES
+        return any(addr in url for addr in addresses)
     except Exception:
         return False
 

@@ -24,6 +24,7 @@ DEFAULT_INTERCEPT_ADDRESSES = [
     "api.openai.com",
     "api.anthropic.com",
     "generativelanguage.googleapis.com",
+    "models.inference.ai.azure.com",
     ":generateContent",
     ":streamGenerateContent",
 ]

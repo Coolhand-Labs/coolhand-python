@@ -64,6 +64,10 @@ class TestIsLlmApi:
         """Detects api.anthropic.com."""
         assert _is_llm_api("https://api.anthropic.com/v1/messages") is True
 
+    def test_github_models(self):
+        """Detects models.inference.ai.azure.com."""
+        assert _is_llm_api("https://models.inference.ai.azure.com/chat/completions") is True
+
     def test_non_llm_api(self):
         """Rejects non-LLM API URLs."""
         assert _is_llm_api("https://api.github.com/repos") is False

@@ -66,7 +66,10 @@ class TestIsLlmApi:
 
     def test_github_models(self):
         """Detects models.inference.ai.azure.com."""
-        assert _is_llm_api("https://models.inference.ai.azure.com/chat/completions") is True
+        assert (
+            _is_llm_api("https://models.inference.ai.azure.com/chat/completions")
+            is True
+        )
 
     def test_non_llm_api(self):
         """Rejects non-LLM API URLs."""

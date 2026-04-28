@@ -27,6 +27,9 @@ _pre_pending: Dict[Optional[str], List[Dict[str, Any]]] = {}
 # session.create params keyed by sessionId — provides system prompt and other
 # session-level config that is not repeated in subsequent session.send calls.
 # Stored as {"params": dict, "start": float} so _sweep_stale can evict them.
+# Note: entries are evicted after COPILOT_INTERCEPTOR_PENDING_TTL_SECONDS (300s).
+# Sessions longer than this TTL will have their system prompt absent from
+# session.send bodies logged after eviction — a logging gap, not a functional bug.
 _session_params: Dict[Optional[str], Dict[str, Any]] = {}
 
 _lock = threading.Lock()

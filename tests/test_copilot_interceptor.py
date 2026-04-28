@@ -619,7 +619,7 @@ class TestHandleMessageInterception:
         )
         handler.assert_not_called()
 
-    def test_unknown_message_id_skips_handler_but_original_called(self, handler):
+    def test_no_pending_entry_skips_handler_but_original_called(self, handler):
         from coolhand import copilot_interceptor
 
         original_called = []

@@ -1,4 +1,4 @@
-"""Tests for coolhand.interceptor module."""
+"""Tests for coolhand.httpx_interceptor module."""
 
 import sys
 from unittest.mock import MagicMock
@@ -15,7 +15,7 @@ else:
             return super().__call__(*args, **kwargs)
 
 
-from coolhand.interceptor import (
+from coolhand.httpx_interceptor import (
     DEFAULT_INTERCEPT_ADDRESSES,
     _is_llm_api,
     _is_localhost,
@@ -23,8 +23,8 @@ from coolhand.interceptor import (
     _read_response_body,
     is_patched,
 )
-from coolhand.interceptor import patch as patch_httpx
-from coolhand.interceptor import set_handler, set_intercept_addresses, unpatch
+from coolhand.httpx_interceptor import patch as patch_httpx
+from coolhand.httpx_interceptor import set_handler, set_intercept_addresses, unpatch
 
 
 class TestIsLocalhost:
@@ -146,12 +146,12 @@ class TestCustomInterceptAddresses:
 
     def test_default_restored_after_reset(self, reset_global_instance):
         """Resetting _intercept_addresses to None restores defaults."""
-        from coolhand import interceptor
+        from coolhand import httpx_interceptor
 
         set_intercept_addresses(["api.custom-llm.com"])
         assert _is_llm_api("https://api.openai.com/v1/chat/completions") is False
 
-        interceptor._intercept_addresses = None
+        httpx_interceptor._intercept_addresses = None
         assert _is_llm_api("https://api.openai.com/v1/chat/completions") is True
 
 
@@ -203,11 +203,11 @@ class TestSetHandler:
 
     def test_sets_handler(self, reset_global_instance):
         """set_handler sets the global handler."""
-        from coolhand import interceptor
+        from coolhand import httpx_interceptor
 
         handler = MagicMock()
         set_handler(handler)
-        assert interceptor._handler is handler
+        assert httpx_interceptor._handler is handler
 
 
 class TestPatchUnpatch:
@@ -294,7 +294,7 @@ class TestSyncRequestCapture:
             import httpx
 
             # Create a mock for the original send
-            from coolhand import interceptor
+            from coolhand import httpx_interceptor
 
             mock_response = MagicMock()
             mock_response.status_code = 200
@@ -303,8 +303,8 @@ class TestSyncRequestCapture:
             mock_response.content = b'{"result": "ok"}'
 
             # Temporarily mock the original send
-            original_original = interceptor._original_send
-            interceptor._original_send = MagicMock(return_value=mock_response)
+            original_original = httpx_interceptor._original_send
+            httpx_interceptor._original_send = MagicMock(return_value=mock_response)
 
             mock_request = MagicMock()
             mock_request.method = "POST"
@@ -317,7 +317,7 @@ class TestSyncRequestCapture:
             httpx.Client.send(client, mock_request)
 
             # Restore
-            interceptor._original_send = original_original
+            httpx_interceptor._original_send = original_original
 
             assert len(captured_requests) == 1
             req, res, err = captured_requests[0]
@@ -347,7 +347,7 @@ class TestAsyncRequestCapture:
         try:
             import httpx
 
-            from coolhand import interceptor
+            from coolhand import httpx_interceptor
 
             mock_response = MagicMock()
             mock_response.status_code = 200
@@ -356,8 +356,10 @@ class TestAsyncRequestCapture:
             mock_response.content = b'{"result": "ok"}'
 
             # Mock the original async send
-            original_original = interceptor._original_async_send
-            interceptor._original_async_send = AsyncMock(return_value=mock_response)
+            original_original = httpx_interceptor._original_async_send
+            httpx_interceptor._original_async_send = AsyncMock(
+                return_value=mock_response
+            )
 
             mock_request = MagicMock()
             mock_request.method = "POST"
@@ -368,7 +370,7 @@ class TestAsyncRequestCapture:
             async with httpx.AsyncClient() as client:
                 await httpx.AsyncClient.send(client, mock_request)
 
-            interceptor._original_async_send = original_original
+            httpx_interceptor._original_async_send = original_original
 
             assert len(captured_requests) == 1
             req, res, err = captured_requests[0]
@@ -396,10 +398,10 @@ class TestErrorHandling:
         try:
             import httpx
 
-            from coolhand import interceptor
+            from coolhand import httpx_interceptor
 
             # Mock original send to raise an exception
-            interceptor._original_send = MagicMock(
+            httpx_interceptor._original_send = MagicMock(
                 side_effect=Exception("Connection failed")
             )
 
@@ -425,7 +427,7 @@ class TestErrorHandling:
 
 
 class TestInterceptorEdgeCases:
-    """Tests for edge cases in interceptor module."""
+    """Tests for edge cases in httpx_interceptor module."""
 
     def test_patch_already_patched_returns_true(self, reset_global_instance):
         """patch returns True when already patched."""
@@ -442,10 +444,10 @@ class TestInterceptorEdgeCases:
 
     def test_unpatch_when_not_patched(self, reset_global_instance):
         """unpatch does nothing when not patched."""
-        from coolhand import interceptor
+        from coolhand import httpx_interceptor
 
         # Ensure not patched
-        interceptor._patched = False
+        httpx_interceptor._patched = False
 
         # Should not raise any errors
         unpatch()
@@ -481,7 +483,7 @@ class TestAsyncStreamingCapture:
         try:
             import httpx
 
-            from coolhand import interceptor
+            from coolhand import httpx_interceptor
 
             # Create mock streaming response
             mock_response = MagicMock()
@@ -499,8 +501,10 @@ class TestAsyncStreamingCapture:
             mock_response.aiter_raw = None
 
             # Mock the original async send
-            original_original = interceptor._original_async_send
-            interceptor._original_async_send = AsyncMock(return_value=mock_response)
+            original_original = httpx_interceptor._original_async_send
+            httpx_interceptor._original_async_send = AsyncMock(
+                return_value=mock_response
+            )
 
             mock_request = MagicMock()
             mock_request.method = "POST"
@@ -514,7 +518,7 @@ class TestAsyncStreamingCapture:
                 async for _ in response.aiter_lines():
                     pass
 
-            interceptor._original_async_send = original_original
+            httpx_interceptor._original_async_send = original_original
 
             # Should have captured the streaming response
             assert len(captured_requests) == 1
@@ -538,16 +542,16 @@ class TestAsyncStreamingCapture:
         try:
             import httpx
 
-            from coolhand import interceptor
+            from coolhand import httpx_interceptor
 
             # Save original for restoration
-            saved_original = interceptor._original_async_send
+            saved_original = httpx_interceptor._original_async_send
 
             # Create a mock that raises when awaited
             async def raising_send(*args, **kwargs):
                 raise Exception("Async connection failed")
 
-            interceptor._original_async_send = raising_send
+            httpx_interceptor._original_async_send = raising_send
 
             mock_request = MagicMock()
             mock_request.method = "POST"
@@ -560,7 +564,7 @@ class TestAsyncStreamingCapture:
                     await httpx.AsyncClient.send(client, mock_request)
 
             # Restore original before unpatch
-            interceptor._original_async_send = saved_original
+            httpx_interceptor._original_async_send = saved_original
 
             assert len(captured_requests) == 1
             req, res, err = captured_requests[0]

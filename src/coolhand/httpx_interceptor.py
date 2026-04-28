@@ -1,4 +1,4 @@
-"""HTTP interceptor for capturing API calls - patches httpx only."""
+"""httpx interceptor for capturing API calls."""
 
 import logging
 import time

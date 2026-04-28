@@ -11,7 +11,7 @@ Usage:
 import atexit
 import logging
 
-from . import interceptor
+from . import copilot_interceptor, httpx_interceptor
 from .client import CoolhandClient, get_instance, initialize, set_instance
 from .feedback_service import FeedbackService, create_feedback, get_feedback_service
 from .types import Config, FeedbackData, FeedbackResponse, RequestData, ResponseData
@@ -44,14 +44,17 @@ class Coolhand(CoolhandClient):
         """Start HTTP monitoring."""
         addresses = self.config.get("intercept_addresses")
         if addresses:
-            interceptor.set_intercept_addresses(addresses)
-        interceptor.set_handler(self.log_interaction)
-        interceptor.patch()
+            httpx_interceptor.set_intercept_addresses(addresses)
+        httpx_interceptor.set_handler(self.log_interaction)
+        httpx_interceptor.patch()
+        copilot_interceptor.set_handler(self.log_interaction)
+        copilot_interceptor.patch()
         logger.info("HTTP monitoring started")
 
     def stop_monitoring(self):
         """Stop HTTP monitoring."""
-        interceptor.unpatch()
+        httpx_interceptor.unpatch()
+        copilot_interceptor.unpatch()
         logger.info("HTTP monitoring stopped")
 
     @property

@@ -70,34 +70,34 @@ def mock_response_data():
 @pytest.fixture
 def reset_global_instance():
     """Reset global instance before and after each test."""
-    from coolhand import client, interceptor
+    from coolhand import client, httpx_interceptor
 
     # Save original state
     original_instance = client._instance
     original_heartbeat_sent = client._heartbeat_sent
-    original_patched = interceptor._patched
-    original_handler = interceptor._handler
-    original_intercept_addresses = interceptor._intercept_addresses
+    original_patched = httpx_interceptor._patched
+    original_handler = httpx_interceptor._handler
+    original_intercept_addresses = httpx_interceptor._intercept_addresses
 
     # Reset before test
     client._instance = None
     client._heartbeat_sent = False
-    interceptor._patched = False
-    interceptor._handler = None
-    interceptor._intercept_addresses = None
+    httpx_interceptor._patched = False
+    httpx_interceptor._handler = None
+    httpx_interceptor._intercept_addresses = None
 
     yield
 
     # Reset after test
     client._instance = original_instance
     client._heartbeat_sent = original_heartbeat_sent
-    interceptor._patched = original_patched
-    interceptor._handler = original_handler
-    interceptor._intercept_addresses = original_intercept_addresses
+    httpx_interceptor._patched = original_patched
+    httpx_interceptor._handler = original_handler
+    httpx_interceptor._intercept_addresses = original_intercept_addresses
 
     # Unpatch if patched during test
-    if interceptor._patched:
-        interceptor.unpatch()
+    if httpx_interceptor._patched:
+        httpx_interceptor.unpatch()
 
 
 @pytest.fixture

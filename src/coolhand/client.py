@@ -277,10 +277,20 @@ class CoolhandClient:
         # Check if httpx is patched
         patched_libs = []
         try:
-            from . import interceptor
+            from . import httpx_interceptor
 
-            if interceptor.is_patched():
-                patched_libs = ["httpx.Client.send", "httpx.AsyncClient.send"]
+            if httpx_interceptor.is_patched():
+                patched_libs += ["httpx.Client.send", "httpx.AsyncClient.send"]
+        except Exception:
+            pass
+        try:
+            from . import copilot_interceptor
+
+            if copilot_interceptor.is_patched():
+                patched_libs += [
+                    "JsonRpcClient.request",
+                    "JsonRpcClient._handle_message",
+                ]
         except Exception:
             pass
 

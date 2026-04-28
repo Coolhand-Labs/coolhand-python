@@ -68,10 +68,10 @@ class TestCoolhandClass:
 
     def test_starts_monitoring(self, reset_global_instance):
         """Coolhand starts monitoring on init."""
-        from coolhand import interceptor
+        from coolhand import httpx_interceptor
 
         instance = Coolhand()
-        assert interceptor.is_patched() is True
+        assert httpx_interceptor.is_patched() is True
         instance.stop_monitoring()
 
     def test_has_session_id(self, reset_global_instance):
@@ -88,25 +88,25 @@ class TestCoolhandClass:
 
     def test_start_monitoring_method(self, reset_global_instance):
         """start_monitoring method works."""
-        from coolhand import interceptor
+        from coolhand import httpx_interceptor
 
         instance = Coolhand()
         instance.stop_monitoring()
-        assert interceptor.is_patched() is False
+        assert httpx_interceptor.is_patched() is False
 
         instance.start_monitoring()
-        assert interceptor.is_patched() is True
+        assert httpx_interceptor.is_patched() is True
         instance.stop_monitoring()
 
     def test_stop_monitoring_method(self, reset_global_instance):
         """stop_monitoring method works."""
-        from coolhand import interceptor
+        from coolhand import httpx_interceptor
 
         instance = Coolhand()
-        assert interceptor.is_patched() is True
+        assert httpx_interceptor.is_patched() is True
 
         instance.stop_monitoring()
-        assert interceptor.is_patched() is False
+        assert httpx_interceptor.is_patched() is False
 
 
 class TestStatusFunction:
@@ -133,25 +133,25 @@ class TestModuleFunctions:
 
     def test_start_monitoring_function(self, reset_global_instance):
         """start_monitoring() works on global instance."""
-        from coolhand import interceptor
+        from coolhand import httpx_interceptor
 
         instance = Coolhand()
         instance.stop_monitoring()
-        assert interceptor.is_patched() is False
+        assert httpx_interceptor.is_patched() is False
 
         start_monitoring()
-        assert interceptor.is_patched() is True
+        assert httpx_interceptor.is_patched() is True
         instance.stop_monitoring()
 
     def test_stop_monitoring_function(self, reset_global_instance):
         """stop_monitoring() works on global instance."""
-        from coolhand import interceptor
+        from coolhand import httpx_interceptor
 
         Coolhand()
-        assert interceptor.is_patched() is True
+        assert httpx_interceptor.is_patched() is True
 
         stop_monitoring()
-        assert interceptor.is_patched() is False
+        assert httpx_interceptor.is_patched() is False
 
     def test_shutdown_function(self, reset_global_instance):
         """shutdown() calls instance shutdown."""
@@ -230,7 +230,7 @@ class TestCoolhandClassEdgeCases:
         import json
         from unittest.mock import MagicMock, patch
 
-        with patch("coolhand.interceptor.patch"):
+        with patch("coolhand.httpx_interceptor.patch"):
             instance = Coolhand(config=mock_config)
 
         with patch("coolhand.feedback_service.urlopen") as mock_urlopen:
@@ -267,7 +267,7 @@ class TestCoolhandClassEdgeCases:
 
         from coolhand import FeedbackService
 
-        with patch("coolhand.interceptor.patch"):
+        with patch("coolhand.httpx_interceptor.patch"):
             instance = Coolhand(config=mock_config)
 
         assert isinstance(instance.feedback_service, FeedbackService)
@@ -280,7 +280,7 @@ class TestCoolhandClassEdgeCases:
         import atexit
         from unittest.mock import patch
 
-        with patch("coolhand.interceptor.patch"):
+        with patch("coolhand.httpx_interceptor.patch"):
             with patch.object(atexit, "register") as mock_register:
                 instance = Coolhand(config=mock_config)
                 mock_register.assert_called_once_with(instance.shutdown)

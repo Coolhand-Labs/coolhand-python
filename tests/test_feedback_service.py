@@ -287,7 +287,7 @@ class TestCoolhandIntegration:
         """Test Coolhand instance has feedback_service property."""
         from coolhand import Coolhand
 
-        with patch("coolhand.interceptor.patch"):
+        with patch("coolhand.httpx_interceptor.patch"):
             instance = Coolhand(config=mock_config)
 
         assert hasattr(instance, "feedback_service")
@@ -299,7 +299,7 @@ class TestCoolhandIntegration:
         """Test Coolhand.create_feedback method."""
         from coolhand import Coolhand
 
-        with patch("coolhand.interceptor.patch"):
+        with patch("coolhand.httpx_interceptor.patch"):
             instance = Coolhand(config=mock_config)
 
         feedback: FeedbackData = {

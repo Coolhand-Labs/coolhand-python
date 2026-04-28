@@ -26,6 +26,7 @@ def mock_config():
         "silent": True,
         "auto_submit": False,
         "session_id": "test-session-123",
+        "send_heartbeat": False,
     }
 
 

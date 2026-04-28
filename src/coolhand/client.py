@@ -3,7 +3,6 @@
 import json
 import logging
 import os
-import threading
 import time
 import uuid
 from datetime import datetime, timezone
@@ -31,9 +30,6 @@ SENSITIVE_QUERY_PARAMS = {"key", "api_key", "apikey", "token", "access_token", "
 
 
 BASE_URL = "https://coolhandlabs.com"
-
-_heartbeat_sent = False
-_heartbeat_lock = threading.Lock()
 
 
 def _get_default_config() -> Config:
@@ -133,44 +129,6 @@ class CoolhandClient:
 
         if not self.config.get("silent"):
             logging.basicConfig(level=logging.INFO)
-
-        self._fire_heartbeat()
-
-    def _fire_heartbeat(self) -> None:
-        global _heartbeat_sent
-        if not self.config.get("send_heartbeat", True):
-            return
-        with _heartbeat_lock:
-            if _heartbeat_sent:
-                return
-            _heartbeat_sent = True
-
-        api_key = self.config.get("api_key")
-
-        def _send():
-            try:
-                headers = {
-                    "Content-Type": "application/json",
-                    "User-Agent": f"coolhand-python/{__version__}",
-                }
-                if api_key:
-                    headers["X-API-Key"] = api_key
-                payload = json.dumps(
-                    {"sdk_version": __version__, "platform": "python"},
-                    default=str,
-                ).encode("utf-8")
-                req = Request(
-                    url=f"{BASE_URL}/api/v2/heartbeat",
-                    data=payload,
-                    headers=headers,
-                    method="POST",
-                )
-                with urlopen(req, timeout=10):
-                    pass
-            except Exception:
-                pass
-
-        threading.Thread(target=_send, daemon=True).start()
 
     @property
     def session_id(self) -> str:

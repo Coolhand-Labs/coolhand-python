@@ -26,7 +26,6 @@ def mock_config():
         "silent": True,
         "auto_submit": False,
         "session_id": "test-session-123",
-        "send_heartbeat": False,
     }
 
 
@@ -74,14 +73,12 @@ def reset_global_instance():
 
     # Save original state
     original_instance = client._instance
-    original_heartbeat_sent = client._heartbeat_sent
     original_patched = httpx_interceptor._patched
     original_handler = httpx_interceptor._handler
     original_intercept_addresses = httpx_interceptor._intercept_addresses
 
     # Reset before test
     client._instance = None
-    client._heartbeat_sent = False
     httpx_interceptor._patched = False
     httpx_interceptor._handler = None
     httpx_interceptor._intercept_addresses = None
@@ -90,7 +87,6 @@ def reset_global_instance():
 
     # Reset after test
     client._instance = original_instance
-    client._heartbeat_sent = original_heartbeat_sent
     httpx_interceptor._patched = original_patched
     httpx_interceptor._handler = original_handler
     httpx_interceptor._intercept_addresses = original_intercept_addresses

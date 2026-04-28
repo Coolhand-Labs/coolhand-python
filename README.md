@@ -62,8 +62,7 @@ from coolhand import Coolhand
 
 coolhand_client = Coolhand(
     api_key='your-api-key',
-    silent=False,       # Enable verbose logging
-    send_heartbeat=False,  # Don't send initialization ping on startup (useful to test egress settings)
+    silent=False,  # Enable verbose logging
 )
 ```
 

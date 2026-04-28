@@ -26,6 +26,9 @@ _pending: Dict[Tuple[Optional[str], str], Dict[str, Any]] = {}
 # notification synchronously between resolving the send-response Future and the
 # event loop scheduling the awaiting coroutine).
 _pre_pending: Dict[Optional[str], List[Dict[str, Any]]] = {}
+# session.create params keyed by sessionId — provides system prompt and other
+# session-level config that is not repeated in subsequent session.send calls.
+_session_params: Dict[Optional[str], Dict[str, Any]] = {}
 
 _lock = threading.Lock()
 
@@ -109,17 +112,30 @@ def patch() -> bool:
     _original_handle_message = JsonRpcClient._handle_message
 
     async def patched_request(self, method, params=None, timeout=None):
-        if method != "session.send" or not _handler:
+        if not _handler:
+            return await _original_request(self, method, params, timeout)
+
+        if method == "session.create":
+            p_create = params or {}
+            session_id = p_create.get("sessionId")
+            if session_id:
+                with _lock:
+                    _session_params[session_id] = dict(p_create)
+            return await _original_request(self, method, params, timeout)
+
+        if method != "session.send":
             return await _original_request(self, method, params, timeout)
 
         start = time.time()
         p = params or {}
         session_id = p.get("sessionId")
+        with _lock:
+            session_ctx = dict(_session_params.get(session_id, {}))
         req_data: RequestData = {
             "method": "POST",
             "url": "copilot://session.send",
             "headers": p.get("requestHeaders") or {},
-            "body": dict(p),
+            "body": {**session_ctx, **dict(p)},
             "timestamp": start,
         }
 
@@ -218,6 +234,7 @@ def unpatch() -> None:
     with _lock:
         _pending.clear()
         _pre_pending.clear()
+        _session_params.clear()
 
     _patched = False
     logger.info("github-copilot-sdk monitoring disabled")

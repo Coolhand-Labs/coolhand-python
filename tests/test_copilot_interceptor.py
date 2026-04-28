@@ -77,6 +77,7 @@ def reset_copilot_interceptor():
     with copilot_interceptor._lock:
         copilot_interceptor._pending.clear()
         copilot_interceptor._pre_pending.clear()
+        copilot_interceptor._session_params.clear()
 
     yield
 
@@ -85,6 +86,7 @@ def reset_copilot_interceptor():
     with copilot_interceptor._lock:
         copilot_interceptor._pending.clear()
         copilot_interceptor._pre_pending.clear()
+        copilot_interceptor._session_params.clear()
 
     _remove_fake_sdk()
 
@@ -309,6 +311,113 @@ class TestRequestInterception:
         assert entry["req_data"]["body"]["attachments"] == [
             {"type": "file", "path": "/tmp/x"}
         ]
+
+
+# ---------------------------------------------------------------------------
+# TestSessionCreate
+# ---------------------------------------------------------------------------
+
+
+class TestSessionCreate:
+    @pytest.mark.asyncio
+    async def test_session_create_stores_params(self, handler):
+        from coolhand import copilot_interceptor
+
+        cls = _inject_fake_sdk()
+        copilot_interceptor.set_handler(handler)
+        copilot_interceptor.patch()
+
+        instance = cls()
+        await instance.request(
+            "session.create",
+            {
+                "sessionId": "s1",
+                "systemMessage": {"content": "You are a helpful assistant."},
+                "model": "gpt-4o",
+            },
+        )
+
+        assert "s1" in copilot_interceptor._session_params
+        stored = copilot_interceptor._session_params["s1"]
+        assert stored["systemMessage"] == {"content": "You are a helpful assistant."}
+        assert stored["model"] == "gpt-4o"
+        handler.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_session_create_skipped_when_no_handler(self):
+        from coolhand import copilot_interceptor
+
+        cls = _inject_fake_sdk()
+        copilot_interceptor.patch()  # no handler
+
+        instance = cls()
+        await instance.request(
+            "session.create",
+            {"sessionId": "s1", "systemMessage": {"content": "sys"}},
+        )
+
+        assert copilot_interceptor._session_params == {}
+
+    @pytest.mark.asyncio
+    async def test_session_send_merges_session_create_params(self, handler):
+        from coolhand import copilot_interceptor
+
+        cls = _inject_fake_sdk()
+        copilot_interceptor.set_handler(handler)
+        copilot_interceptor.patch()
+
+        instance = cls()
+        await instance.request(
+            "session.create",
+            {
+                "sessionId": "s1",
+                "systemMessage": {"content": "You are a music expert."},
+                "model": "gpt-4o",
+            },
+        )
+        await instance.request(
+            "session.send",
+            {"sessionId": "s1", "prompt": "hello"},
+        )
+
+        entry = copilot_interceptor._pre_pending["s1"][0]
+        body = entry["req_data"]["body"]
+        assert body["prompt"] == "hello"
+        assert body["systemMessage"] == {"content": "You are a music expert."}
+        assert body["model"] == "gpt-4o"
+
+    @pytest.mark.asyncio
+    async def test_session_send_params_take_precedence(self, handler):
+        from coolhand import copilot_interceptor
+
+        cls = _inject_fake_sdk()
+        copilot_interceptor.set_handler(handler)
+        copilot_interceptor.patch()
+
+        instance = cls()
+        await instance.request(
+            "session.create",
+            {"sessionId": "s1", "model": "gpt-4o"},
+        )
+        await instance.request(
+            "session.send",
+            {"sessionId": "s1", "prompt": "hi", "model": "gpt-4o-mini"},
+        )
+
+        body = copilot_interceptor._pre_pending["s1"][0]["req_data"]["body"]
+        assert body["model"] == "gpt-4o-mini"
+
+    @pytest.mark.asyncio
+    async def test_unpatch_clears_session_params(self, handler):
+        from coolhand import copilot_interceptor
+
+        _inject_fake_sdk()
+        copilot_interceptor.set_handler(handler)
+        copilot_interceptor.patch()
+        with copilot_interceptor._lock:
+            copilot_interceptor._session_params["s1"] = {"systemMessage": "sys"}
+        copilot_interceptor.unpatch()
+        assert copilot_interceptor._session_params == {}
 
 
 # ---------------------------------------------------------------------------

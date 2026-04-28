@@ -236,9 +236,9 @@ class CoolhandClient:
         # Check if httpx is patched
         patched_libs = []
         try:
-            from . import interceptor
+            from . import httpx_interceptor
 
-            if interceptor.is_patched():
+            if httpx_interceptor.is_patched():
                 patched_libs += ["httpx.Client.send", "httpx.AsyncClient.send"]
         except Exception:
             pass

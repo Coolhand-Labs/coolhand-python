@@ -229,7 +229,7 @@ class TestRequestInterception:
         assert "s1" in copilot_interceptor._pre_pending
         entry = copilot_interceptor._pre_pending["s1"][0]
         assert entry["req_data"]["body"]["prompt"] == "hello"
-        assert entry["req_data"]["body"]["session_id"] == "s1"
+        assert entry["req_data"]["body"]["sessionId"] == "s1"
         assert entry["req_data"]["body"]["mode"] == "immediate"
         assert entry["req_data"]["url"] == "copilot://session.send"
         assert entry["req_data"]["method"] == "POST"
@@ -345,7 +345,7 @@ class TestHandleMessageInterception:
             "method": "POST",
             "url": "copilot://session.send",
             "headers": {},
-            "body": {"prompt": prompt, "session_id": session_id},
+            "body": {"prompt": prompt, "sessionId": session_id},
             "timestamp": start,
         }
         with copilot_interceptor._lock:
@@ -376,10 +376,10 @@ class TestHandleMessageInterception:
         assert req_data["body"]["prompt"] == "hello"
         assert res_data["status_code"] == 200
         assert res_data["body"]["content"] == "world"
-        assert res_data["body"]["message_id"] == "msg-001"
-        assert res_data["body"]["session_id"] == "s1"
+        assert res_data["body"]["messageId"] == "msg-001"
+        assert res_data["body"]["sessionId"] == "s1"
         assert res_data["body"]["model"] == "gpt-4o"
-        assert res_data["body"]["output_tokens"] == 42
+        assert res_data["body"]["outputTokens"] == 42
         assert res_data["duration"] > 0
         assert res_data["is_streaming"] is False
 
@@ -537,7 +537,7 @@ class TestHandleMessageInterception:
             "method": "POST",
             "url": "copilot://session.send",
             "headers": {},
-            "body": {"prompt": "hello", "session_id": "s1"},
+            "body": {"prompt": "hello", "sessionId": "s1"},
             "timestamp": start,
         }
         entry = {"req_data": req_data, "start": start}
@@ -657,7 +657,7 @@ class TestEndToEnd:
         assert err is None
         assert req_data["body"]["prompt"] == "what is 2+2?"
         assert res_data["body"]["content"] == "4"
-        assert res_data["body"]["output_tokens"] == 5
+        assert res_data["body"]["outputTokens"] == 5
         assert res_data["status_code"] == 200
         assert res_data["duration"] > 0
         assert copilot_interceptor._pending == {}

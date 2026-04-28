@@ -119,12 +119,7 @@ def patch() -> bool:
             "method": "POST",
             "url": "copilot://session.send",
             "headers": p.get("requestHeaders") or {},
-            "body": {
-                "prompt": p.get("prompt"),
-                "session_id": session_id,
-                "attachments": p.get("attachments"),
-                "mode": p.get("mode"),
-            },
+            "body": dict(p),
             "timestamp": start,
         }
 
@@ -180,13 +175,7 @@ def patch() -> bool:
                         res_data: ResponseData = {
                             "status_code": 200,
                             "headers": {},
-                            "body": {
-                                "content": data.get("content"),
-                                "message_id": msg_id,
-                                "session_id": session_id,
-                                "model": data.get("model"),
-                                "output_tokens": data.get("outputTokens"),
-                            },
+                            "body": {**data, "sessionId": session_id},
                             "timestamp": end,
                             "duration": end - pending["start"],
                             "is_streaming": False,

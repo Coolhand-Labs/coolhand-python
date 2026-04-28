@@ -145,7 +145,27 @@ def patch() -> bool:
                     "Copilot interceptor: session.create has no sessionId,"
                     " system prompt will not be captured"
                 )
-            return await _original_request(self, method, params, timeout)
+            result = await _original_request(self, method, params, timeout)
+            if session_id and isinstance(result, dict):
+                model = result.get("model") or result.get("modelId")
+                if model:
+                    with _lock:
+                        _session_models[session_id] = {
+                            "model": model,
+                            "start": time.time(),
+                        }
+                    logger.debug(
+                        "Copilot interceptor: session.create response"
+                        " — model=%s session=%s",
+                        model,
+                        session_id,
+                    )
+                else:
+                    logger.debug(
+                        "Copilot interceptor: session.create response keys: %s",
+                        list(result.keys()) if result else [],
+                    )
+            return result
 
         if method != "session.send":
             return await _original_request(self, method, params, timeout)
@@ -197,6 +217,11 @@ def patch() -> bool:
                 session_id = msg_params.get("sessionId")
                 event = msg_params.get("event", {})
                 event_type = event.get("type")
+                logger.debug(
+                    "Copilot interceptor: session.event type=%s session=%s",
+                    event_type,
+                    session_id,
+                )
                 if event_type == "session.model.change":
                     model = event.get("data", {}).get("model")
                     if model and session_id:

@@ -602,9 +602,7 @@ class TestHeartbeat:
         from urllib.error import URLError
 
         with patch("threading.Thread", _SyncThread):
-            with patch(
-                "coolhand.client.urlopen", side_effect=URLError("unreachable")
-            ):
+            with patch("coolhand.client.urlopen", side_effect=URLError("unreachable")):
                 client = CoolhandClient(
                     auto_submit=False,
                     api_key="real-api-key-12345",

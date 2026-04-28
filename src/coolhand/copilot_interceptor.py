@@ -161,8 +161,9 @@ def patch() -> bool:
             result = await _original_request(self, method, params, timeout)
         except Exception as e:
             with _lock:
-                _remove_from_pre_pending(session_id, entry)
-            _handler(req_data, None, str(e))
+                still_owned = _remove_from_pre_pending(session_id, entry)
+            if still_owned:
+                _handler(req_data, None, str(e))
             raise
 
         return result

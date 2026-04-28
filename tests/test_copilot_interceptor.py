@@ -287,6 +287,44 @@ class TestRequestInterception:
         assert copilot_interceptor._pre_pending == {}
 
     @pytest.mark.asyncio
+    async def test_no_duplicate_handler_call_when_entry_already_consumed(self, handler):
+        """If _handle_message consumes the entry (success) before the underlying
+        request raises (e.g. read timeout after notification), the error path
+        must not invoke the handler a second time."""
+        from coolhand import copilot_interceptor
+
+        consumed_by_handle_message = []
+
+        class RaceClient:
+            async def request(self_inner, method, params=None, timeout=None):
+                # Simulate: notification arrives and is processed synchronously
+                # before this coroutine raises.
+                entry = copilot_interceptor._pre_pending.get("s1", [None])[0]
+                if entry:
+                    with copilot_interceptor._lock:
+                        q = copilot_interceptor._pre_pending.get("s1", [])
+                        if q:
+                            consumed_by_handle_message.append(q.pop(0))
+                            if not q:
+                                del copilot_interceptor._pre_pending["s1"]
+                raise RuntimeError("timeout after notification")
+
+            def _handle_message(self, message):
+                pass
+
+        _inject_fake_sdk(RaceClient)
+        copilot_interceptor.set_handler(handler)
+        copilot_interceptor.patch()
+
+        instance = RaceClient()
+        with pytest.raises(RuntimeError, match="timeout after notification"):
+            await instance.request("session.send", {"sessionId": "s1", "prompt": "hi"})
+
+        # Entry was consumed before the raise — handler must not be called
+        assert len(consumed_by_handle_message) == 1
+        handler.assert_not_called()
+
+    @pytest.mark.asyncio
     async def test_no_pending_entry_when_handler_is_none(self):
         from coolhand import copilot_interceptor
 

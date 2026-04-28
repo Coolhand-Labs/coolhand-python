@@ -232,7 +232,7 @@ def patch() -> bool:
                             }
                     else:
                         logger.debug(
-                            "Copilot interceptor: session.model.change"
+                            "Copilot interceptor: session.model_change"
                             " missing model or sessionId — data: %s",
                             event.get("data"),
                         )

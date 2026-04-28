@@ -20,6 +20,7 @@ else:
 # Helpers: build and inject a fake copilot SDK into sys.modules
 # ---------------------------------------------------------------------------
 
+
 def _make_fake_client_class():
     class FakeJsonRpcClient:
         async def request(self, method, params=None, timeout=None):
@@ -56,6 +57,7 @@ def _remove_fake_sdk():
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
+
 
 @pytest.fixture(autouse=True)
 def reset_copilot_interceptor():
@@ -96,21 +98,25 @@ def handler():
 # TestPatchUnpatch
 # ---------------------------------------------------------------------------
 
+
 class TestPatchUnpatch:
     def test_returns_false_when_sdk_missing(self):
         from coolhand import copilot_interceptor
+
         _remove_fake_sdk()
         assert copilot_interceptor.patch() is False
         assert copilot_interceptor.is_patched() is False
 
     def test_returns_true_when_sdk_present(self):
         from coolhand import copilot_interceptor
+
         _inject_fake_sdk()
         assert copilot_interceptor.patch() is True
         assert copilot_interceptor.is_patched() is True
 
     def test_patch_is_idempotent(self):
         from coolhand import copilot_interceptor
+
         cls = _inject_fake_sdk()
         original_request = cls.request
         copilot_interceptor.patch()
@@ -121,6 +127,7 @@ class TestPatchUnpatch:
 
     def test_unpatch_restores_methods(self):
         from coolhand import copilot_interceptor
+
         cls = _inject_fake_sdk()
         original_request = cls.request
         original_handle = cls._handle_message
@@ -132,23 +139,31 @@ class TestPatchUnpatch:
 
     def test_unpatch_clears_pending(self):
         from coolhand import copilot_interceptor
+
         _inject_fake_sdk()
         copilot_interceptor.patch()
         with copilot_interceptor._lock:
-            copilot_interceptor._pending[("s1", "m1")] = {"req_data": {}, "start": time.time()}
-            copilot_interceptor._pre_pending["s1"] = [{"req_data": {}, "start": time.time()}]
+            copilot_interceptor._pending[("s1", "m1")] = {
+                "req_data": {},
+                "start": time.time(),
+            }
+            copilot_interceptor._pre_pending["s1"] = [
+                {"req_data": {}, "start": time.time()}
+            ]
         copilot_interceptor.unpatch()
         assert copilot_interceptor._pending == {}
         assert copilot_interceptor._pre_pending == {}
 
     def test_unpatch_when_not_patched_is_noop(self):
         from coolhand import copilot_interceptor
+
         # Should not raise
         copilot_interceptor.unpatch()
         assert copilot_interceptor.is_patched() is False
 
     def test_falls_back_to_legacy_import(self):
         from coolhand import copilot_interceptor
+
         cls = _make_fake_client_class()
         copilot_mod = types.ModuleType("copilot")
         legacy_mod = types.ModuleType("copilot.jsonrpc")
@@ -165,10 +180,12 @@ class TestPatchUnpatch:
 # TestRequestInterception
 # ---------------------------------------------------------------------------
 
+
 class TestRequestInterception:
     @pytest.mark.asyncio
     async def test_pre_pending_populated_before_await(self, handler):
         from coolhand import copilot_interceptor
+
         cls = _inject_fake_sdk()
         copilot_interceptor.set_handler(handler)
         copilot_interceptor.patch()
@@ -195,6 +212,7 @@ class TestRequestInterception:
     @pytest.mark.asyncio
     async def test_stores_pending_entry_for_session_send(self, handler):
         from coolhand import copilot_interceptor
+
         cls = _inject_fake_sdk()
         copilot_interceptor.set_handler(handler)
         copilot_interceptor.patch()
@@ -217,6 +235,7 @@ class TestRequestInterception:
     @pytest.mark.asyncio
     async def test_passthrough_for_non_session_send(self, handler):
         from coolhand import copilot_interceptor
+
         cls = _inject_fake_sdk()
         copilot_interceptor.set_handler(handler)
         copilot_interceptor.patch()
@@ -255,6 +274,7 @@ class TestRequestInterception:
     @pytest.mark.asyncio
     async def test_no_pending_entry_when_handler_is_none(self):
         from coolhand import copilot_interceptor
+
         cls = _inject_fake_sdk()
         copilot_interceptor.patch()  # handler not set
 
@@ -265,6 +285,7 @@ class TestRequestInterception:
     @pytest.mark.asyncio
     async def test_captures_request_headers_and_attachments(self, handler):
         from coolhand import copilot_interceptor
+
         cls = _inject_fake_sdk()
         copilot_interceptor.set_handler(handler)
         copilot_interceptor.patch()
@@ -282,12 +303,15 @@ class TestRequestInterception:
 
         entry = copilot_interceptor._pending[("s1", "msg-001")]
         assert entry["req_data"]["headers"] == {"X-Custom": "value"}
-        assert entry["req_data"]["body"]["attachments"] == [{"type": "file", "path": "/tmp/x"}]
+        assert entry["req_data"]["body"]["attachments"] == [
+            {"type": "file", "path": "/tmp/x"}
+        ]
 
 
 # ---------------------------------------------------------------------------
 # TestHandleMessageInterception
 # ---------------------------------------------------------------------------
+
 
 def _assistant_message_notification(
     session_id, message_id, content, model=None, output_tokens=None
@@ -310,7 +334,9 @@ def _assistant_message_notification(
 
 
 class TestHandleMessageInterception:
-    def _prime_pending(self, copilot_interceptor, session_id, message_id, prompt="hello"):
+    def _prime_pending(
+        self, copilot_interceptor, session_id, message_id, prompt="hello"
+    ):
         start = time.time() - 0.1
         req_data = {
             "method": "POST",
@@ -327,6 +353,7 @@ class TestHandleMessageInterception:
 
     def test_handler_called_with_correct_data(self, handler):
         from coolhand import copilot_interceptor
+
         cls = _inject_fake_sdk()
         copilot_interceptor.set_handler(handler)
         copilot_interceptor.patch()
@@ -355,6 +382,7 @@ class TestHandleMessageInterception:
 
     def test_pending_entry_removed_after_match(self, handler):
         from coolhand import copilot_interceptor
+
         cls = _inject_fake_sdk()
         copilot_interceptor.set_handler(handler)
         copilot_interceptor.patch()
@@ -380,7 +408,9 @@ class TestHandleMessageInterception:
                 call_order.append("original")
 
         _inject_fake_sdk(OrderedClient)
-        original_handler = MagicMock(side_effect=lambda *a: call_order.append("coolhand"))
+        original_handler = MagicMock(
+            side_effect=lambda *a: call_order.append("coolhand")
+        )
         copilot_interceptor.set_handler(original_handler)
         copilot_interceptor.patch()
         self._prime_pending(copilot_interceptor, "s1", "msg-001")
@@ -394,6 +424,7 @@ class TestHandleMessageInterception:
 
     def test_non_session_event_method_skips_handler(self, handler):
         from coolhand import copilot_interceptor
+
         cls = _inject_fake_sdk()
         copilot_interceptor.set_handler(handler)
         copilot_interceptor.patch()
@@ -404,31 +435,37 @@ class TestHandleMessageInterception:
 
     def test_non_assistant_event_type_skips_handler(self, handler):
         from coolhand import copilot_interceptor
+
         cls = _inject_fake_sdk()
         copilot_interceptor.set_handler(handler)
         copilot_interceptor.patch()
 
         instance = cls()
-        instance._handle_message({
-            "method": "session.event",
-            "params": {
-                "sessionId": "s1",
-                "event": {"type": "session.idle", "data": {}},
-            },
-        })
+        instance._handle_message(
+            {
+                "method": "session.event",
+                "params": {
+                    "sessionId": "s1",
+                    "event": {"type": "session.idle", "data": {}},
+                },
+            }
+        )
         handler.assert_not_called()
 
     def test_response_message_with_id_skips_handler(self, handler):
         from coolhand import copilot_interceptor
+
         cls = _inject_fake_sdk()
         copilot_interceptor.set_handler(handler)
         copilot_interceptor.patch()
 
         instance = cls()
-        instance._handle_message({
-            "id": "rpc-uuid-123",
-            "result": {"messageId": "msg-001"},
-        })
+        instance._handle_message(
+            {
+                "id": "rpc-uuid-123",
+                "result": {"messageId": "msg-001"},
+            }
+        )
         handler.assert_not_called()
 
     def test_unknown_message_id_skips_handler_but_original_called(self, handler):
@@ -486,6 +523,7 @@ class TestHandleMessageInterception:
         the entry in _pending.  The entry lives in _pre_pending at that moment and
         must be found there so the interaction is not silently dropped."""
         from coolhand import copilot_interceptor
+
         cls = _inject_fake_sdk()
         copilot_interceptor.set_handler(handler)
         copilot_interceptor.patch()
@@ -522,6 +560,7 @@ class TestHandleMessageInterception:
         """Stale cleanup runs unconditionally on every _handle_message call,
         not only when an assistant.message event is processed."""
         from coolhand import copilot_interceptor
+
         cls = _inject_fake_sdk()
         copilot_interceptor.set_handler(handler)
         copilot_interceptor.patch()
@@ -535,19 +574,22 @@ class TestHandleMessageInterception:
 
         instance = cls()
         # Send a session.idle notification — NOT assistant.message
-        instance._handle_message({
-            "method": "session.event",
-            "params": {
-                "sessionId": "s1",
-                "event": {"type": "session.idle", "data": {}},
-            },
-        })
+        instance._handle_message(
+            {
+                "method": "session.event",
+                "params": {
+                    "sessionId": "s1",
+                    "event": {"type": "session.idle", "data": {}},
+                },
+            }
+        )
 
         assert ("s-stale", "stale-id") not in copilot_interceptor._pending
         handler.assert_not_called()
 
     def test_stale_entries_evicted_silently(self, handler):
         from coolhand import copilot_interceptor
+
         cls = _inject_fake_sdk()
         copilot_interceptor.set_handler(handler)
         copilot_interceptor.patch()
@@ -573,6 +615,7 @@ class TestHandleMessageInterception:
 
     def test_malformed_event_does_not_raise(self, handler):
         from coolhand import copilot_interceptor
+
         cls = _inject_fake_sdk()
         copilot_interceptor.set_handler(handler)
         copilot_interceptor.patch()
@@ -587,10 +630,12 @@ class TestHandleMessageInterception:
 # TestEndToEnd
 # ---------------------------------------------------------------------------
 
+
 class TestEndToEnd:
     @pytest.mark.asyncio
     async def test_full_roundtrip(self, handler):
         from coolhand import copilot_interceptor
+
         cls = _inject_fake_sdk()
         copilot_interceptor.set_handler(handler)
         copilot_interceptor.patch()
@@ -617,6 +662,7 @@ class TestEndToEnd:
     @pytest.mark.asyncio
     async def test_multiple_concurrent_sessions(self, handler):
         from coolhand import copilot_interceptor
+
         cls = _inject_fake_sdk()
 
         # Two different sessions with different messageIds
@@ -646,6 +692,7 @@ class TestEndToEnd:
 # TestGetStats
 # ---------------------------------------------------------------------------
 
+
 class TestGetStats:
     def test_includes_copilot_entries_when_patched(self):
         from coolhand import copilot_interceptor
@@ -654,7 +701,9 @@ class TestGetStats:
         _inject_fake_sdk()
         copilot_interceptor.patch()
 
-        client = CoolhandClient({"api_key": "test-key", "silent": True, "auto_submit": False})
+        client = CoolhandClient(
+            {"api_key": "test-key", "silent": True, "auto_submit": False}
+        )
         stats = client.get_stats()
         libs = stats["monitoring"]["patched_libraries"]
         assert "JsonRpcClient.request" in libs
@@ -663,7 +712,9 @@ class TestGetStats:
     def test_excludes_copilot_entries_when_not_patched(self):
         from coolhand.client import CoolhandClient
 
-        client = CoolhandClient({"api_key": "test-key", "silent": True, "auto_submit": False})
+        client = CoolhandClient(
+            {"api_key": "test-key", "silent": True, "auto_submit": False}
+        )
         stats = client.get_stats()
         libs = stats["monitoring"]["patched_libraries"]
         assert "JsonRpcClient.request" not in libs

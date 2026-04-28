@@ -246,7 +246,10 @@ class CoolhandClient:
             from . import copilot_interceptor
 
             if copilot_interceptor.is_patched():
-                patched_libs += ["JsonRpcClient.request", "JsonRpcClient._handle_message"]
+                patched_libs += [
+                    "JsonRpcClient.request",
+                    "JsonRpcClient._handle_message",
+                ]
         except Exception:
             pass
 

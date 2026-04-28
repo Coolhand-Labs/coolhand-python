@@ -63,7 +63,10 @@ def _sweep_stale() -> None:
 
         stale_pre_sessions = []
         for sid, queue in list(_pre_pending.items()):
-            while queue and now - queue[0]["start"] > COPILOT_INTERCEPTOR_PENDING_TTL_SECONDS:
+            while (
+                queue
+                and now - queue[0]["start"] > COPILOT_INTERCEPTOR_PENDING_TTL_SECONDS
+            ):
                 queue.pop(0)
                 stale_pre_sessions.append(sid)
             if not queue:

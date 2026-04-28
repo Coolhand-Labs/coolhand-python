@@ -547,7 +547,7 @@ class TestHeartbeat:
     def test_heartbeat_fires_on_init(self, reset_global_instance):
         """Heartbeat POSTs to /api/v2/heartbeat with correct payload on init."""
         import json
-        from unittest.mock import patch, MagicMock
+        from unittest.mock import MagicMock, patch
 
         mock_response = MagicMock()
         mock_response.__enter__ = MagicMock(return_value=mock_response)

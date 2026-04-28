@@ -224,8 +224,10 @@ class TestRequestInterception:
         )
 
         assert result == {"messageId": "msg-001"}
-        assert ("s1", "msg-001") in copilot_interceptor._pending
-        entry = copilot_interceptor._pending[("s1", "msg-001")]
+        # Entry lives in _pre_pending until assistant.message is received;
+        # messageId from the send result is not used for correlation.
+        assert "s1" in copilot_interceptor._pre_pending
+        entry = copilot_interceptor._pre_pending["s1"][0]
         assert entry["req_data"]["body"]["prompt"] == "hello"
         assert entry["req_data"]["body"]["session_id"] == "s1"
         assert entry["req_data"]["body"]["mode"] == "immediate"
@@ -244,6 +246,7 @@ class TestRequestInterception:
         await instance.request("models.list", {})
 
         assert copilot_interceptor._pending == {}
+        assert copilot_interceptor._pre_pending == {}
         handler.assert_not_called()
 
     @pytest.mark.asyncio
@@ -301,7 +304,7 @@ class TestRequestInterception:
             },
         )
 
-        entry = copilot_interceptor._pending[("s1", "msg-001")]
+        entry = copilot_interceptor._pre_pending["s1"][0]
         assert entry["req_data"]["headers"] == {"X-Custom": "value"}
         assert entry["req_data"]["body"]["attachments"] == [
             {"type": "file", "path": "/tmp/x"}

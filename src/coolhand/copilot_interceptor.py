@@ -143,18 +143,6 @@ def patch() -> bool:
             _handler(req_data, None, str(e))
             raise
 
-        message_id = result.get("messageId") if isinstance(result, dict) else None
-        if message_id:
-            with _lock:
-                still_queued = _remove_from_pre_pending(session_id, entry)
-                if still_queued:
-                    # Normal path: notification hasn't arrived yet.
-                    _pending[(session_id, message_id)] = entry
-                # else: _handle_message already consumed this entry (race path).
-        else:
-            with _lock:
-                _remove_from_pre_pending(session_id, entry)
-
         return result
 
     def patched_handle_message(self, message):

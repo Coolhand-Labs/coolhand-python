@@ -3,7 +3,7 @@
 import sys
 import time
 import types
-from unittest.mock import MagicMock, call
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -234,6 +234,7 @@ class TestRequestInterception:
         class ErrorClient:
             async def request(self, method, params=None, timeout=None):
                 raise RuntimeError("connection failed")
+
             def _handle_message(self, message):
                 pass
 
@@ -288,7 +289,9 @@ class TestRequestInterception:
 # TestHandleMessageInterception
 # ---------------------------------------------------------------------------
 
-def _assistant_message_notification(session_id, message_id, content, model=None, output_tokens=None):
+def _assistant_message_notification(
+    session_id, message_id, content, model=None, output_tokens=None
+):
     return {
         "method": "session.event",
         "params": {
@@ -331,7 +334,9 @@ class TestHandleMessageInterception:
 
         instance = cls()
         instance._handle_message(
-            _assistant_message_notification("s1", "msg-001", "world", model="gpt-4o", output_tokens=42)
+            _assistant_message_notification(
+                "s1", "msg-001", "world", model="gpt-4o", output_tokens=42
+            )
         )
 
         handler.assert_called_once()
@@ -370,6 +375,7 @@ class TestHandleMessageInterception:
         class OrderedClient:
             def request(self, method, params=None, timeout=None):
                 pass
+
             def _handle_message(self, message):
                 call_order.append("original")
 
@@ -433,6 +439,7 @@ class TestHandleMessageInterception:
         class TrackingClient:
             async def request(self, method, params=None, timeout=None):
                 return {}
+
             def _handle_message(self, message):
                 original_called.append(True)
 
@@ -456,6 +463,7 @@ class TestHandleMessageInterception:
         class TrackingClient:
             async def request(self, method, params=None, timeout=None):
                 return {}
+
             def _handle_message(self, message):
                 original_called.append(True)
 

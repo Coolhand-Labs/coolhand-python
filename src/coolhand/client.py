@@ -3,6 +3,7 @@
 import json
 import logging
 import os
+import threading
 import time
 import uuid
 from datetime import datetime, timezone
@@ -128,6 +129,38 @@ class CoolhandClient:
 
         if not self.config.get("silent"):
             logging.basicConfig(level=logging.INFO)
+
+        self._fire_heartbeat()
+
+    def _fire_heartbeat(self) -> None:
+        if not self.config.get("send_heartbeat", True):
+            return
+        api_key = self.config.get("api_key", "")
+        if not api_key or api_key == "demo-key":
+            return
+
+        def _send():
+            try:
+                payload = json.dumps(
+                    {"sdk_version": __version__, "platform": "python"},
+                    default=str,
+                ).encode("utf-8")
+                req = Request(
+                    url=f"{BASE_URL}/api/v2/heartbeat",
+                    data=payload,
+                    headers={
+                        "X-API-Key": api_key,
+                        "Content-Type": "application/json",
+                        "User-Agent": f"coolhand-python/{__version__}",
+                    },
+                    method="POST",
+                )
+                with urlopen(req, timeout=10):
+                    pass
+            except Exception:
+                pass
+
+        threading.Thread(target=_send, daemon=True).start()
 
     @property
     def session_id(self) -> str:

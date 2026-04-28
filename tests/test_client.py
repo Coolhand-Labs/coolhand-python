@@ -325,16 +325,16 @@ class TestCoolhandClient:
         self, mock_request_data, mock_response_data, reset_global_instance
     ):
         """flush clears the queue after submission."""
-        client = CoolhandClient(auto_submit=False, api_key="demo-key")
+        client = CoolhandClient(auto_submit=False, api_key=None)
         client.log_interaction(mock_request_data, mock_response_data)
         assert len(client._queue) == 1
 
         client.flush()
         assert len(client._queue) == 0
 
-    def test_flush_skips_demo_key(self, reset_global_instance):
-        """flush skips API submission with demo-key."""
-        client = CoolhandClient(auto_submit=False, api_key="demo-key")
+    def test_flush_skips_without_api_key(self, reset_global_instance):
+        """flush skips API submission when no API key is configured."""
+        client = CoolhandClient(auto_submit=False, api_key=None)
         client._queue.append({"test": "data"})
 
         result = client.flush()
@@ -364,7 +364,7 @@ class TestCoolhandClient:
 
     def test_shutdown_flushes(self, reset_global_instance):
         """shutdown calls flush."""
-        client = CoolhandClient(auto_submit=False, api_key="demo-key")
+        client = CoolhandClient(auto_submit=False, api_key=None)
         client._queue.append({"test": "data"})
 
         client.shutdown()

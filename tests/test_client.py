@@ -332,16 +332,16 @@ class TestCoolhandClient:
         self, mock_request_data, mock_response_data, reset_global_instance
     ):
         """flush clears the queue after submission."""
-        client = CoolhandClient(auto_submit=False, api_key="demo-key")
+        client = CoolhandClient(auto_submit=False, api_key=None)
         client.log_interaction(mock_request_data, mock_response_data)
         assert len(client._queue) == 1
 
         client.flush()
         assert len(client._queue) == 0
 
-    def test_flush_skips_demo_key(self, reset_global_instance):
-        """flush skips API submission with demo-key."""
-        client = CoolhandClient(auto_submit=False, api_key="demo-key")
+    def test_flush_skips_without_api_key(self, reset_global_instance):
+        """flush skips API submission when no API key is configured."""
+        client = CoolhandClient(auto_submit=False, api_key=None)
         client._queue.append({"test": "data"})
 
         result = client.flush()
@@ -355,7 +355,7 @@ class TestCoolhandClient:
 
     def test_get_stats(self, reset_global_instance):
         """get_stats returns expected structure."""
-        client = CoolhandClient(api_key="test-key", send_heartbeat=False)
+        client = CoolhandClient(api_key="test-key")
         stats = client.get_stats()
 
         assert "config" in stats
@@ -371,7 +371,7 @@ class TestCoolhandClient:
 
     def test_shutdown_flushes(self, reset_global_instance):
         """shutdown calls flush."""
-        client = CoolhandClient(auto_submit=False, api_key="demo-key")
+        client = CoolhandClient(auto_submit=False, api_key=None)
         client._queue.append({"test": "data"})
 
         client.shutdown()
@@ -441,9 +441,7 @@ class TestFlushAPISubmission:
 
     def test_flush_successful_submission(self, reset_global_instance, mock_urlopen):
         """flush successfully submits to API."""
-        client = CoolhandClient(
-            auto_submit=False, api_key="real-api-key-12345", send_heartbeat=False
-        )
+        client = CoolhandClient(auto_submit=False, api_key="real-api-key-12345")
         client._queue.append(
             {
                 "id": "test-id",
@@ -466,9 +464,7 @@ class TestFlushAPISubmission:
 
         caplog.set_level(logging.WARNING)
 
-        client = CoolhandClient(
-            auto_submit=False, api_key="real-api-key-12345", send_heartbeat=False
-        )
+        client = CoolhandClient(auto_submit=False, api_key="real-api-key-12345")
         client._queue.append({"id": "test-id", "method": "post", "url": "test"})
 
         with patch("coolhand.client.urlopen") as mock:
@@ -492,9 +488,7 @@ class TestFlushAPISubmission:
 
         caplog.set_level(logging.WARNING)
 
-        client = CoolhandClient(
-            auto_submit=False, api_key="real-api-key-12345", send_heartbeat=False
-        )
+        client = CoolhandClient(auto_submit=False, api_key="real-api-key-12345")
         client._queue.append({"id": "test-id", "method": "post", "url": "test"})
 
         with patch("coolhand.client.urlopen") as mock:
@@ -511,9 +505,7 @@ class TestFlushAPISubmission:
 
         caplog.set_level(logging.WARNING)
 
-        client = CoolhandClient(
-            auto_submit=False, api_key="real-api-key-12345", send_heartbeat=False
-        )
+        client = CoolhandClient(auto_submit=False, api_key="real-api-key-12345")
         client._queue.append({"id": "test-id", "method": "post", "url": "test"})
 
         with patch("coolhand.client.urlopen") as mock:
@@ -535,89 +527,6 @@ class TestFlushAPISubmission:
             mock_flush.return_value = True
             client.log_interaction(mock_request_data, mock_response_data)
             mock_flush.assert_called_once()
-
-
-class _SyncThread:
-    """Runs a thread target synchronously for deterministic tests."""
-
-    def __init__(self, target=None, daemon=None):
-        self._target = target
-
-    def start(self):
-        if self._target:
-            self._target()
-
-
-class TestHeartbeat:
-    """Tests for background heartbeat on SDK initialization."""
-
-    def test_heartbeat_fires_on_init(self, reset_global_instance):
-        """Heartbeat POSTs to /api/v2/heartbeat with correct payload on init."""
-        import json
-        from unittest.mock import MagicMock, patch
-
-        mock_response = MagicMock()
-        mock_response.__enter__ = MagicMock(return_value=mock_response)
-        mock_response.__exit__ = MagicMock(return_value=False)
-
-        with patch("threading.Thread", _SyncThread):
-            with patch(
-                "coolhand.client.urlopen", return_value=mock_response
-            ) as mock_open:
-                CoolhandClient(
-                    auto_submit=False,
-                    api_key="real-api-key-12345",
-                    send_heartbeat=True,
-                )
-
-        mock_open.assert_called_once()
-        req = mock_open.call_args[0][0]
-        assert "/api/v2/heartbeat" in req.full_url
-        assert req.get_header("X-api-key") == "real-api-key-12345"
-        assert req.get_header("Content-type") == "application/json"
-        body = json.loads(req.data.decode("utf-8"))
-        assert body["platform"] == "python"
-        assert "sdk_version" in body
-
-    def test_heartbeat_skipped_when_disabled(self, reset_global_instance):
-        """No HTTP call is made when send_heartbeat=False."""
-        from unittest.mock import patch
-
-        with patch("threading.Thread", _SyncThread):
-            with patch("coolhand.client.urlopen") as mock_open:
-                CoolhandClient(
-                    auto_submit=False,
-                    api_key="real-api-key-12345",
-                    send_heartbeat=False,
-                )
-
-        mock_open.assert_not_called()
-
-    def test_heartbeat_skipped_for_demo_key(self, reset_global_instance):
-        """No HTTP call is made for the default demo-key."""
-        from unittest.mock import patch
-
-        with patch("threading.Thread", _SyncThread):
-            with patch("coolhand.client.urlopen") as mock_open:
-                CoolhandClient(auto_submit=False, api_key="demo-key")
-
-        mock_open.assert_not_called()
-
-    def test_heartbeat_swallows_exceptions(self, reset_global_instance):
-        """Network errors in the heartbeat thread never propagate."""
-        from unittest.mock import patch
-        from urllib.error import URLError
-
-        with patch("threading.Thread", _SyncThread):
-            with patch("coolhand.client.urlopen", side_effect=URLError("unreachable")):
-                client = CoolhandClient(
-                    auto_submit=False,
-                    api_key="real-api-key-12345",
-                    send_heartbeat=True,
-                )
-
-        # No exception raised — client is fully usable
-        assert client is not None
 
 
 class TestGeminiCapture:

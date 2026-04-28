@@ -34,7 +34,6 @@ class Config(TypedDict, total=False):
     auto_submit: bool
     session_id: Optional[str]
     intercept_addresses: Optional[List[str]]
-    send_heartbeat: bool
 
 
 class FeedbackData(TypedDict, total=False):

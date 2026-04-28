@@ -22,7 +22,6 @@ from coolhand.httpx_interceptor import (
     _is_streaming_content_type,
     _read_response_body,
     is_patched,
-    set_intercept_addresses,
 )
 from coolhand.httpx_interceptor import patch as patch_httpx
 from coolhand.httpx_interceptor import set_handler, set_intercept_addresses, unpatch

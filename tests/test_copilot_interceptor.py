@@ -177,6 +177,19 @@ class TestPatchUnpatch:
         assert copilot_interceptor.patch() is True
         assert copilot_interceptor.is_patched() is True
 
+    def test_unpatch_graceful_when_sdk_removed_after_patch(self):
+        from coolhand import copilot_interceptor
+
+        _inject_fake_sdk()
+        copilot_interceptor.patch()
+        _remove_fake_sdk()
+
+        # SDK import fails during unpatch — should not raise
+        copilot_interceptor.unpatch()
+        assert copilot_interceptor.is_patched() is False
+        assert copilot_interceptor._pending == {}
+        assert copilot_interceptor._session_params == {}
+
 
 # ---------------------------------------------------------------------------
 # TestRequestInterception
@@ -312,6 +325,18 @@ class TestRequestInterception:
             {"type": "file", "path": "/tmp/x"}
         ]
 
+    def test_remove_from_pre_pending_returns_false_when_not_found(self):
+        from coolhand import copilot_interceptor
+
+        other_entry = {"req_data": {}, "start": time.time()}
+        absent_entry = {"req_data": {}, "start": time.time()}
+        with copilot_interceptor._lock:
+            copilot_interceptor._pre_pending["s1"] = [other_entry]
+            result = copilot_interceptor._remove_from_pre_pending("s1", absent_entry)
+
+        assert result is False
+        assert copilot_interceptor._pre_pending["s1"] == [other_entry]
+
 
 # ---------------------------------------------------------------------------
 # TestSessionCreate
@@ -418,6 +443,23 @@ class TestSessionCreate:
             copilot_interceptor._session_params["s1"] = {"systemMessage": "sys"}
         copilot_interceptor.unpatch()
         assert copilot_interceptor._session_params == {}
+
+    @pytest.mark.asyncio
+    async def test_session_create_without_session_id_is_noop(self, handler):
+        from coolhand import copilot_interceptor
+
+        cls = _inject_fake_sdk()
+        copilot_interceptor.set_handler(handler)
+        copilot_interceptor.patch()
+
+        instance = cls()
+        await instance.request(
+            "session.create",
+            {"systemMessage": {"content": "sys"}},  # no sessionId
+        )
+
+        assert copilot_interceptor._session_params == {}
+        handler.assert_not_called()
 
 
 # ---------------------------------------------------------------------------
@@ -724,6 +766,33 @@ class TestHandleMessageInterception:
         # Stale entry gone, handler called once (not for stale entry)
         assert ("s-stale", "stale-id") not in copilot_interceptor._pending
         handler.assert_called_once()
+
+    def test_stale_pre_pending_entries_evicted(self, handler):
+        from coolhand import copilot_interceptor
+
+        cls = _inject_fake_sdk()
+        copilot_interceptor.set_handler(handler)
+        copilot_interceptor.patch()
+
+        stale_start = time.time() - 400
+        with copilot_interceptor._lock:
+            copilot_interceptor._pre_pending["s-stale"] = [
+                {"req_data": {}, "start": stale_start}
+            ]
+
+        instance = cls()
+        instance._handle_message(
+            {
+                "method": "session.event",
+                "params": {
+                    "sessionId": "s1",
+                    "event": {"type": "session.idle", "data": {}},
+                },
+            }
+        )
+
+        assert "s-stale" not in copilot_interceptor._pre_pending
+        handler.assert_not_called()
 
     def test_malformed_event_does_not_raise(self, handler):
         from coolhand import copilot_interceptor

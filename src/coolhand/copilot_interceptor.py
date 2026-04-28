@@ -222,8 +222,8 @@ def patch() -> bool:
                     event_type,
                     session_id,
                 )
-                if event_type == "session.model.change":
-                    model = event.get("data", {}).get("model")
+                if event_type == "session.model_change":
+                    model = event.get("data", {}).get("newModel")
                     if model and session_id:
                         with _lock:
                             _session_models[session_id] = {

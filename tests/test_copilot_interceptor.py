@@ -513,8 +513,8 @@ def _model_change_notification(session_id, model):
         "params": {
             "sessionId": session_id,
             "event": {
-                "type": "session.model.change",
-                "data": {"model": model},
+                "type": "session.model_change",
+                "data": {"newModel": model},
             },
         },
     }
@@ -624,7 +624,7 @@ class TestSessionModelChange:
                 "method": "session.event",
                 "params": {
                     "sessionId": "s1",
-                    "event": {"type": "session.model.change", "data": {}},
+                    "event": {"type": "session.model_change", "data": {}},
                 },
             }
         )

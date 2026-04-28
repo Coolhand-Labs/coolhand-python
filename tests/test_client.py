@@ -586,15 +586,40 @@ class TestHeartbeat:
 
         mock_open.assert_not_called()
 
-    def test_heartbeat_skipped_for_demo_key(self, reset_global_instance):
-        """No HTTP call is made for the default demo-key."""
+    def test_heartbeat_skipped_without_api_key(self, reset_global_instance):
+        """No HTTP call is made when no API key is configured."""
         from unittest.mock import patch
 
         with patch("threading.Thread", _SyncThread):
             with patch("coolhand.client.urlopen") as mock_open:
-                CoolhandClient(auto_submit=False, api_key="demo-key")
+                CoolhandClient(auto_submit=False, api_key=None)
 
         mock_open.assert_not_called()
+
+    def test_heartbeat_fires_only_once(self, reset_global_instance):
+        """Heartbeat is sent exactly once even when multiple clients are created."""
+        from unittest.mock import MagicMock, patch
+
+        mock_response = MagicMock()
+        mock_response.__enter__ = MagicMock(return_value=mock_response)
+        mock_response.__exit__ = MagicMock(return_value=False)
+
+        with patch("threading.Thread", _SyncThread):
+            with patch(
+                "coolhand.client.urlopen", return_value=mock_response
+            ) as mock_open:
+                CoolhandClient(
+                    auto_submit=False,
+                    api_key="real-api-key-12345",
+                    send_heartbeat=True,
+                )
+                CoolhandClient(
+                    auto_submit=False,
+                    api_key="real-api-key-12345",
+                    send_heartbeat=True,
+                )
+
+        mock_open.assert_called_once()
 
     def test_heartbeat_swallows_exceptions(self, reset_global_instance):
         """Network errors in the heartbeat thread never propagate."""

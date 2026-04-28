@@ -31,11 +31,14 @@ SENSITIVE_QUERY_PARAMS = {"key", "api_key", "apikey", "token", "access_token", "
 
 BASE_URL = "https://coolhandlabs.com"
 
+_heartbeat_sent = False
+_heartbeat_lock = threading.Lock()
+
 
 def _get_default_config() -> Config:
     """Get default configuration from environment."""
     return {
-        "api_key": os.getenv("COOLHAND_API_KEY", "demo-key"),
+        "api_key": os.getenv("COOLHAND_API_KEY") or None,
         "silent": os.getenv("COOLHAND_SILENT", "true").lower() == "true",
         "auto_submit": True,
         "session_id": f"session_{int(time.time() * 1000)}",
@@ -133,11 +136,16 @@ class CoolhandClient:
         self._fire_heartbeat()
 
     def _fire_heartbeat(self) -> None:
+        global _heartbeat_sent
         if not self.config.get("send_heartbeat", True):
             return
-        api_key = self.config.get("api_key", "")
-        if not api_key or api_key == "demo-key":
+        api_key = self.config.get("api_key")
+        if not api_key:
             return
+        with _heartbeat_lock:
+            if _heartbeat_sent:
+                return
+            _heartbeat_sent = True
 
         def _send():
             try:
@@ -219,7 +227,7 @@ class CoolhandClient:
             return True
 
         api_key = self.config.get("api_key")
-        if not api_key or api_key == "demo-key":
+        if not api_key:
             logger.debug("No API key configured, skipping submission")
             self._queue.clear()
             return True

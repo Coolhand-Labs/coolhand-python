@@ -139,16 +139,21 @@ class CoolhandClient:
         global _heartbeat_sent
         if not self.config.get("send_heartbeat", True):
             return
-        api_key = self.config.get("api_key")
-        if not api_key:
-            return
         with _heartbeat_lock:
             if _heartbeat_sent:
                 return
             _heartbeat_sent = True
 
+        api_key = self.config.get("api_key")
+
         def _send():
             try:
+                headers = {
+                    "Content-Type": "application/json",
+                    "User-Agent": f"coolhand-python/{__version__}",
+                }
+                if api_key:
+                    headers["X-API-Key"] = api_key
                 payload = json.dumps(
                     {"sdk_version": __version__, "platform": "python"},
                     default=str,
@@ -156,11 +161,7 @@ class CoolhandClient:
                 req = Request(
                     url=f"{BASE_URL}/api/v2/heartbeat",
                     data=payload,
-                    headers={
-                        "X-API-Key": api_key,
-                        "Content-Type": "application/json",
-                        "User-Agent": f"coolhand-python/{__version__}",
-                    },
+                    headers=headers,
                     method="POST",
                 )
                 with urlopen(req, timeout=10):

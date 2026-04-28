@@ -586,15 +586,24 @@ class TestHeartbeat:
 
         mock_open.assert_not_called()
 
-    def test_heartbeat_skipped_without_api_key(self, reset_global_instance):
-        """No HTTP call is made when no API key is configured."""
-        from unittest.mock import patch
+    def test_heartbeat_fires_without_api_key(self, reset_global_instance):
+        """Heartbeat fires even with no API key; X-API-Key header is absent."""
+        from unittest.mock import MagicMock, patch
+
+        mock_response = MagicMock()
+        mock_response.__enter__ = MagicMock(return_value=mock_response)
+        mock_response.__exit__ = MagicMock(return_value=False)
 
         with patch("threading.Thread", _SyncThread):
-            with patch("coolhand.client.urlopen") as mock_open:
-                CoolhandClient(auto_submit=False, api_key=None)
+            with patch(
+                "coolhand.client.urlopen", return_value=mock_response
+            ) as mock_open:
+                CoolhandClient(auto_submit=False, api_key=None, send_heartbeat=True)
 
-        mock_open.assert_not_called()
+        mock_open.assert_called_once()
+        req = mock_open.call_args[0][0]
+        assert "/api/v2/heartbeat" in req.full_url
+        assert req.get_header("X-api-key") is None
 
     def test_heartbeat_fires_only_once(self, reset_global_instance):
         """Heartbeat is sent exactly once even when multiple clients are created."""

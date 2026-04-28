@@ -3,7 +3,7 @@
 import logging
 import threading
 import time
-from typing import Any, Callable, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional
 
 from .types import RequestData, ResponseData
 
@@ -18,16 +18,15 @@ _handler: Optional[
     Callable[[RequestData, Optional[ResponseData], Optional[str]], None]
 ] = None
 
-# Primary pending store keyed by (sessionId, messageId) — normal path.
-_pending: Dict[Tuple[Optional[str], str], Dict[str, Any]] = {}
-# Pre-pending queues keyed by sessionId.  Entries are pushed here BEFORE the
-# await in patched_request so that _handle_message can correlate a notification
-# that arrives before the coroutine resumes (the read thread can dispatch a
-# notification synchronously between resolving the send-response Future and the
-# event loop scheduling the awaiting coroutine).
+# Per-session FIFO queues keyed by sessionId.  Entries are pushed here BEFORE
+# the await in patched_request so that _handle_message can correlate an
+# assistant.message notification that arrives on the reader thread before the
+# event loop schedules the awaiting coroutine's resumption.
 _pre_pending: Dict[Optional[str], List[Dict[str, Any]]] = {}
+
 # session.create params keyed by sessionId — provides system prompt and other
 # session-level config that is not repeated in subsequent session.send calls.
+# Stored as {"params": dict, "start": float} so _sweep_stale can evict them.
 _session_params: Dict[Optional[str], Dict[str, Any]] = {}
 
 _lock = threading.Lock()
@@ -49,21 +48,13 @@ def _remove_from_pre_pending(session_id: Optional[str], entry: Dict[str, Any]) -
 
 
 def _sweep_stale() -> None:
-    """Evict stale entries from _pending and _pre_pending.
+    """Evict stale entries from _pre_pending and _session_params.
 
     Runs unconditionally on every _handle_message call so entries are cleaned
     up even when a session terminates without emitting another assistant.message.
     """
     now = time.time()
     with _lock:
-        stale_main = [
-            k
-            for k, v in _pending.items()
-            if now - v["start"] > COPILOT_INTERCEPTOR_PENDING_TTL_SECONDS
-        ]
-        for k in stale_main:
-            del _pending[k]
-
         stale_pre_sessions = []
         for sid, queue in list(_pre_pending.items()):
             while (
@@ -75,12 +66,20 @@ def _sweep_stale() -> None:
             if not queue:
                 del _pre_pending[sid]
 
-    if stale_main or stale_pre_sessions:
+        stale_sessions = [
+            k
+            for k, v in _session_params.items()
+            if now - v["start"] > COPILOT_INTERCEPTOR_PENDING_TTL_SECONDS
+        ]
+        for k in stale_sessions:
+            del _session_params[k]
+
+    if stale_pre_sessions or stale_sessions:
         logger.debug(
-            "Copilot interceptor: evicted %d stale pending,"
-            " %d stale pre-pending entries",
-            len(stale_main),
+            "Copilot interceptor: evicted %d stale pre-pending,"
+            " %d stale session entries",
             len(stale_pre_sessions),
+            len(stale_sessions),
         )
 
 
@@ -120,7 +119,15 @@ def patch() -> bool:
             session_id = p_create.get("sessionId")
             if session_id:
                 with _lock:
-                    _session_params[session_id] = dict(p_create)
+                    _session_params[session_id] = {
+                        "params": dict(p_create),
+                        "start": time.time(),
+                    }
+            else:
+                logger.debug(
+                    "Copilot interceptor: session.create has no sessionId,"
+                    " system prompt will not be captured"
+                )
             return await _original_request(self, method, params, timeout)
 
         if method != "session.send":
@@ -130,7 +137,7 @@ def patch() -> bool:
         p = params or {}
         session_id = p.get("sessionId")
         with _lock:
-            session_ctx = dict(_session_params.get(session_id, {}))
+            session_ctx = dict(_session_params.get(session_id, {}).get("params", {}))
         req_data: RequestData = {
             "method": "POST",
             "url": "copilot://session.send",
@@ -139,10 +146,10 @@ def patch() -> bool:
             "timestamp": start,
         }
 
-        # Push to _pre_pending BEFORE the await.  The read thread can call
+        # Push to _pre_pending BEFORE the await.  The reader thread can call
         # _handle_message synchronously between resolving the send-response
         # Future and the event loop scheduling this coroutine's resumption.
-        # Storing here ensures _handle_message finds the entry in that race.
+        # Storing here ensures _handle_message finds the entry at that moment.
         entry: Dict[str, Any] = {"req_data": req_data, "start": start}
         with _lock:
             _pre_pending.setdefault(session_id, []).append(entry)
@@ -172,20 +179,15 @@ def patch() -> bool:
                 event = msg_params.get("event", {})
                 if event.get("type") == "assistant.message":
                     data = event.get("data", {})
-                    msg_id = data.get("messageId")
                     session_id = msg_params.get("sessionId")
-                    key = (session_id, msg_id)
                     with _lock:
-                        pending = _pending.pop(key, None)
-                        if pending is None:
-                            # Race path: notification arrived before patched_request
-                            # stored in _pending.  Take the first (oldest) entry for
-                            # this session from _pre_pending (FIFO per session).
-                            queue = _pre_pending.get(session_id, [])
-                            if queue:
-                                pending = queue.pop(0)
-                                if not queue:
-                                    del _pre_pending[session_id]
+                        queue = _pre_pending.get(session_id, [])
+                        if queue:
+                            pending = queue.pop(0)
+                            if not queue:
+                                del _pre_pending[session_id]
+                        else:
+                            pending = None
                     if pending:
                         end = time.time()
                         res_data: ResponseData = {
@@ -232,7 +234,6 @@ def unpatch() -> None:
             JsonRpcClient._handle_message = _original_handle_message
 
     with _lock:
-        _pending.clear()
         _pre_pending.clear()
         _session_params.clear()
 

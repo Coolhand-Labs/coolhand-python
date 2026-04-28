@@ -75,7 +75,6 @@ def reset_copilot_interceptor():
     copilot_interceptor._original_handle_message = None
     copilot_interceptor._handler = None
     with copilot_interceptor._lock:
-        copilot_interceptor._pending.clear()
         copilot_interceptor._pre_pending.clear()
         copilot_interceptor._session_params.clear()
 
@@ -84,7 +83,6 @@ def reset_copilot_interceptor():
     for k, v in saved.items():
         setattr(copilot_interceptor, k, v)
     with copilot_interceptor._lock:
-        copilot_interceptor._pending.clear()
         copilot_interceptor._pre_pending.clear()
         copilot_interceptor._session_params.clear()
 
@@ -139,22 +137,22 @@ class TestPatchUnpatch:
         assert cls._handle_message is original_handle
         assert copilot_interceptor.is_patched() is False
 
-    def test_unpatch_clears_pending(self):
+    def test_unpatch_clears_state(self):
         from coolhand import copilot_interceptor
 
         _inject_fake_sdk()
         copilot_interceptor.patch()
         with copilot_interceptor._lock:
-            copilot_interceptor._pending[("s1", "m1")] = {
-                "req_data": {},
-                "start": time.time(),
-            }
             copilot_interceptor._pre_pending["s1"] = [
                 {"req_data": {}, "start": time.time()}
             ]
+            copilot_interceptor._session_params["s1"] = {
+                "params": {"systemMessage": "sys"},
+                "start": time.time(),
+            }
         copilot_interceptor.unpatch()
-        assert copilot_interceptor._pending == {}
         assert copilot_interceptor._pre_pending == {}
+        assert copilot_interceptor._session_params == {}
 
     def test_unpatch_when_not_patched_is_noop(self):
         from coolhand import copilot_interceptor
@@ -187,7 +185,7 @@ class TestPatchUnpatch:
         # SDK import fails during unpatch — should not raise
         copilot_interceptor.unpatch()
         assert copilot_interceptor.is_patched() is False
-        assert copilot_interceptor._pending == {}
+        assert copilot_interceptor._pre_pending == {}
         assert copilot_interceptor._session_params == {}
 
 
@@ -260,7 +258,6 @@ class TestRequestInterception:
         instance = cls()
         await instance.request("models.list", {})
 
-        assert copilot_interceptor._pending == {}
         assert copilot_interceptor._pre_pending == {}
         handler.assert_not_called()
 
@@ -287,7 +284,7 @@ class TestRequestInterception:
         req_data, res_data, err = handler.call_args[0]
         assert res_data is None
         assert "connection failed" in err
-        assert copilot_interceptor._pending == {}
+        assert copilot_interceptor._pre_pending == {}
 
     @pytest.mark.asyncio
     async def test_no_pending_entry_when_handler_is_none(self):
@@ -298,7 +295,7 @@ class TestRequestInterception:
 
         instance = cls()
         await instance.request("session.send", {"sessionId": "s1", "prompt": "hi"})
-        assert copilot_interceptor._pending == {}
+        assert copilot_interceptor._pre_pending == {}
 
     @pytest.mark.asyncio
     async def test_captures_request_headers_and_attachments(self, handler):
@@ -363,7 +360,7 @@ class TestSessionCreate:
         )
 
         assert "s1" in copilot_interceptor._session_params
-        stored = copilot_interceptor._session_params["s1"]
+        stored = copilot_interceptor._session_params["s1"]["params"]
         assert stored["systemMessage"] == {"content": "You are a helpful assistant."}
         assert stored["model"] == "gpt-4o"
         handler.assert_not_called()
@@ -440,7 +437,10 @@ class TestSessionCreate:
         copilot_interceptor.set_handler(handler)
         copilot_interceptor.patch()
         with copilot_interceptor._lock:
-            copilot_interceptor._session_params["s1"] = {"systemMessage": "sys"}
+            copilot_interceptor._session_params["s1"] = {
+                "params": {"systemMessage": "sys"},
+                "start": time.time(),
+            }
         copilot_interceptor.unpatch()
         assert copilot_interceptor._session_params == {}
 
@@ -488,9 +488,7 @@ def _assistant_message_notification(
 
 
 class TestHandleMessageInterception:
-    def _prime_pending(
-        self, copilot_interceptor, session_id, message_id, prompt="hello"
-    ):
+    def _prime_pending(self, copilot_interceptor, session_id, prompt="hello"):
         start = time.time() - 0.1
         req_data = {
             "method": "POST",
@@ -500,10 +498,9 @@ class TestHandleMessageInterception:
             "timestamp": start,
         }
         with copilot_interceptor._lock:
-            copilot_interceptor._pending[(session_id, message_id)] = {
-                "req_data": req_data,
-                "start": start,
-            }
+            copilot_interceptor._pre_pending.setdefault(session_id, []).append(
+                {"req_data": req_data, "start": start}
+            )
 
     def test_handler_called_with_correct_data(self, handler):
         from coolhand import copilot_interceptor
@@ -511,7 +508,7 @@ class TestHandleMessageInterception:
         cls = _inject_fake_sdk()
         copilot_interceptor.set_handler(handler)
         copilot_interceptor.patch()
-        self._prime_pending(copilot_interceptor, "s1", "msg-001", "hello")
+        self._prime_pending(copilot_interceptor, "s1", "hello")
 
         instance = cls()
         instance._handle_message(
@@ -540,14 +537,14 @@ class TestHandleMessageInterception:
         cls = _inject_fake_sdk()
         copilot_interceptor.set_handler(handler)
         copilot_interceptor.patch()
-        self._prime_pending(copilot_interceptor, "s1", "msg-001")
+        self._prime_pending(copilot_interceptor, "s1")
 
         instance = cls()
         instance._handle_message(
             _assistant_message_notification("s1", "msg-001", "world")
         )
 
-        assert ("s1", "msg-001") not in copilot_interceptor._pending
+        assert "s1" not in copilot_interceptor._pre_pending
 
     def test_original_always_called_first(self, handler):
         from coolhand import copilot_interceptor
@@ -567,7 +564,7 @@ class TestHandleMessageInterception:
         )
         copilot_interceptor.set_handler(original_handler)
         copilot_interceptor.patch()
-        self._prime_pending(copilot_interceptor, "s1", "msg-001")
+        self._prime_pending(copilot_interceptor, "s1")
 
         instance = OrderedClient()
         instance._handle_message(
@@ -662,7 +659,7 @@ class TestHandleMessageInterception:
         handler.side_effect = RuntimeError("boom")
         copilot_interceptor.set_handler(handler)
         copilot_interceptor.patch()
-        self._prime_pending(copilot_interceptor, "s1", "msg-001")
+        self._prime_pending(copilot_interceptor, "s1")
 
         instance = TrackingClient()
         # Should not raise despite handler error
@@ -694,7 +691,7 @@ class TestHandleMessageInterception:
         entry = {"req_data": req_data, "start": start}
         with copilot_interceptor._lock:
             copilot_interceptor._pre_pending.setdefault("s1", []).append(entry)
-        # _pending is empty — simulates the race window
+        # _pre_pending has the entry; _handle_message must find it there
 
         instance = cls()
         instance._handle_message(
@@ -721,10 +718,9 @@ class TestHandleMessageInterception:
 
         stale_start = time.time() - 400
         with copilot_interceptor._lock:
-            copilot_interceptor._pending[("s-stale", "stale-id")] = {
-                "req_data": {},
-                "start": stale_start,
-            }
+            copilot_interceptor._pre_pending["s-stale"] = [
+                {"req_data": {}, "start": stale_start}
+            ]
 
         instance = cls()
         # Send a session.idle notification — NOT assistant.message
@@ -738,7 +734,7 @@ class TestHandleMessageInterception:
             }
         )
 
-        assert ("s-stale", "stale-id") not in copilot_interceptor._pending
+        assert "s-stale" not in copilot_interceptor._pre_pending
         handler.assert_not_called()
 
     def test_stale_entries_evicted_silently(self, handler):
@@ -748,15 +744,14 @@ class TestHandleMessageInterception:
         copilot_interceptor.set_handler(handler)
         copilot_interceptor.patch()
 
-        # Insert a stale entry (started 400s ago)
+        # Insert a stale pre-pending entry alongside a live one
         stale_start = time.time() - 400
         with copilot_interceptor._lock:
-            copilot_interceptor._pending[("s-stale", "stale-id")] = {
-                "req_data": {},
-                "start": stale_start,
-            }
+            copilot_interceptor._pre_pending["s-stale"] = [
+                {"req_data": {}, "start": stale_start}
+            ]
 
-        self._prime_pending(copilot_interceptor, "s1", "msg-001")
+        self._prime_pending(copilot_interceptor, "s1")
 
         instance = cls()
         instance._handle_message(
@@ -764,7 +759,7 @@ class TestHandleMessageInterception:
         )
 
         # Stale entry gone, handler called once (not for stale entry)
-        assert ("s-stale", "stale-id") not in copilot_interceptor._pending
+        assert "s-stale" not in copilot_interceptor._pre_pending
         handler.assert_called_once()
 
     def test_stale_pre_pending_entries_evicted(self, handler):
@@ -792,6 +787,34 @@ class TestHandleMessageInterception:
         )
 
         assert "s-stale" not in copilot_interceptor._pre_pending
+        handler.assert_not_called()
+
+    def test_stale_session_params_evicted(self, handler):
+        from coolhand import copilot_interceptor
+
+        cls = _inject_fake_sdk()
+        copilot_interceptor.set_handler(handler)
+        copilot_interceptor.patch()
+
+        stale_start = time.time() - 400
+        with copilot_interceptor._lock:
+            copilot_interceptor._session_params["s-old"] = {
+                "params": {"systemMessage": "sys"},
+                "start": stale_start,
+            }
+
+        instance = cls()
+        instance._handle_message(
+            {
+                "method": "session.event",
+                "params": {
+                    "sessionId": "s1",
+                    "event": {"type": "session.idle", "data": {}},
+                },
+            }
+        )
+
+        assert "s-old" not in copilot_interceptor._session_params
         handler.assert_not_called()
 
     def test_malformed_event_does_not_raise(self, handler):
@@ -838,7 +861,7 @@ class TestEndToEnd:
         assert res_data["body"]["outputTokens"] == 5
         assert res_data["status_code"] == 200
         assert res_data["duration"] > 0
-        assert copilot_interceptor._pending == {}
+        assert copilot_interceptor._pre_pending == {}
 
     @pytest.mark.asyncio
     async def test_multiple_concurrent_sessions(self, handler):
@@ -866,7 +889,7 @@ class TestEndToEnd:
         assert handler.call_count == 2
         contents = {c[0][1]["body"]["content"] for c in handler.call_args_list}
         assert contents == {"reply-A", "reply-B"}
-        assert copilot_interceptor._pending == {}
+        assert copilot_interceptor._pre_pending == {}
 
 
 # ---------------------------------------------------------------------------

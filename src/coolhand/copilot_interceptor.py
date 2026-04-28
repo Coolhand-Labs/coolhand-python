@@ -119,7 +119,12 @@ def patch() -> bool:
             "method": "POST",
             "url": "copilot://session.send",
             "headers": p.get("requestHeaders") or {},
-            "body": {"messages": [{"role": "user", "content": p.get("prompt")}]},
+            "body": {
+                "prompt": p.get("prompt"),
+                "session_id": session_id,
+                "attachments": p.get("attachments"),
+                "mode": p.get("mode"),
+            },
             "timestamp": start,
         }
 
@@ -172,28 +177,15 @@ def patch() -> bool:
                                     del _pre_pending[session_id]
                     if pending:
                         end = time.time()
-                        raw_tokens = data.get("outputTokens")
-                        output_tokens = (
-                            raw_tokens if isinstance(raw_tokens, int) else None
-                        )
                         res_data: ResponseData = {
                             "status_code": 200,
                             "headers": {},
                             "body": {
-                                "id": msg_id,
+                                "content": data.get("content"),
+                                "message_id": msg_id,
+                                "session_id": session_id,
                                 "model": data.get("model"),
-                                "choices": [
-                                    {
-                                        "message": {
-                                            "role": "assistant",
-                                            "content": data.get("content"),
-                                        }
-                                    }
-                                ],
-                                "usage": {
-                                    "completion_tokens": output_tokens,
-                                    "prompt_tokens": None,
-                                },
+                                "output_tokens": data.get("outputTokens"),
                             },
                             "timestamp": end,
                             "duration": end - pending["start"],

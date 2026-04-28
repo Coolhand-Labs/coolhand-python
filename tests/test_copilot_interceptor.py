@@ -228,9 +228,9 @@ class TestRequestInterception:
         # messageId from the send result is not used for correlation.
         assert "s1" in copilot_interceptor._pre_pending
         entry = copilot_interceptor._pre_pending["s1"][0]
-        assert entry["req_data"]["body"]["messages"] == [
-            {"role": "user", "content": "hello"}
-        ]
+        assert entry["req_data"]["body"]["prompt"] == "hello"
+        assert entry["req_data"]["body"]["session_id"] == "s1"
+        assert entry["req_data"]["body"]["mode"] == "immediate"
         assert entry["req_data"]["url"] == "copilot://session.send"
         assert entry["req_data"]["method"] == "POST"
 
@@ -306,8 +306,8 @@ class TestRequestInterception:
 
         entry = copilot_interceptor._pre_pending["s1"][0]
         assert entry["req_data"]["headers"] == {"X-Custom": "value"}
-        assert entry["req_data"]["body"]["messages"] == [
-            {"role": "user", "content": "hello"}
+        assert entry["req_data"]["body"]["attachments"] == [
+            {"type": "file", "path": "/tmp/x"}
         ]
 
 
@@ -345,7 +345,7 @@ class TestHandleMessageInterception:
             "method": "POST",
             "url": "copilot://session.send",
             "headers": {},
-            "body": {"messages": [{"role": "user", "content": prompt}]},
+            "body": {"prompt": prompt, "session_id": session_id},
             "timestamp": start,
         }
         with copilot_interceptor._lock:
@@ -373,13 +373,13 @@ class TestHandleMessageInterception:
         req_data, res_data, err = handler.call_args[0]
         assert err is None
         assert req_data["url"] == "copilot://session.send"
-        assert req_data["body"]["messages"] == [{"role": "user", "content": "hello"}]
+        assert req_data["body"]["prompt"] == "hello"
         assert res_data["status_code"] == 200
-        assert res_data["body"]["id"] == "msg-001"
+        assert res_data["body"]["content"] == "world"
+        assert res_data["body"]["message_id"] == "msg-001"
+        assert res_data["body"]["session_id"] == "s1"
         assert res_data["body"]["model"] == "gpt-4o"
-        assert res_data["body"]["choices"][0]["message"]["content"] == "world"
-        assert res_data["body"]["usage"]["completion_tokens"] == 42
-        assert res_data["body"]["usage"]["prompt_tokens"] is None
+        assert res_data["body"]["output_tokens"] == 42
         assert res_data["duration"] > 0
         assert res_data["is_streaming"] is False
 
@@ -537,7 +537,7 @@ class TestHandleMessageInterception:
             "method": "POST",
             "url": "copilot://session.send",
             "headers": {},
-            "body": {"messages": [{"role": "user", "content": "hello"}]},
+            "body": {"prompt": "hello", "session_id": "s1"},
             "timestamp": start,
         }
         entry = {"req_data": req_data, "start": start}
@@ -554,8 +554,8 @@ class TestHandleMessageInterception:
         handler.assert_called_once()
         req_d, res_d, err = handler.call_args[0]
         assert err is None
-        assert req_d["body"]["messages"][0]["content"] == "hello"
-        assert res_d["body"]["choices"][0]["message"]["content"] == "response"
+        assert req_d["body"]["prompt"] == "hello"
+        assert res_d["body"]["content"] == "response"
         # pre_pending entry was consumed
         assert "s1" not in copilot_interceptor._pre_pending
 
@@ -655,11 +655,9 @@ class TestEndToEnd:
         handler.assert_called_once()
         req_data, res_data, err = handler.call_args[0]
         assert err is None
-        assert req_data["body"]["messages"] == [
-            {"role": "user", "content": "what is 2+2?"}
-        ]
-        assert res_data["body"]["choices"][0]["message"]["content"] == "4"
-        assert res_data["body"]["usage"]["completion_tokens"] == 5
+        assert req_data["body"]["prompt"] == "what is 2+2?"
+        assert res_data["body"]["content"] == "4"
+        assert res_data["body"]["output_tokens"] == 5
         assert res_data["status_code"] == 200
         assert res_data["duration"] > 0
         assert copilot_interceptor._pending == {}
@@ -688,10 +686,7 @@ class TestEndToEnd:
         i2._handle_message(_assistant_message_notification("sB", "msg-sB", "reply-B"))
 
         assert handler.call_count == 2
-        contents = {
-            c[0][1]["body"]["choices"][0]["message"]["content"]
-            for c in handler.call_args_list
-        }
+        contents = {c[0][1]["body"]["content"] for c in handler.call_args_list}
         assert contents == {"reply-A", "reply-B"}
         assert copilot_interceptor._pending == {}
 

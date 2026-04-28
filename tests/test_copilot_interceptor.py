@@ -77,6 +77,7 @@ def reset_copilot_interceptor():
     with copilot_interceptor._lock:
         copilot_interceptor._pre_pending.clear()
         copilot_interceptor._session_params.clear()
+        copilot_interceptor._session_models.clear()
 
     yield
 
@@ -85,6 +86,7 @@ def reset_copilot_interceptor():
     with copilot_interceptor._lock:
         copilot_interceptor._pre_pending.clear()
         copilot_interceptor._session_params.clear()
+        copilot_interceptor._session_models.clear()
 
     _remove_fake_sdk()
 
@@ -498,6 +500,178 @@ class TestSessionCreate:
 
         assert copilot_interceptor._session_params == {}
         handler.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# TestSessionModelChange
+# ---------------------------------------------------------------------------
+
+
+def _model_change_notification(session_id, model):
+    return {
+        "method": "session.event",
+        "params": {
+            "sessionId": session_id,
+            "event": {
+                "type": "session.model.change",
+                "data": {"model": model},
+            },
+        },
+    }
+
+
+class TestSessionModelChange:
+    def test_model_change_stores_model(self, handler):
+        from coolhand import copilot_interceptor
+
+        cls = _inject_fake_sdk()
+        copilot_interceptor.set_handler(handler)
+        copilot_interceptor.patch()
+
+        instance = cls()
+        instance._handle_message(_model_change_notification("s1", "gpt-4o"))
+
+        assert "s1" in copilot_interceptor._session_models
+        assert copilot_interceptor._session_models["s1"]["model"] == "gpt-4o"
+        handler.assert_not_called()
+
+    def test_model_change_updates_on_subsequent_change(self, handler):
+        from coolhand import copilot_interceptor
+
+        cls = _inject_fake_sdk()
+        copilot_interceptor.set_handler(handler)
+        copilot_interceptor.patch()
+
+        instance = cls()
+        instance._handle_message(_model_change_notification("s1", "gpt-4o"))
+        instance._handle_message(_model_change_notification("s1", "o3"))
+
+        assert copilot_interceptor._session_models["s1"]["model"] == "o3"
+
+    def test_cached_model_included_in_response_body(self, handler):
+        from coolhand import copilot_interceptor
+
+        cls = _inject_fake_sdk()
+        copilot_interceptor.set_handler(handler)
+        copilot_interceptor.patch()
+
+        instance = cls()
+        instance._handle_message(_model_change_notification("s1", "gpt-4o"))
+
+        # Prime a pending entry then fire assistant.message
+        start = time.time() - 0.1
+        req_data = {
+            "method": "POST",
+            "url": "copilot://session.send",
+            "headers": {},
+            "body": {"prompt": "hi", "sessionId": "s1"},
+            "timestamp": start,
+        }
+        with copilot_interceptor._lock:
+            copilot_interceptor._pre_pending.setdefault("s1", []).append(
+                {"req_data": req_data, "start": start}
+            )
+
+        instance._handle_message(
+            _assistant_message_notification("s1", "msg-001", "hello")
+        )
+
+        handler.assert_called_once()
+        _, res_data, _ = handler.call_args[0]
+        assert res_data["body"]["model"] == "gpt-4o"
+
+    def test_data_model_takes_precedence_over_cache(self, handler):
+        from coolhand import copilot_interceptor
+
+        cls = _inject_fake_sdk()
+        copilot_interceptor.set_handler(handler)
+        copilot_interceptor.patch()
+
+        instance = cls()
+        instance._handle_message(_model_change_notification("s1", "gpt-4o"))
+
+        start = time.time() - 0.1
+        req_data = {
+            "method": "POST",
+            "url": "copilot://session.send",
+            "headers": {},
+            "body": {"prompt": "hi", "sessionId": "s1"},
+            "timestamp": start,
+        }
+        with copilot_interceptor._lock:
+            copilot_interceptor._pre_pending.setdefault("s1", []).append(
+                {"req_data": req_data, "start": start}
+            )
+
+        # Notification carries its own model value
+        msg = _assistant_message_notification("s1", "msg-001", "hello")
+        msg["params"]["event"]["data"]["model"] = "o3-mini"
+        instance._handle_message(msg)
+
+        _, res_data, _ = handler.call_args[0]
+        assert res_data["body"]["model"] == "o3-mini"
+
+    def test_model_change_missing_model_field_is_noop(self, handler):
+        from coolhand import copilot_interceptor
+
+        cls = _inject_fake_sdk()
+        copilot_interceptor.set_handler(handler)
+        copilot_interceptor.patch()
+
+        instance = cls()
+        instance._handle_message(
+            {
+                "method": "session.event",
+                "params": {
+                    "sessionId": "s1",
+                    "event": {"type": "session.model.change", "data": {}},
+                },
+            }
+        )
+
+        assert copilot_interceptor._session_models == {}
+        handler.assert_not_called()
+
+    def test_stale_model_entries_evicted(self, handler):
+        from coolhand import copilot_interceptor
+
+        cls = _inject_fake_sdk()
+        copilot_interceptor.set_handler(handler)
+        copilot_interceptor.patch()
+
+        with copilot_interceptor._lock:
+            copilot_interceptor._session_models["s-old"] = {
+                "model": "gpt-4o",
+                "start": time.time() - 400,
+            }
+
+        instance = cls()
+        instance._handle_message(
+            {
+                "method": "session.event",
+                "params": {
+                    "sessionId": "s1",
+                    "event": {"type": "session.idle", "data": {}},
+                },
+            }
+        )
+
+        assert "s-old" not in copilot_interceptor._session_models
+
+    def test_unpatch_clears_session_models(self, handler):
+        from coolhand import copilot_interceptor
+
+        _inject_fake_sdk()
+        copilot_interceptor.set_handler(handler)
+        copilot_interceptor.patch()
+
+        with copilot_interceptor._lock:
+            copilot_interceptor._session_models["s1"] = {
+                "model": "gpt-4o",
+                "start": time.time(),
+            }
+        copilot_interceptor.unpatch()
+        assert copilot_interceptor._session_models == {}
 
 
 # ---------------------------------------------------------------------------

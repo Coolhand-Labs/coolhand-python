@@ -32,6 +32,11 @@ _pre_pending: Dict[Optional[str], List[Dict[str, Any]]] = {}
 # session.send bodies logged after eviction — a logging gap, not a functional bug.
 _session_params: Dict[Optional[str], Dict[str, Any]] = {}
 
+# Model name keyed by sessionId, updated on session.model.change notifications.
+# Stored as {"model": str, "start": float}; timestamp refreshes on each change.
+# Same TTL caveat as _session_params applies.
+_session_models: Dict[Optional[str], Dict[str, Any]] = {}
+
 _lock = threading.Lock()
 
 
@@ -51,7 +56,7 @@ def _remove_from_pre_pending(session_id: Optional[str], entry: Dict[str, Any]) -
 
 
 def _sweep_stale() -> None:
-    """Evict stale entries from _pre_pending and _session_params.
+    """Evict stale entries from _pre_pending, _session_params, and _session_models.
 
     Runs unconditionally on every _handle_message call so entries are cleaned
     up even when a session terminates without emitting another assistant.message.
@@ -77,12 +82,21 @@ def _sweep_stale() -> None:
         for k in stale_sessions:
             del _session_params[k]
 
-    if stale_pre_sessions or stale_sessions:
+        stale_models = [
+            k
+            for k, v in _session_models.items()
+            if now - v["start"] > COPILOT_INTERCEPTOR_PENDING_TTL_SECONDS
+        ]
+        for k in stale_models:
+            del _session_models[k]
+
+    if stale_pre_sessions or stale_sessions or stale_models:
         logger.debug(
             "Copilot interceptor: evicted %d stale pre-pending,"
-            " %d stale session entries",
+            " %d stale session entries, %d stale model entries",
             len(stale_pre_sessions),
             len(stale_sessions),
+            len(stale_models),
         )
 
 
@@ -180,10 +194,25 @@ def patch() -> bool:
                 and message.get("method") == "session.event"
             ):
                 msg_params = message.get("params", {})
+                session_id = msg_params.get("sessionId")
                 event = msg_params.get("event", {})
-                if event.get("type") == "assistant.message":
+                event_type = event.get("type")
+                if event_type == "session.model.change":
+                    model = event.get("data", {}).get("model")
+                    if model and session_id:
+                        with _lock:
+                            _session_models[session_id] = {
+                                "model": model,
+                                "start": time.time(),
+                            }
+                    else:
+                        logger.debug(
+                            "Copilot interceptor: session.model.change"
+                            " missing model or sessionId — data: %s",
+                            event.get("data"),
+                        )
+                elif event_type == "assistant.message":
                     data = event.get("data", {})
-                    session_id = msg_params.get("sessionId")
                     with _lock:
                         queue = _pre_pending.get(session_id, [])
                         if queue:
@@ -192,12 +221,17 @@ def patch() -> bool:
                                 del _pre_pending[session_id]
                         else:
                             pending = None
+                        cached_model = _session_models.get(session_id, {}).get("model")
                     if pending:
                         end = time.time()
                         res_data: ResponseData = {
                             "status_code": 200,
                             "headers": {},
-                            "body": {**data, "sessionId": session_id},
+                            "body": {
+                                **data,
+                                "sessionId": session_id,
+                                "model": data.get("model") or cached_model,
+                            },
                             "timestamp": end,
                             "duration": end - pending["start"],
                             "is_streaming": False,
@@ -240,6 +274,7 @@ def unpatch() -> None:
     with _lock:
         _pre_pending.clear()
         _session_params.clear()
+        _session_models.clear()
 
     _patched = False
     logger.info("github-copilot-sdk monitoring disabled")

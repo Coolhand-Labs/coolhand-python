@@ -1,6 +1,6 @@
 # Coolhand Python
 
-Monitor and log LLM API calls from OpenAI and Anthropic to the Coolhand analytics platform.
+Monitor and log LLM API calls from OpenAI, Anthropic, Google Gemini, GitHub Copilot, and more to the Coolhand analytics platform.
 
 ## Installation
 
@@ -27,6 +27,8 @@ import coolhand  # Auto-initializes and starts monitoring
 # That's it! ALL AI API calls are now automatically monitored:
 # ✅ OpenAI SDK calls
 # ✅ Anthropic API calls
+# ✅ Google Gemini API calls
+# ✅ GitHub Copilot SDK calls
 # ✅ ANY library making AI API calls via httpx
 
 # Your existing code works unchanged:
@@ -99,6 +101,27 @@ print(response.content[0].text)
 # Request automatically logged to Coolhand!
 ```
 
+### With Google Gemini
+
+```python
+import coolhand
+import google.generativeai as genai
+
+genai.configure(api_key="your-gemini-api-key")
+model = genai.GenerativeModel("gemini-pro")
+response = model.generate_content("Hello!")
+print(response.text)
+# Request automatically logged to Coolhand!
+```
+
+### With GitHub Copilot SDK
+
+```python
+import coolhand
+# GitHub Copilot SDK calls are automatically intercepted
+# via JsonRpcClient patching — no additional setup needed.
+```
+
 ### With Streaming
 
 ```python
@@ -131,17 +154,25 @@ Headers containing API keys are automatically sanitized for security.
 
 ## Supported Libraries
 
-Coolhand monitors HTTP requests made via **httpx**, which is used by:
+Coolhand intercepts AI API calls through two mechanisms:
+
+**httpx patching** (covers any library built on httpx):
 
 - OpenAI Python SDK
 - Anthropic Python SDK
+- Google Gemini (`google-generativeai` / `google-genai`)
+- GitHub Models via Azure (`models.inference.ai.azure.com`)
 - Any other library using httpx for HTTP requests
+
+**JSON-RPC patching** (direct protocol interception):
+
+- GitHub Copilot SDK (`JsonRpcClient`)
 
 ## How It Works
 
-1. When you import `coolhand`, it automatically patches httpx
-2. Requests to OpenAI and Anthropic APIs are intercepted
-3. Request and response data are captured (credentials sanitized)
+1. When you import `coolhand`, it automatically patches httpx and the GitHub Copilot `JsonRpcClient`
+2. Requests to AI APIs are intercepted (OpenAI, Anthropic, Gemini, GitHub Models, GitHub Copilot, and more)
+3. Request and response data are captured (credentials and sensitive URL parameters sanitized)
 4. Data is sent to Coolhand asynchronously
 5. Your application continues without interruption
 
@@ -222,6 +253,7 @@ export COOLHAND_SILENT=false
 ## Security
 
 - API keys in request headers are automatically redacted
+- Sensitive URL query parameters (`key`, `api_key`, `token`, etc.) are automatically redacted
 - No sensitive data is exposed in logs
 - All data is sent via HTTPS to Coolhand servers
 

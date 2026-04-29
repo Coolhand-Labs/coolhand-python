@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "coolhand"
-version = "0.2.0"
+version = "0.3.0"
 description = "A Python SDK for monitoring and analyzing AI API interactions with LLM services"
 readme = "README.md"
 license = "Apache-2.0"
@@ -24,6 +24,9 @@ keywords = [
     "anthropic",
     "claude",
     "gpt",
+    "gemini",
+    "google",
+    "github-copilot",
 ]
 classifiers = [
     "Development Status :: 3 - Alpha",

@@ -33,9 +33,9 @@ class TestVersion:
         assert parts[0].isdigit()
         assert parts[1].isdigit()
 
-    def test_version_is_0_2_0(self):
-        """Current version is 0.2.0."""
-        assert __version__ == "0.2.0"
+    def test_version_is_0_3_0(self):
+        """Current version is 0.3.0."""
+        assert __version__ == "0.3.0"
 
 
 class TestExports:

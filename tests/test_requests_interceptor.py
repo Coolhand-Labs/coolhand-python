@@ -12,7 +12,11 @@ from coolhand.httpx_interceptor import set_handler, unpatch
 
 @pytest.fixture(autouse=True)
 def reset_state():
-    """Reset interceptor globals before and after each test."""
+    """Reset interceptor globals and restore requests.Session.send after each test."""
+    import requests
+
+    real_requests_send = requests.Session.send
+
     interceptor._patched = False
     interceptor._original_send = None
     interceptor._original_async_send = None
@@ -20,14 +24,7 @@ def reset_state():
     interceptor._handler = None
     interceptor._intercept_addresses = None
     yield
-    # Restore state without relying on unpatch() to avoid real network calls
-    try:
-        import requests
-
-        if interceptor._original_requests_send:
-            requests.Session.send = interceptor._original_requests_send
-    except ImportError:
-        pass
+    requests.Session.send = real_requests_send
     interceptor._patched = False
     interceptor._original_send = None
     interceptor._original_async_send = None
@@ -74,13 +71,7 @@ class TestRequestsPatchUnpatch:
         assert is_patched() is True
 
     def test_unpatch_clears_flag(self):
-        import requests
-
         patch_all()
-        # Replace original with safe mock so unpatch doesn't leave real send broken
-        orig = requests.Session.send
-        send_func = orig.__func__ if hasattr(orig, "__func__") else orig
-        interceptor._original_requests_send = send_func
         unpatch()
         assert is_patched() is False
 

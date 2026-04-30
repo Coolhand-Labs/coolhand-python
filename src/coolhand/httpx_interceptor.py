@@ -295,9 +295,7 @@ def patch() -> bool:
                     if is_streaming:
                         res_body = "[streaming]"
                     else:
-                        res_body = response.content.decode(
-                            "utf-8", errors="replace"
-                        )
+                        res_body = response.content.decode("utf-8", errors="replace")
                 except Exception:
                     pass
 

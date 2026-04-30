@@ -77,7 +77,7 @@ def _read_response_body(response: Any) -> Any:
 
 
 def set_handler(
-    handler: Callable[[RequestData, Optional[ResponseData], Optional[str]], None]
+    handler: Callable[[RequestData, Optional[ResponseData], Optional[str]], None],
 ) -> None:
     """Set the handler for captured requests."""
     global _handler

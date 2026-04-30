@@ -288,12 +288,16 @@ def patch() -> bool:
                 duration = time.time() - start
 
                 res_body: Any = None
+                is_streaming = False
                 try:
                     content_type = response.headers.get("content-type", "")
-                    if _is_streaming_content_type(content_type):
+                    is_streaming = _is_streaming_content_type(content_type)
+                    if is_streaming:
                         res_body = "[streaming]"
                     else:
-                        res_body = response.content
+                        res_body = response.content.decode(
+                            "utf-8", errors="replace"
+                        )
                 except Exception:
                     pass
 
@@ -303,7 +307,7 @@ def patch() -> bool:
                     "body": res_body,
                     "timestamp": time.time(),
                     "duration": duration,
-                    "is_streaming": False,
+                    "is_streaming": is_streaming,
                 }
                 _handler(req_data, res_data, None)
                 return response
@@ -324,7 +328,7 @@ def patch() -> bool:
 
 def unpatch() -> None:
     """Restore original httpx methods."""
-    global _patched
+    global _patched, _original_requests_send
 
     if not _patched:
         return
@@ -347,6 +351,7 @@ def unpatch() -> None:
     except ImportError:
         pass
 
+    _original_requests_send = None
     _patched = False
     logger.info("Global HTTP monitoring disabled")
 

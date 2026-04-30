@@ -93,6 +93,12 @@ class TestRequestsPatchUnpatch:
         unpatch()
         assert requests.Session.send is original
 
+    def test_unpatch_resets_original_requests_send(self):
+        patch_all()
+        assert interceptor._original_requests_send is not None
+        unpatch()
+        assert interceptor._original_requests_send is None
+
     def test_unpatch_when_not_patched_is_noop(self):
         unpatch()  # should not raise
         assert is_patched() is False
@@ -166,6 +172,8 @@ class TestRequestsCapture:
         assert req_data["method"] == "POST"
         assert req_data["body"] == '{"messages":[]}'
         assert res_data["status_code"] == 200
+        assert res_data["body"] == '{"id":"123"}'  # decoded string, not bytes
+        assert isinstance(res_data["body"], str)
         assert error is None
 
     def test_openai_url_captured(self):
@@ -248,7 +256,7 @@ class TestRequestsCapture:
 
         assert len(captured) == 1
         assert captured[0][1]["body"] == "[streaming]"
-        assert captured[0][1]["is_streaming"] is False  # requests is sync-only
+        assert captured[0][1]["is_streaming"] is True
 
     def test_response_fields_populated(self):
         import requests

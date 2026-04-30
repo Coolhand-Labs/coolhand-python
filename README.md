@@ -2,6 +2,8 @@
 
 Monitor and log LLM API calls from OpenAI, Anthropic, Google Gemini, GitHub Copilot, and more to the Coolhand analytics platform.
 
+> **Python 3.8 and 3.9 support deprecated**: As of v0.4.0, coolhand requires Python 3.10 or later. Python 3.8 reached end-of-life in October 2024 and 3.9 in October 2025. If you are on an older Python version, pin to `coolhand<0.4.0`.
+
 ## Installation
 
 ```bash

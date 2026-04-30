@@ -1,0 +1,524 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Band Guesser</title>
+  <style>
+    :root {
+      --accent: #5b4fcf;
+      --accent-hover: #4a40b8;
+      --bg: #f5f4fb;
+      --surface: #ffffff;
+      --border: #ddd8f5;
+      --text: #1a1730;
+      --muted: #6b6890;
+      --error: #c0392b;
+      --success: #27ae60;
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      min-height: 100vh;
+      display: flex;
+      align-items: flex-start;
+      justify-content: center;
+      padding: 2rem 1rem;
+    }
+
+    .container {
+      width: 100%;
+      max-width: 540px;
+    }
+
+    header {
+      margin-bottom: 2rem;
+      text-align: center;
+    }
+
+    header h1 {
+      font-size: 2rem;
+      font-weight: 700;
+      color: var(--accent);
+      letter-spacing: -0.02em;
+    }
+
+    header p {
+      margin-top: 0.4rem;
+      color: var(--muted);
+      font-size: 0.95rem;
+    }
+
+    .card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 2rem;
+      box-shadow: 0 2px 12px rgba(91, 79, 207, 0.07);
+    }
+
+    .field {
+      margin-bottom: 1.25rem;
+    }
+
+    label {
+      display: block;
+      font-size: 0.875rem;
+      font-weight: 600;
+      margin-bottom: 0.4rem;
+      color: var(--text);
+    }
+
+    input[type="password"],
+    textarea {
+      width: 100%;
+      padding: 0.6rem 0.8rem;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      font-size: 0.95rem;
+      font-family: inherit;
+      color: var(--text);
+      background: var(--surface);
+      transition: border-color 0.15s;
+      outline: none;
+    }
+
+    input[type="password"]:focus,
+    textarea:focus {
+      border-color: var(--accent);
+      box-shadow: 0 0 0 3px rgba(91, 79, 207, 0.12);
+    }
+
+    textarea { resize: vertical; min-height: 90px; }
+
+    .hint {
+      margin-top: 0.35rem;
+      font-size: 0.78rem;
+      color: var(--muted);
+      line-height: 1.5;
+    }
+
+    .hint a { color: var(--accent); }
+
+    /* Mode toggle */
+    .mode-toggle {
+      display: flex;
+      gap: 0;
+      border: 1.5px solid var(--border);
+      border-radius: 8px;
+      overflow: hidden;
+      margin-bottom: 1.25rem;
+    }
+
+    .mode-toggle input[type="radio"] { display: none; }
+
+    .mode-toggle label {
+      flex: 1;
+      text-align: center;
+      padding: 0.55rem 0.5rem;
+      font-size: 0.82rem;
+      font-weight: 600;
+      color: var(--muted);
+      cursor: pointer;
+      margin: 0;
+      background: var(--surface);
+      transition: background 0.15s, color 0.15s;
+      line-height: 1.3;
+    }
+
+    .mode-toggle label:not(:last-of-type) { border-right: 1.5px solid var(--border); }
+
+    .mode-toggle input[type="radio"]:checked + label {
+      background: var(--accent);
+      color: #fff;
+    }
+
+    .mode-warning {
+      font-size: 0.78rem;
+      color: #b45309;
+      background: #fffbeb;
+      border: 1px solid #fcd34d;
+      border-radius: 6px;
+      padding: 0.5rem 0.75rem;
+      margin-bottom: 1.25rem;
+      line-height: 1.5;
+    }
+
+    .mode-badge {
+      display: inline-block;
+      font-size: 0.72rem;
+      font-weight: 700;
+      padding: 0.15rem 0.5rem;
+      border-radius: 4px;
+      margin-left: 0.4rem;
+      vertical-align: middle;
+    }
+
+    .mode-badge.azure { background: #ede9fe; color: var(--accent); }
+    .mode-badge.azure-sdk { background: #fff7ed; color: #9a3412; }
+    .mode-badge.copilot { background: #dcfce7; color: #166534; }
+
+    .btn-primary {
+      display: inline-block;
+      width: 100%;
+      padding: 0.7rem 1.25rem;
+      background: var(--accent);
+      color: #fff;
+      border: none;
+      border-radius: 7px;
+      font-size: 0.95rem;
+      font-weight: 600;
+      cursor: pointer;
+      transition: background 0.15s;
+    }
+
+    .btn-primary:hover:not(:disabled) { background: var(--accent-hover); }
+    .btn-primary:disabled { opacity: 0.55; cursor: not-allowed; }
+
+    .btn-secondary {
+      display: inline-block;
+      width: 100%;
+      padding: 0.7rem 1.25rem;
+      background: transparent;
+      color: var(--accent);
+      border: 1.5px solid var(--border);
+      border-radius: 7px;
+      font-size: 0.95rem;
+      font-weight: 600;
+      cursor: pointer;
+      margin-top: 0.6rem;
+      transition: border-color 0.15s, background 0.15s;
+    }
+
+    .btn-secondary:hover { border-color: var(--accent); background: var(--bg); }
+
+    .error {
+      color: var(--error);
+      font-size: 0.85rem;
+      margin-top: 0.75rem;
+      padding: 0.5rem 0.75rem;
+      background: #fdf0ef;
+      border-radius: 6px;
+      border-left: 3px solid var(--error);
+    }
+
+    .hidden { display: none !important; }
+
+    /* Band list */
+    .band-list {
+      list-style: none;
+      margin: 1rem 0 1.5rem;
+    }
+
+    .band-list li {
+      border-radius: 7px;
+      transition: background 0.1s;
+    }
+
+    .band-list li:hover { background: var(--bg); }
+
+    .band-item {
+      display: flex;
+      align-items: center;
+      gap: 0.65rem;
+      padding: 0.55rem 0.5rem;
+      cursor: pointer;
+      font-size: 0.95rem;
+      font-weight: 500;
+      user-select: none;
+    }
+
+    .band-item input[type="checkbox"] {
+      width: 17px;
+      height: 17px;
+      accent-color: var(--accent);
+      cursor: pointer;
+      flex-shrink: 0;
+    }
+
+    .step-title {
+      font-size: 1.1rem;
+      font-weight: 700;
+      margin-bottom: 0.3rem;
+    }
+
+    /* Success */
+    .success-card {
+      text-align: center;
+      padding: 1rem 0;
+    }
+
+    .checkmark {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 56px;
+      height: 56px;
+      background: #e8f8f0;
+      color: var(--success);
+      border-radius: 50%;
+      font-size: 1.6rem;
+      margin-bottom: 1rem;
+    }
+
+    .success-card h2 {
+      font-size: 1.25rem;
+      margin-bottom: 0.5rem;
+    }
+
+    .success-card p {
+      color: var(--muted);
+      font-size: 0.9rem;
+      line-height: 1.5;
+      margin-bottom: 1.5rem;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <header>
+      <h1>Band Guesser</h1>
+      <p>Tell us about yourself — we'll guess your taste in music</p>
+    </header>
+
+    <!-- Step 1: Input -->
+    <section id="step-1" class="card">
+
+      <div class="mode-toggle">
+        <input type="radio" id="mode-copilot" name="mode" value="copilot" checked>
+        <label for="mode-copilot">GitHub Copilot SDK</label>
+        <input type="radio" id="mode-azure" name="mode" value="azure">
+        <label for="mode-azure">GitHub Models (httpx)</label>
+        <input type="radio" id="mode-azure-sdk" name="mode" value="azure-sdk">
+        <label for="mode-azure-sdk">GitHub Models (SDK)</label>
+      </div>
+
+      <div class="field">
+        <label for="token">GitHub Token <span style="font-weight:400;color:var(--muted)">(optional)</span></label>
+        <input type="password" id="token" placeholder="Leave blank to use gh auth token" autocomplete="off" spellcheck="false">
+        <p id="token-hint-copilot" class="hint">
+          Leave blank to use <code>gh auth token</code> automatically.
+          If you paste one, it must be an <strong>OAuth token</strong> (<code>gho_</code>) — classic PATs (<code>ghp_</code>) are not supported by the Copilot API.
+        </p>
+        <p id="token-hint-azure" class="hint hidden">
+          Leave blank to use <code>gh auth token</code> automatically.
+          Both OAuth tokens (<code>gho_</code>) and classic PATs (<code>ghp_</code>) work with GitHub Models.
+        </p>
+        <p id="token-hint-azure-sdk" class="hint hidden">
+          Leave blank to use <code>gh auth token</code> automatically.
+          Uses <code>azure-ai-inference</code> <code>ChatCompletionsClient</code> directly (requests transport) — this path is <strong>not intercepted</strong> by coolhand's httpx patcher.
+        </p>
+      </div>
+      <div class="field">
+        <label for="sentence">Write a sentence or two about yourself</label>
+        <textarea id="sentence" placeholder="I spend Sunday mornings hiking mountain trails, love reading dense philosophy books, and can't start the day without an espresso…"></textarea>
+      </div>
+      <button id="guess-btn" class="btn-primary">Guess My Bands</button>
+      <p id="step1-error" class="error hidden"></p>
+    </section>
+
+    <!-- Step 2: Checklist -->
+    <section id="step-2" class="card hidden">
+      <p class="step-title">Here are your bands <span id="mode-badge" class="mode-badge"></span></p>
+      <p class="hint">Check the ones you actually like:</p>
+      <ul id="band-list" class="band-list"></ul>
+      <button id="submit-btn" class="btn-primary">Submit Feedback</button>
+      <button id="start-over-btn" class="btn-secondary">Start Over</button>
+      <p id="step2-error" class="error hidden"></p>
+    </section>
+
+    <!-- Step 3: Success -->
+    <section id="step-3" class="card hidden">
+      <div class="success-card">
+        <span class="checkmark">✓</span>
+        <h2>Thanks for your feedback!</h2>
+        <p id="feedback-summary"></p>
+        <button id="try-again-btn" class="btn-secondary">Try Again</button>
+      </div>
+    </section>
+  </div>
+
+  <script>
+    const step1 = document.getElementById('step-1');
+    const step2 = document.getElementById('step-2');
+    const step3 = document.getElementById('step-3');
+    const steps = [step1, step2, step3];
+
+    let rawResponse = '';
+    let allBands = [];
+
+    function showStep(n) {
+      steps.forEach((el, i) => el.classList.toggle('hidden', i !== n - 1));
+    }
+
+    function showError(el, msg) {
+      el.textContent = msg;
+      el.classList.remove('hidden');
+    }
+
+    function hideError(el) {
+      el.classList.add('hidden');
+    }
+
+    function escapeHtml(str) {
+      return str
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;');
+    }
+
+    // Restore token from sessionStorage on load
+    const tokenInput = document.getElementById('token');
+    tokenInput.value = sessionStorage.getItem('gh_token') || '';
+
+    function getMode() {
+      return document.querySelector('input[name="mode"]:checked').value;
+    }
+
+    // Swap token hint when mode changes
+    document.querySelectorAll('input[name="mode"]').forEach((radio) => {
+      radio.addEventListener('change', () => {
+        const mode = getMode();
+        document.getElementById('token-hint-copilot').classList.toggle('hidden', mode !== 'copilot');
+        document.getElementById('token-hint-azure').classList.toggle('hidden', mode !== 'azure');
+        document.getElementById('token-hint-azure-sdk').classList.toggle('hidden', mode !== 'azure-sdk');
+      });
+    });
+
+    // Step 1: Guess bands
+    document.getElementById('guess-btn').addEventListener('click', async () => {
+      const token = tokenInput.value.trim();
+      const sentence = document.getElementById('sentence').value.trim();
+      const mode = getMode();
+      const errorEl = document.getElementById('step1-error');
+      const btn = document.getElementById('guess-btn');
+
+      hideError(errorEl);
+
+      if (!sentence) {
+        showError(errorEl, 'Please write something about yourself.');
+        return;
+      }
+
+      sessionStorage.setItem('gh_token', token);
+
+      btn.disabled = true;
+      btn.textContent = 'Thinking…';
+
+      try {
+        const res = await fetch('/api/guess-bands', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ github_token: token, sentence, mode }),
+        });
+
+        const data = await res.json();
+
+        if (!res.ok) {
+          showError(errorEl, data.detail || 'Something went wrong. Please try again.');
+          return;
+        }
+
+        allBands = data.bands;
+        rawResponse = data.raw_response;
+
+        const badge = document.getElementById('mode-badge');
+        if (mode === 'azure') {
+          badge.textContent = 'GitHub Models (httpx)';
+          badge.className = 'mode-badge azure';
+        } else if (mode === 'azure-sdk') {
+          badge.textContent = 'GitHub Models (SDK)';
+          badge.className = 'mode-badge azure-sdk';
+        } else {
+          badge.textContent = 'GitHub Copilot SDK';
+          badge.className = 'mode-badge copilot';
+        }
+
+        const ul = document.getElementById('band-list');
+        ul.innerHTML = '';
+        allBands.forEach((band) => {
+          const li = document.createElement('li');
+          li.innerHTML = `
+            <label class="band-item">
+              <input type="checkbox" value="${escapeHtml(band)}" checked>
+              <span>${escapeHtml(band)}</span>
+            </label>`;
+          ul.appendChild(li);
+        });
+
+        showStep(2);
+      } catch {
+        showError(errorEl, 'Network error. Please check your connection and try again.');
+      } finally {
+        btn.disabled = false;
+        btn.textContent = 'Guess My Bands';
+      }
+    });
+
+    // Step 2: Submit feedback
+    document.getElementById('submit-btn').addEventListener('click', async () => {
+      const checked = [...document.querySelectorAll('#band-list input[type="checkbox"]:checked')];
+      const likedBands = checked.map((cb) => cb.value);
+      const errorEl = document.getElementById('step2-error');
+      const btn = document.getElementById('submit-btn');
+
+      hideError(errorEl);
+
+      btn.disabled = true;
+      btn.textContent = 'Submitting…';
+
+      try {
+        const res = await fetch('/api/submit-feedback', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            raw_response: rawResponse,
+            liked_bands: likedBands,
+            all_bands: allBands,
+          }),
+        });
+
+        const data = await res.json();
+
+        if (!res.ok || !data.success) {
+          showError(errorEl, data.detail || data.message || 'Feedback could not be submitted. Please try again.');
+          return;
+        }
+
+        const disliked = allBands.filter((b) => !likedBands.includes(b));
+        let summary = likedBands.length > 0
+          ? `You liked: ${likedBands.join(', ')}.`
+          : "You didn't like any of the suggestions.";
+        if (disliked.length > 0) {
+          summary += ` Not your thing: ${disliked.join(', ')}.`;
+        }
+        document.getElementById('feedback-summary').textContent = summary;
+        showStep(3);
+      } catch {
+        showError(errorEl, 'Network error submitting feedback. Please try again.');
+      } finally {
+        btn.disabled = false;
+        btn.textContent = 'Submit Feedback';
+      }
+    });
+
+    // Reset helpers
+    function resetToStep1() {
+      rawResponse = '';
+      allBands = [];
+      document.getElementById('sentence').value = '';
+      hideError(document.getElementById('step1-error'));
+      hideError(document.getElementById('step2-error'));
+      showStep(1);
+    }
+
+    document.getElementById('start-over-btn').addEventListener('click', resetToStep1);
+    document.getElementById('try-again-btn').addEventListener('click', resetToStep1);
+  </script>
+</body>
+</html>

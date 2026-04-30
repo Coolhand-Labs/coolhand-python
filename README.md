@@ -166,13 +166,18 @@ Coolhand intercepts AI API calls through two mechanisms:
 - GitHub Models via Azure (`models.inference.ai.azure.com`)
 - Any other library using httpx for HTTP requests
 
+**requests patching** (covers any library built on `requests`):
+
+- `azure-ai-inference`, `azure-openai`, and other `azure-core`-based SDKs
+- Any other library using `requests` for HTTP requests (`requests` is optional — patch is skipped if not installed)
+
 **JSON-RPC patching** (direct protocol interception):
 
 - GitHub Copilot SDK (`JsonRpcClient`)
 
 ## How It Works
 
-1. When you import `coolhand`, it automatically patches httpx and the GitHub Copilot `JsonRpcClient`
+1. When you import `coolhand`, it automatically patches httpx, `requests.Session.send` (if installed), and the GitHub Copilot `JsonRpcClient`
 2. Requests to AI APIs are intercepted (OpenAI, Anthropic, Gemini, GitHub Models, GitHub Copilot, and more)
 3. Request and response data are captured (credentials and sensitive URL parameters sanitized)
 4. Data is sent to Coolhand asynchronously

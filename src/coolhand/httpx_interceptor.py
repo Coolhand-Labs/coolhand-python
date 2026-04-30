@@ -2,7 +2,7 @@
 
 import logging
 import time
-from typing import Any, Callable, List, Optional
+from typing import Any, Callable, List, Optional, Union
 from urllib.parse import urlparse
 
 from .types import RequestData, ResponseData
@@ -13,6 +13,7 @@ logger = logging.getLogger(__name__)
 _patched = False
 _original_send: Optional[Callable] = None
 _original_async_send: Optional[Callable] = None
+_original_requests_send: Optional[Callable] = None
 _handler: Optional[
     Callable[[RequestData, Optional[ResponseData], Optional[str]], None]
 ] = None
@@ -252,9 +253,69 @@ def patch() -> bool:
             _handler(req_data, None, str(e))
             raise
 
-    # Apply patches
+    # Apply httpx patches
     httpx.Client.send = patched_send
     httpx.AsyncClient.send = patched_async_send
+
+    # Optionally patch requests.Session.send
+    global _original_requests_send
+    try:
+        import requests as _requests_lib
+
+        _original_requests_send = _requests_lib.Session.send
+
+        def patched_requests_send(self, request, **kwargs):
+            url = str(request.url or "")
+
+            if not _is_llm_api(url) or _is_localhost(url) or not _handler:
+                return _original_requests_send(self, request, **kwargs)
+
+            start = time.time()
+            body: Optional[Union[str, bytes]] = request.body
+            if isinstance(body, bytes):
+                body = body.decode("utf-8", errors="replace")
+
+            req_data: RequestData = {
+                "method": request.method or "",
+                "url": url,
+                "headers": dict(request.headers or {}),
+                "body": body,
+                "timestamp": start,
+            }
+
+            try:
+                response = _original_requests_send(self, request, **kwargs)
+                duration = time.time() - start
+
+                res_body: Any = None
+                try:
+                    content_type = response.headers.get("content-type", "")
+                    if _is_streaming_content_type(content_type):
+                        res_body = "[streaming]"
+                    else:
+                        res_body = response.content
+                except Exception:
+                    pass
+
+                res_data: ResponseData = {
+                    "status_code": response.status_code,
+                    "headers": dict(response.headers),
+                    "body": res_body,
+                    "timestamp": time.time(),
+                    "duration": duration,
+                    "is_streaming": False,
+                }
+                _handler(req_data, res_data, None)
+                return response
+
+            except Exception as e:
+                _handler(req_data, None, str(e))
+                raise
+
+        _requests_lib.Session.send = patched_requests_send
+    except ImportError:
+        pass
+
     _patched = True
 
     logger.info("Global HTTP monitoring enabled")
@@ -275,6 +336,14 @@ def unpatch() -> None:
             httpx.Client.send = _original_send
         if _original_async_send:
             httpx.AsyncClient.send = _original_async_send
+    except ImportError:
+        pass
+
+    try:
+        import requests as _requests_lib
+
+        if _original_requests_send:
+            _requests_lib.Session.send = _original_requests_send
     except ImportError:
         pass
 

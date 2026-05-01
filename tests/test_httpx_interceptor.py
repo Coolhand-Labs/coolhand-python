@@ -142,9 +142,9 @@ class TestIsLlmApi:
         """All default intercept addresses are detected."""
         for addr in DEFAULT_INTERCEPT_ADDRESSES:
             if addr.startswith(":"):
-                url = f"https://example.googleapis.com/v1/models/gemini{addr}"
+                url = "https://example.googleapis.com/v1/models/gemini" + addr
             else:
-                url = f"https://{addr}/v1/test"
+                url = "https://" + addr + "/v1/test"
             assert _is_llm_api(url) is True, f"Failed for {addr}"
 
 

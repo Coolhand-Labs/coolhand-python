@@ -211,6 +211,17 @@ class TestGetDefaultConfig:
         config = _get_default_config()
         assert config["session_id"].startswith("session_")
 
+    def test_default_base_url(self):
+        """Default config contains the production base URL."""
+        config = _get_default_config()
+        assert config["base_url"] == "https://coolhandlabs.com"
+
+    def test_env_base_url(self, monkeypatch):
+        """COOLHAND_BASE_URL env var overrides the default base URL."""
+        monkeypatch.setenv("COOLHAND_BASE_URL", "https://custom.example.com")
+        config = _get_default_config()
+        assert config["base_url"] == "https://custom.example.com"
+
 
 class TestCoolhandClient:
     """Tests for CoolhandClient class."""
@@ -377,6 +388,22 @@ class TestCoolhandClient:
         client.shutdown()
         assert len(client._queue) == 0
 
+    def test_base_url_trailing_slash_stripped(self, reset_global_instance):
+        """Trailing slash in base_url is stripped during init."""
+        client = CoolhandClient(base_url="https://custom.example.com/")
+        assert client.config["base_url"] == "https://custom.example.com"
+
+    def test_base_url_invalid_scheme_raises(self, reset_global_instance):
+        """Non-https base_url (not localhost) raises ValueError."""
+        import pytest
+        with pytest.raises(ValueError, match="base_url must use https://"):
+            CoolhandClient(base_url="http://evil.com")
+
+    def test_base_url_localhost_http_allowed(self, reset_global_instance):
+        """http://localhost base_url is accepted for local dev."""
+        client = CoolhandClient(base_url="http://localhost:8080")
+        assert client.config["base_url"] == "http://localhost:8080"
+
 
 class TestGlobalInstanceFunctions:
     """Tests for global instance management functions."""
@@ -527,6 +554,31 @@ class TestFlushAPISubmission:
             mock_flush.return_value = True
             client.log_interaction(mock_request_data, mock_response_data)
             mock_flush.assert_called_once()
+
+    def test_flush_uses_custom_base_url(self, reset_global_instance):
+        """flush posts to the configured base_url, not the hardcoded default."""
+        from unittest.mock import MagicMock, patch
+
+        client = CoolhandClient(
+            auto_submit=False,
+            api_key="real-api-key-12345",
+            base_url="https://custom.example.com",
+        )
+        client._queue.append({"id": "test-id", "method": "post", "url": "test"})
+
+        with patch("coolhand.client.urlopen") as mock_urlopen:
+            mock_resp = MagicMock()
+            mock_resp.status = 201
+            mock_resp.__enter__ = MagicMock(return_value=mock_resp)
+            mock_resp.__exit__ = MagicMock(return_value=False)
+            mock_urlopen.return_value = mock_resp
+
+            client.flush()
+
+        called_request = mock_urlopen.call_args[0][0]
+        assert called_request.full_url == (
+            "https://custom.example.com/api/v2/llm_request_logs"
+        )
 
 
 class TestGeminiCapture:

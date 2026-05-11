@@ -7,6 +7,7 @@ from typing import Optional
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
+from .client import _normalize_base_url
 from .types import Config, FeedbackData, FeedbackResponse
 from .version import __version__
 
@@ -41,11 +42,15 @@ class FeedbackService:
         """
         self.config: Config = {
             "api_key": os.getenv("COOLHAND_API_KEY", ""),
+            "base_url": os.getenv("COOLHAND_BASE_URL") or "https://coolhandlabs.com",
             "silent": os.getenv("COOLHAND_SILENT", "true").lower() == "true",
         }
         if config:
             self.config.update(config)
         self.config.update(kwargs)
+
+        if self.config.get("base_url"):
+            self.config["base_url"] = _normalize_base_url(self.config["base_url"])
 
     @property
     def api_key(self) -> str:
@@ -144,8 +149,9 @@ class FeedbackService:
 
         # Send request
         try:
+            base_url = self.config["base_url"]
             request = Request(
-                url=f"{BASE_URL}{FEEDBACK_ENDPOINT}",
+                url=f"{base_url}{FEEDBACK_ENDPOINT}",
                 data=json.dumps(payload, default=str).encode("utf-8"),
                 headers={
                     "X-API-Key": self.api_key,
@@ -196,7 +202,8 @@ class FeedbackService:
         if feedback.get("revised_output"):
             self._log("Includes revised output")
 
-        self._log(f"Sending to: {BASE_URL}{FEEDBACK_ENDPOINT}")
+        base_url = self.config["base_url"]
+        self._log(f"Sending to: {base_url}{FEEDBACK_ENDPOINT}")
 
 
 # Module-level convenience function

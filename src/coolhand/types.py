@@ -30,6 +30,7 @@ class Config(TypedDict, total=False):
     """Coolhand configuration."""
 
     api_key: Optional[str]
+    base_url: Optional[str]
     silent: bool
     auto_submit: bool
     session_id: Optional[str]

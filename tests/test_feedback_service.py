@@ -442,3 +442,51 @@ class TestFeedbackServiceEdgeCases:
         # Should be different instances
         assert service1 is not service2
         assert service2.api_key == mock_config["api_key"]
+
+
+class TestFeedbackServiceBaseUrl:
+    """Tests for configurable base_url in FeedbackService."""
+
+    def test_default_base_url(self):
+        """FeedbackService defaults to the production URL."""
+        service = FeedbackService(api_key="test-key-12345678")
+        assert service.config["base_url"] == "https://coolhandlabs.com"
+
+    def test_env_base_url(self, monkeypatch):
+        """COOLHAND_BASE_URL env var is picked up by FeedbackService."""
+        monkeypatch.setenv("COOLHAND_BASE_URL", "https://env.example.com")
+        service = FeedbackService(api_key="test-key-12345678")
+        assert service.config["base_url"] == "https://env.example.com"
+
+    def test_custom_base_url_used_in_request(self):
+        """FeedbackService posts to the configured base_url."""
+        service = FeedbackService(
+            api_key="test-key-12345678",
+            base_url="https://custom.example.com",
+        )
+        feedback: FeedbackData = {"llm_request_log_id": 1, "like": True}
+
+        with patch("coolhand.feedback_service.urlopen") as mock_urlopen:
+            mock_resp = MagicMock()
+            mock_resp.status = 201
+            mock_resp.read.return_value = b'{"id": 1}'
+            mock_resp.__enter__ = MagicMock(return_value=mock_resp)
+            mock_resp.__exit__ = MagicMock(return_value=False)
+            mock_urlopen.return_value = mock_resp
+
+            service.create_feedback(feedback)
+
+        called_request = mock_urlopen.call_args[0][0]
+        assert called_request.full_url == (
+            "https://custom.example.com/api/v2/llm_request_log_feedbacks"
+        )
+
+    def test_base_url_invalid_scheme_raises(self):
+        """Non-https base_url (not localhost) raises ValueError."""
+        with pytest.raises(ValueError, match="base_url must use https://"):
+            FeedbackService(base_url="http://not-localhost.com")
+
+    def test_base_url_localhost_allowed(self):
+        """http://localhost base_url is accepted for local dev."""
+        service = FeedbackService(base_url="http://localhost:3000")
+        assert service.config["base_url"] == "http://localhost:3000"

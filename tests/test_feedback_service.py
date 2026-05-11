@@ -486,7 +486,17 @@ class TestFeedbackServiceBaseUrl:
         with pytest.raises(ValueError, match="base_url must use https://"):
             FeedbackService(base_url="http://not-localhost.com")
 
+    def test_base_url_localhost_subdomain_rejected(self):
+        """http://localhost.attacker.com must not bypass the allowlist."""
+        with pytest.raises(ValueError, match="base_url must use https://"):
+            FeedbackService(base_url="http://localhost.attacker.com")
+
     def test_base_url_localhost_allowed(self):
         """http://localhost base_url is accepted for local dev."""
         service = FeedbackService(base_url="http://localhost:3000")
         assert service.config["base_url"] == "http://localhost:3000"
+
+    def test_base_url_127_0_0_1_allowed(self):
+        """http://127.0.0.1 base_url is accepted for local dev."""
+        service = FeedbackService(base_url="http://127.0.0.1:8080")
+        assert service.config["base_url"] == "http://127.0.0.1:8080"

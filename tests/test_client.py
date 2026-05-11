@@ -1,9 +1,12 @@
 """Tests for coolhand.client module."""
 
+import pytest
+
 from coolhand.client import (
     CoolhandClient,
     _get_default_config,
     _mask_value,
+    _normalize_base_url,
     _parse_body,
     _sanitize_headers,
     _sanitize_url,
@@ -223,6 +226,43 @@ class TestGetDefaultConfig:
         assert config["base_url"] == "https://custom.example.com"
 
 
+class TestNormalizeBaseUrl:
+    """Unit tests for _normalize_base_url — exercises the validator directly."""
+
+    def test_https_allowed(self):
+        assert _normalize_base_url("https://example.com") == "https://example.com"
+
+    def test_trailing_slash_stripped(self):
+        assert _normalize_base_url("https://example.com/") == "https://example.com"
+
+    def test_multiple_trailing_slashes_stripped(self):
+        assert _normalize_base_url("https://example.com///") == "https://example.com"
+
+    def test_localhost_allowed(self):
+        assert _normalize_base_url("http://localhost:8080") == "http://localhost:8080"
+
+    def test_127_0_0_1_allowed(self):
+        assert _normalize_base_url("http://127.0.0.1:3000") == "http://127.0.0.1:3000"
+
+    def test_localhost_subdomain_rejected(self):
+        """http://localhost.attacker.com must not bypass the allowlist."""
+        with pytest.raises(ValueError, match="base_url must use https://"):
+            _normalize_base_url("http://localhost.attacker.com")
+
+    def test_127_0_0_1_prefix_rejected(self):
+        """http://127.0.0.1.evil.com must not bypass the allowlist."""
+        with pytest.raises(ValueError, match="base_url must use https://"):
+            _normalize_base_url("http://127.0.0.1.evil.com")
+
+    def test_plain_http_rejected(self):
+        with pytest.raises(ValueError, match="base_url must use https://"):
+            _normalize_base_url("http://example.com")
+
+    def test_empty_string_rejected(self):
+        with pytest.raises(ValueError, match="base_url must use https://"):
+            _normalize_base_url("")
+
+
 class TestCoolhandClient:
     """Tests for CoolhandClient class."""
 
@@ -395,8 +435,6 @@ class TestCoolhandClient:
 
     def test_base_url_invalid_scheme_raises(self, reset_global_instance):
         """Non-https base_url (not localhost) raises ValueError."""
-        import pytest
-
         with pytest.raises(ValueError, match="base_url must use https://"):
             CoolhandClient(base_url="http://evil.com")
 

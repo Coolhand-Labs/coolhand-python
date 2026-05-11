@@ -236,16 +236,26 @@ class TestValidateBaseUrl:
         assert _validate_base_url("") == _DEFAULT_BASE_URL
 
     def test_https_production_url_accepted(self):
-        assert _validate_base_url("https://coolhandlabs.com") == "https://coolhandlabs.com"
+        assert (
+            _validate_base_url("https://coolhandlabs.com") == "https://coolhandlabs.com"
+        )
 
     def test_https_custom_host_accepted(self):
-        assert _validate_base_url("https://staging.myco.com") == "https://staging.myco.com"
+        assert (
+            _validate_base_url("https://staging.myco.com") == "https://staging.myco.com"
+        )
 
     def test_trailing_slash_stripped(self):
-        assert _validate_base_url("https://coolhandlabs.com/") == "https://coolhandlabs.com"
+        assert (
+            _validate_base_url("https://coolhandlabs.com/")
+            == "https://coolhandlabs.com"
+        )
 
     def test_multiple_trailing_slashes_stripped(self):
-        assert _validate_base_url("https://coolhandlabs.com///") == "https://coolhandlabs.com"
+        assert (
+            _validate_base_url("https://coolhandlabs.com///")
+            == "https://coolhandlabs.com"
+        )
 
     def test_http_localhost_accepted(self):
         assert _validate_base_url("http://localhost") == "http://localhost"
@@ -261,21 +271,25 @@ class TestValidateBaseUrl:
 
     def test_http_remote_host_raises(self):
         import pytest
+
         with pytest.raises(ValueError, match="https://"):
             _validate_base_url("http://example.com")
 
     def test_http_private_ip_raises(self):
         import pytest
+
         with pytest.raises(ValueError):
             _validate_base_url("http://192.168.1.100")
 
     def test_non_http_scheme_raises(self):
         import pytest
+
         with pytest.raises(ValueError):
             _validate_base_url("ftp://files.example.com")
 
     def test_no_scheme_raises(self):
         import pytest
+
         with pytest.raises(ValueError):
             _validate_base_url("coolhandlabs.com")
 
@@ -464,6 +478,7 @@ class TestCoolhandClient:
     def test_invalid_base_url_raises_at_construction(self, reset_global_instance):
         """Invalid base_url raises ValueError at construction time."""
         import pytest
+
         with pytest.raises(ValueError):
             CoolhandClient(base_url="http://example.com")
 

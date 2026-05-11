@@ -91,7 +91,9 @@ class TestFeedbackServiceInit:
 
     def test_init_base_url_via_kwarg(self):
         """base_url can be set via kwarg."""
-        service = FeedbackService(api_key="key", base_url="https://staging.coolhandlabs.com")
+        service = FeedbackService(
+            api_key="key", base_url="https://staging.coolhandlabs.com"
+        )
         assert service._base_url == "https://staging.coolhandlabs.com"
 
     def test_init_base_url_from_env(self, monkeypatch):

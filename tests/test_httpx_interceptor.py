@@ -1,19 +1,8 @@
 """Tests for coolhand.httpx_interceptor module."""
 
-import sys
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-
-# AsyncMock is only available in Python 3.8+
-if sys.version_info >= (3, 8):
-    from unittest.mock import AsyncMock
-else:
-
-    class AsyncMock(MagicMock):
-        async def __call__(self, *args, **kwargs):
-            return super().__call__(*args, **kwargs)
-
 
 from coolhand.httpx_interceptor import (
     DEFAULT_INTERCEPT_ADDRESSES,
@@ -22,9 +11,11 @@ from coolhand.httpx_interceptor import (
     _is_streaming_content_type,
     _read_response_body,
     is_patched,
+    set_handler,
+    set_intercept_addresses,
+    unpatch,
 )
 from coolhand.httpx_interceptor import patch as patch_httpx
-from coolhand.httpx_interceptor import set_handler, set_intercept_addresses, unpatch
 
 
 class TestIsLocalhost:

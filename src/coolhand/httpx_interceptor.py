@@ -2,7 +2,8 @@
 
 import logging
 import time
-from typing import Any, Callable, List, Optional, Union
+from collections.abc import Callable
+from typing import Any
 from urllib.parse import urlparse
 
 from .types import RequestData, ResponseData
@@ -11,13 +12,11 @@ logger = logging.getLogger(__name__)
 
 # State
 _patched = False
-_original_send: Optional[Callable] = None
-_original_async_send: Optional[Callable] = None
-_original_requests_send: Optional[Callable] = None
-_handler: Optional[
-    Callable[[RequestData, Optional[ResponseData], Optional[str]], None]
-] = None
-_intercept_addresses: Optional[List[str]] = None
+_original_send: Callable | None = None
+_original_async_send: Callable | None = None
+_original_requests_send: Callable | None = None
+_handler: Callable[[RequestData, ResponseData | None, str | None], None] | None = None
+_intercept_addresses: list[str] | None = None
 
 
 # Default intercept addresses (domains and path substrings)
@@ -31,7 +30,7 @@ DEFAULT_INTERCEPT_ADDRESSES = [
 ]
 
 
-def set_intercept_addresses(addresses: List[str]) -> None:
+def set_intercept_addresses(addresses: list[str]) -> None:
     """Set custom intercept addresses (domains and/or path substrings)."""
     global _intercept_addresses
     _intercept_addresses = addresses
@@ -77,7 +76,7 @@ def _read_response_body(response: Any) -> Any:
 
 
 def set_handler(
-    handler: Callable[[RequestData, Optional[ResponseData], Optional[str]], None],
+    handler: Callable[[RequestData, ResponseData | None, str | None], None],
 ) -> None:
     """Set the handler for captured requests."""
     global _handler
@@ -271,7 +270,7 @@ def patch() -> bool:
                 return _original_requests_send(self, request, **kwargs)
 
             start = time.time()
-            body: Optional[Union[str, bytes]] = request.body
+            body: str | bytes | None = request.body
             if isinstance(body, bytes):
                 body = body.decode("utf-8", errors="replace")
 

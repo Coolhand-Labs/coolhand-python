@@ -3,7 +3,6 @@
 import json
 import logging
 import os
-from typing import Optional
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
@@ -32,7 +31,7 @@ class FeedbackService:
         ... })
     """
 
-    def __init__(self, config: Optional[Config] = None, **kwargs):
+    def __init__(self, config: Config | None = None, **kwargs):
         """Initialize the feedback service.
 
         Args:
@@ -66,7 +65,7 @@ class FeedbackService:
         if not self.silent:
             logger.info(message)
 
-    def create_feedback(self, feedback: FeedbackData) -> Optional[FeedbackResponse]:
+    def create_feedback(self, feedback: FeedbackData) -> FeedbackResponse | None:
         """Submit feedback for an LLM response.
 
         Args:
@@ -200,10 +199,10 @@ class FeedbackService:
 
 
 # Module-level convenience function
-_default_service: Optional[FeedbackService] = None
+_default_service: FeedbackService | None = None
 
 
-def get_feedback_service(config: Optional[Config] = None, **kwargs) -> FeedbackService:
+def get_feedback_service(config: Config | None = None, **kwargs) -> FeedbackService:
     """Get a feedback service instance.
 
     If no config is provided and a default service exists, returns the default.
@@ -229,7 +228,7 @@ def get_feedback_service(config: Optional[Config] = None, **kwargs) -> FeedbackS
     return service
 
 
-def create_feedback(feedback: FeedbackData, **kwargs) -> Optional[FeedbackResponse]:
+def create_feedback(feedback: FeedbackData, **kwargs) -> FeedbackResponse | None:
     """Convenience function to create feedback using default service.
 
     Args:

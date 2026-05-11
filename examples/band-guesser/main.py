@@ -7,9 +7,12 @@ import subprocess
 import sys
 
 if sys.version_info < (3, 8):
-    sys.exit("Python 3.8+ required. Run with: python3.11 -m uvicorn main:app --reload --port 8188")
+    sys.exit(
+        "Python 3.8+ required. Run with: python3.11 -m uvicorn main:app --reload --port 8188"
+    )
 
 from dotenv import load_dotenv
+
 load_dotenv()
 
 # ---------------------------------------------------------------------------
@@ -37,8 +40,8 @@ from opentelemetry.instrumentation.requests import RequestsInstrumentor
 from opentelemetry.sdk.trace import TracerProvider
 
 otel_trace.set_tracer_provider(TracerProvider())
-RequestsInstrumentor().instrument()      # patches requests before coolhand
-HTTPXClientInstrumentor().instrument()   # patches httpx before coolhand
+RequestsInstrumentor().instrument()  # patches requests before coolhand
+HTTPXClientInstrumentor().instrument()  # patches httpx before coolhand
 
 # ---------------------------------------------------------------------------
 # coolhand — imported after OTel to exercise the double-patch scenario.
@@ -53,7 +56,6 @@ _ch = coolhand.Coolhand(
 )
 
 import httpx  # noqa: E402
-
 from azure.ai.inference.models import SystemMessage, UserMessage  # noqa: E402
 from azure.core.credentials import AzureKeyCredential  # noqa: E402
 from fastapi import FastAPI, HTTPException  # noqa: E402
@@ -92,7 +94,7 @@ async def _resolve_github_token(provided: str) -> str:
     raise HTTPException(
         status_code=400,
         detail="No GitHub token provided and `gh auth token` is unavailable. "
-               "Run `gh auth login` or paste a token above.",
+        "Run `gh auth login` or paste a token above.",
     )
 
 
@@ -122,6 +124,7 @@ class SubmitFeedbackResponse(BaseModel):
 # Inference helpers
 # ---------------------------------------------------------------------------
 
+
 async def _guess_via_azure_sdk(github_token: str, sentence: str) -> str:
     """Call GitHub Models via azure-ai-inference ChatCompletionsClient (requests transport).
 
@@ -131,7 +134,9 @@ async def _guess_via_azure_sdk(github_token: str, sentence: str) -> str:
 
     from azure.ai.inference import ChatCompletionsClient
 
-    print("[AZURE-AI-INFERENCE SDK] Making inference call via ChatCompletionsClient (requests transport)")
+    print(
+        "[AZURE-AI-INFERENCE SDK] Making inference call via ChatCompletionsClient (requests transport)"
+    )
 
     def _sync():
         client = ChatCompletionsClient(
@@ -142,7 +147,9 @@ async def _guess_via_azure_sdk(github_token: str, sentence: str) -> str:
             model="gpt-4o-mini",
             messages=[
                 SystemMessage(content=SYSTEM_PROMPT),
-                UserMessage(content=f'Here is what the person wrote about themselves: "{sentence}"'),
+                UserMessage(
+                    content=f'Here is what the person wrote about themselves: "{sentence}"'
+                ),
             ],
             temperature=0.9,
             max_tokens=200,
@@ -154,10 +161,16 @@ async def _guess_via_azure_sdk(github_token: str, sentence: str) -> str:
     except Exception as e:
         err = str(e)
         if "401" in err or "unauthorized" in err.lower():
-            raise HTTPException(status_code=401, detail="Invalid or expired GitHub token.")
+            raise HTTPException(
+                status_code=401, detail="Invalid or expired GitHub token."
+            )
         if "429" in err or "rate limit" in err.lower():
-            raise HTTPException(status_code=429, detail="Rate limit reached — please try again shortly.")
-        raise HTTPException(status_code=502, detail=f"Azure AI Inference SDK error: {err}")
+            raise HTTPException(
+                status_code=429, detail="Rate limit reached — please try again shortly."
+            )
+        raise HTTPException(
+            status_code=502, detail=f"Azure AI Inference SDK error: {err}"
+        )
 
 
 async def _guess_via_azure(github_token: str, sentence: str) -> str:
@@ -166,7 +179,9 @@ async def _guess_via_azure(github_token: str, sentence: str) -> str:
     cred = AzureKeyCredential(github_token)
     messages = [
         SystemMessage(content=SYSTEM_PROMPT),
-        UserMessage(content=f'Here is what the person wrote about themselves: "{sentence}"'),
+        UserMessage(
+            content=f'Here is what the person wrote about themselves: "{sentence}"'
+        ),
     ]
     async with httpx.AsyncClient() as client:
         try:
@@ -182,14 +197,20 @@ async def _guess_via_azure(github_token: str, sentence: str) -> str:
                 timeout=30.0,
             )
         except httpx.RequestError as exc:
-            raise HTTPException(status_code=502, detail=f"Azure inference connection error: {exc}")
+            raise HTTPException(
+                status_code=502, detail=f"Azure inference connection error: {exc}"
+            )
 
     if resp.status_code == 401:
         raise HTTPException(status_code=401, detail="Invalid or expired GitHub token.")
     if resp.status_code == 429:
-        raise HTTPException(status_code=429, detail="Rate limit reached — please try again shortly.")
+        raise HTTPException(
+            status_code=429, detail="Rate limit reached — please try again shortly."
+        )
     if not resp.is_success:
-        raise HTTPException(status_code=502, detail=f"GitHub Models API error: HTTP {resp.status_code}")
+        raise HTTPException(
+            status_code=502, detail=f"GitHub Models API error: HTTP {resp.status_code}"
+        )
 
     data = resp.json()
     return data["choices"][0]["message"]["content"].strip()
@@ -207,7 +228,9 @@ async def _guess_via_copilot(github_token: str, sentence: str) -> str:
             detail="github-copilot-sdk is not installed. Run: pip install github-copilot-sdk",
         )
 
-    print("[COPILOT SDK] Making inference call via github-copilot-sdk (JSON-RPC over stdio)")
+    print(
+        "[COPILOT SDK] Making inference call via github-copilot-sdk (JSON-RPC over stdio)"
+    )
 
     chunks = []
 
@@ -235,7 +258,9 @@ async def _guess_via_copilot(github_token: str, sentence: str) -> str:
         err = str(e)
         print(f"[COPILOT SDK ERROR] {type(e).__name__}: {err}")
         if "401" in err or "unauthorized" in err.lower() or "auth" in err.lower():
-            raise HTTPException(status_code=401, detail="Invalid or expired GitHub token.")
+            raise HTTPException(
+                status_code=401, detail="Invalid or expired GitHub token."
+            )
         raise HTTPException(status_code=502, detail=f"Copilot SDK error: {err}")
 
     return "".join(chunks)
@@ -244,6 +269,7 @@ async def _guess_via_copilot(github_token: str, sentence: str) -> str:
 # ---------------------------------------------------------------------------
 # Routes
 # ---------------------------------------------------------------------------
+
 
 @app.get("/", response_class=HTMLResponse)
 async def serve_index():
@@ -255,9 +281,13 @@ async def serve_index():
 async def guess_bands(body: GuessBandsRequest):
     github_token = await _resolve_github_token(body.github_token)
     if not body.sentence.strip():
-        raise HTTPException(status_code=400, detail="Please write something about yourself.")
+        raise HTTPException(
+            status_code=400, detail="Please write something about yourself."
+        )
     if len(body.sentence) > 2000:
-        raise HTTPException(status_code=400, detail="Sentence too long (max 2000 characters).")
+        raise HTTPException(
+            status_code=400, detail="Sentence too long (max 2000 characters)."
+        )
 
     try:
         if body.mode == "azure":
@@ -271,9 +301,13 @@ async def guess_bands(body: GuessBandsRequest):
     except Exception as e:
         err = str(e)
         if "401" in err or "Unauthorized" in err or "authentication" in err.lower():
-            raise HTTPException(status_code=401, detail="Invalid or expired GitHub token.")
+            raise HTTPException(
+                status_code=401, detail="Invalid or expired GitHub token."
+            )
         if "429" in err or "rate limit" in err.lower():
-            raise HTTPException(status_code=429, detail="Rate limit reached — please try again shortly.")
+            raise HTTPException(
+                status_code=429, detail="Rate limit reached — please try again shortly."
+            )
         raise HTTPException(status_code=502, detail=f"Inference error: {err}")
 
     try:
@@ -318,4 +352,6 @@ async def submit_feedback(body: SubmitFeedbackRequest):
         logger.warning("feedback_failed", error=str(e))
         return SubmitFeedbackResponse(success=False, message=str(e))
 
-    return SubmitFeedbackResponse(success=True, message="Feedback submitted successfully.")
+    return SubmitFeedbackResponse(
+        success=True, message="Feedback submitted successfully."
+    )

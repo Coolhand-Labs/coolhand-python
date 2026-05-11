@@ -2,12 +2,14 @@
 
 from coolhand.client import (
     CoolhandClient,
+    _DEFAULT_BASE_URL,
     _get_default_config,
     _mask_value,
     _parse_body,
     _sanitize_headers,
     _sanitize_url,
     _to_iso8601,
+    _validate_base_url,
     get_instance,
     initialize,
     set_instance,
@@ -211,6 +213,72 @@ class TestGetDefaultConfig:
         config = _get_default_config()
         assert config["session_id"].startswith("session_")
 
+    def test_base_url_not_set_returns_none(self, monkeypatch):
+        """base_url is None when COOLHAND_BASE_URL is unset."""
+        monkeypatch.delenv("COOLHAND_BASE_URL", raising=False)
+        config = _get_default_config()
+        assert config["base_url"] is None
+
+    def test_base_url_from_env(self, monkeypatch):
+        """base_url is read from COOLHAND_BASE_URL env var."""
+        monkeypatch.setenv("COOLHAND_BASE_URL", "https://staging.coolhandlabs.com")
+        config = _get_default_config()
+        assert config["base_url"] == "https://staging.coolhandlabs.com"
+
+
+class TestValidateBaseUrl:
+    """Tests for _validate_base_url helper."""
+
+    def test_none_returns_default(self):
+        assert _validate_base_url(None) == _DEFAULT_BASE_URL
+
+    def test_empty_string_returns_default(self):
+        assert _validate_base_url("") == _DEFAULT_BASE_URL
+
+    def test_https_production_url_accepted(self):
+        assert _validate_base_url("https://coolhandlabs.com") == "https://coolhandlabs.com"
+
+    def test_https_custom_host_accepted(self):
+        assert _validate_base_url("https://staging.myco.com") == "https://staging.myco.com"
+
+    def test_trailing_slash_stripped(self):
+        assert _validate_base_url("https://coolhandlabs.com/") == "https://coolhandlabs.com"
+
+    def test_multiple_trailing_slashes_stripped(self):
+        assert _validate_base_url("https://coolhandlabs.com///") == "https://coolhandlabs.com"
+
+    def test_http_localhost_accepted(self):
+        assert _validate_base_url("http://localhost") == "http://localhost"
+
+    def test_http_localhost_with_port_accepted(self):
+        assert _validate_base_url("http://localhost:8080") == "http://localhost:8080"
+
+    def test_http_127_accepted(self):
+        assert _validate_base_url("http://127.0.0.1") == "http://127.0.0.1"
+
+    def test_http_127_with_port_accepted(self):
+        assert _validate_base_url("http://127.0.0.1:3000") == "http://127.0.0.1:3000"
+
+    def test_http_remote_host_raises(self):
+        import pytest
+        with pytest.raises(ValueError, match="https://"):
+            _validate_base_url("http://example.com")
+
+    def test_http_private_ip_raises(self):
+        import pytest
+        with pytest.raises(ValueError):
+            _validate_base_url("http://192.168.1.100")
+
+    def test_non_http_scheme_raises(self):
+        import pytest
+        with pytest.raises(ValueError):
+            _validate_base_url("ftp://files.example.com")
+
+    def test_no_scheme_raises(self):
+        import pytest
+        with pytest.raises(ValueError):
+            _validate_base_url("coolhandlabs.com")
+
 
 class TestCoolhandClient:
     """Tests for CoolhandClient class."""
@@ -377,6 +445,28 @@ class TestCoolhandClient:
         client.shutdown()
         assert len(client._queue) == 0
 
+    def test_default_base_url_is_production(self, reset_global_instance, monkeypatch):
+        """Client resolves to production base URL by default."""
+        monkeypatch.delenv("COOLHAND_BASE_URL", raising=False)
+        client = CoolhandClient()
+        assert client._base_url == _DEFAULT_BASE_URL
+
+    def test_custom_base_url_via_config(self, reset_global_instance):
+        """Client accepts custom base_url via config dict."""
+        client = CoolhandClient(config={"base_url": "https://staging.coolhandlabs.com"})
+        assert client._base_url == "https://staging.coolhandlabs.com"
+
+    def test_custom_base_url_via_kwarg(self, reset_global_instance):
+        """Client accepts custom base_url via kwarg."""
+        client = CoolhandClient(base_url="https://staging.coolhandlabs.com")
+        assert client._base_url == "https://staging.coolhandlabs.com"
+
+    def test_invalid_base_url_raises_at_construction(self, reset_global_instance):
+        """Invalid base_url raises ValueError at construction time."""
+        import pytest
+        with pytest.raises(ValueError):
+            CoolhandClient(base_url="http://example.com")
+
 
 class TestGlobalInstanceFunctions:
     """Tests for global instance management functions."""
@@ -527,6 +617,28 @@ class TestFlushAPISubmission:
             mock_flush.return_value = True
             client.log_interaction(mock_request_data, mock_response_data)
             mock_flush.assert_called_once()
+
+    def test_flush_uses_custom_base_url(self, reset_global_instance):
+        """flush POSTs to custom base_url when configured."""
+        from unittest.mock import MagicMock, patch
+
+        client = CoolhandClient(
+            auto_submit=False,
+            api_key="real-api-key-12345",
+            base_url="https://staging.coolhandlabs.com",
+        )
+        client._queue.append({"id": "test-id", "method": "post", "url": "test"})
+
+        with patch("coolhand.client.urlopen") as mock:
+            mock_response = MagicMock()
+            mock_response.status = 201
+            mock_response.__enter__ = MagicMock(return_value=mock_response)
+            mock_response.__exit__ = MagicMock(return_value=False)
+            mock.return_value = mock_response
+            client.flush()
+
+        request_obj = mock.call_args[0][0]
+        assert "staging.coolhandlabs.com" in request_obj.full_url
 
 
 class TestGeminiCapture:

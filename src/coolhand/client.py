@@ -29,7 +29,35 @@ SENSITIVE_HEADERS = [
 SENSITIVE_QUERY_PARAMS = {"key", "api_key", "apikey", "token", "access_token", "secret"}
 
 
-BASE_URL = "https://coolhandlabs.com"
+_DEFAULT_BASE_URL = "https://coolhandlabs.com"
+_ALLOWED_LOCAL_HOSTS = {"localhost", "127.0.0.1"}
+
+
+def _validate_base_url(url: Optional[str]) -> str:
+    """Validate and normalize a base_url value.
+
+    Accepts https:// (any host) or http://localhost / http://127.0.0.1 for
+    local dev. Rejects all other http:// URLs and non-http(s) schemes.
+    Returns the URL with trailing slashes stripped.
+    """
+    if url is None or url == "":
+        return _DEFAULT_BASE_URL
+    url = url.rstrip("/")
+    parsed = urlparse(url)
+    scheme = parsed.scheme.lower()
+    host = parsed.hostname or ""
+    if scheme == "https":
+        return url
+    if scheme == "http":
+        if host in _ALLOWED_LOCAL_HOSTS:
+            return url
+        raise ValueError(
+            f"base_url with http:// is only allowed for localhost or 127.0.0.1, "
+            f"got {host!r}. Use https:// for remote hosts."
+        )
+    raise ValueError(
+        f"base_url must use https:// (or http:// for localhost/127.0.0.1), got scheme {scheme!r}."
+    )
 
 
 def _get_default_config() -> Config:
@@ -39,6 +67,7 @@ def _get_default_config() -> Config:
         "silent": os.getenv("COOLHAND_SILENT", "true").lower() == "true",
         "auto_submit": True,
         "session_id": f"session_{int(time.time() * 1000)}",
+        "base_url": os.getenv("COOLHAND_BASE_URL") or None,
     }
 
 
@@ -124,6 +153,7 @@ class CoolhandClient:
             self.config.update(config)
         self.config.update(kwargs)
 
+        self._base_url = _validate_base_url(self.config.get("base_url"))
         self._queue: List[Dict[str, Any]] = []
         self._interaction_count = 0
 
@@ -204,7 +234,7 @@ class CoolhandClient:
                 }
 
                 request = Request(
-                    url=f"{BASE_URL}/api/v2/llm_request_logs",
+                    url=f"{self._base_url}/api/v2/llm_request_logs",
                     data=json.dumps(payload, default=str).encode("utf-8"),
                     headers={
                         "X-API-Key": api_key,

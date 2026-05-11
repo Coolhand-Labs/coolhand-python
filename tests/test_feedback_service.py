@@ -76,6 +76,33 @@ class TestFeedbackServiceInit:
         assert service.api_key == "env-key-12345"
         assert service.silent is False
 
+    def test_init_base_url_defaults_to_production(self, monkeypatch):
+        """Default base_url resolves to production host."""
+        monkeypatch.delenv("COOLHAND_BASE_URL", raising=False)
+        service = FeedbackService(api_key="key")
+        assert service._base_url == "https://coolhandlabs.com"
+
+    def test_init_base_url_via_config(self):
+        """base_url can be set via config dict."""
+        service = FeedbackService(config={"api_key": "key", "base_url": "https://staging.coolhandlabs.com"})
+        assert service._base_url == "https://staging.coolhandlabs.com"
+
+    def test_init_base_url_via_kwarg(self):
+        """base_url can be set via kwarg."""
+        service = FeedbackService(api_key="key", base_url="https://staging.coolhandlabs.com")
+        assert service._base_url == "https://staging.coolhandlabs.com"
+
+    def test_init_base_url_from_env(self, monkeypatch):
+        """base_url is read from COOLHAND_BASE_URL env var."""
+        monkeypatch.setenv("COOLHAND_BASE_URL", "https://staging.coolhandlabs.com")
+        service = FeedbackService(api_key="key")
+        assert service._base_url == "https://staging.coolhandlabs.com"
+
+    def test_init_invalid_base_url_raises(self):
+        """Invalid base_url raises ValueError at construction time."""
+        with pytest.raises(ValueError):
+            FeedbackService(api_key="key", base_url="http://example.com")
+
 
 class TestCreateFeedback:
     """Test FeedbackService.create_feedback method."""
@@ -203,6 +230,19 @@ class TestCreateFeedback:
         feedback_service.create_feedback(feedback)
 
         assert "No matching field provided" in caplog.text
+
+    def test_create_feedback_uses_custom_base_url(self, mock_feedback_urlopen):
+        """create_feedback POSTs to custom base_url when configured."""
+        service = FeedbackService(
+            api_key="real-api-key-12345",
+            base_url="https://staging.coolhandlabs.com",
+        )
+        feedback: FeedbackData = {"llm_request_log_id": 1, "like": True}
+
+        service.create_feedback(feedback)
+
+        request_obj = mock_feedback_urlopen.call_args[0][0]
+        assert "staging.coolhandlabs.com" in request_obj.full_url
 
 
 class TestFeedbackServiceHTTPErrors:

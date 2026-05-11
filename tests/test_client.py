@@ -396,6 +396,7 @@ class TestCoolhandClient:
     def test_base_url_invalid_scheme_raises(self, reset_global_instance):
         """Non-https base_url (not localhost) raises ValueError."""
         import pytest
+
         with pytest.raises(ValueError, match="base_url must use https://"):
             CoolhandClient(base_url="http://evil.com")
 

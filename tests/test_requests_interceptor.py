@@ -5,9 +5,8 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 import coolhand.httpx_interceptor as interceptor
-from coolhand.httpx_interceptor import is_patched
+from coolhand.httpx_interceptor import is_patched, set_handler, unpatch
 from coolhand.httpx_interceptor import patch as patch_all
-from coolhand.httpx_interceptor import set_handler, unpatch
 
 
 @pytest.fixture(autouse=True)

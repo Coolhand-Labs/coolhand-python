@@ -6,7 +6,7 @@ import os
 import time
 import uuid
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional, Union
+from typing import Any
 from urllib.error import HTTPError, URLError
 from urllib.parse import parse_qs, urlencode, urlparse, urlunparse
 from urllib.request import Request, urlopen
@@ -49,7 +49,7 @@ def _mask_value(value: str) -> str:
     return f"{value[:4]}{'*' * (len(value) - 8)}{value[-4:]}"
 
 
-def _sanitize_headers(headers: Dict[str, str]) -> Dict[str, str]:
+def _sanitize_headers(headers: dict[str, str]) -> dict[str, str]:
     """Sanitize sensitive headers."""
     result = {}
     for key, value in headers.items():
@@ -79,7 +79,7 @@ def _sanitize_url(url: str) -> str:
         return url
 
 
-def _parse_body(body: Optional[Union[str, bytes, Dict]]) -> Optional[Union[str, Dict]]:
+def _parse_body(body: str | bytes | dict | None) -> str | dict | None:
     """Parse body to JSON object if possible, otherwise return as string."""
     if body is None:
         return None
@@ -117,14 +117,14 @@ def _to_iso8601(timestamp: float) -> str:
 class CoolhandClient:
     """Simple client for submitting interactions to Coolhand."""
 
-    def __init__(self, config: Optional[Config] = None, **kwargs):
+    def __init__(self, config: Config | None = None, **kwargs):
         """Initialize the client."""
         self.config = _get_default_config()
         if config:
             self.config.update(config)
         self.config.update(kwargs)
 
-        self._queue: List[Dict[str, Any]] = []
+        self._queue: list[dict[str, Any]] = []
         self._interaction_count = 0
 
         if not self.config.get("silent"):
@@ -137,8 +137,8 @@ class CoolhandClient:
     def log_interaction(
         self,
         request: RequestData,
-        response: Optional[ResponseData] = None,
-        error: Optional[str] = None,
+        response: ResponseData | None = None,
+        error: str | None = None,
     ) -> None:
         """Log an API interaction in flat format matching Ruby/Node SDKs."""
         self._interaction_count += 1
@@ -232,7 +232,7 @@ class CoolhandClient:
         self._queue.clear()
         return success_count == len(self._queue)
 
-    def get_stats(self) -> Dict[str, Any]:
+    def get_stats(self) -> dict[str, Any]:
         """Get client statistics."""
         # Check if httpx is patched
         patched_libs = []
@@ -277,10 +277,10 @@ class CoolhandClient:
 
 
 # Global instance
-_instance: Optional[CoolhandClient] = None
+_instance: CoolhandClient | None = None
 
 
-def get_instance() -> Optional[CoolhandClient]:
+def get_instance() -> CoolhandClient | None:
     """Get the global client instance."""
     return _instance
 
@@ -291,7 +291,7 @@ def set_instance(instance: CoolhandClient) -> None:
     _instance = instance
 
 
-def initialize(config: Optional[Config] = None, **kwargs) -> CoolhandClient:
+def initialize(config: Config | None = None, **kwargs) -> CoolhandClient:
     """Initialize the global client."""
     global _instance
     if _instance is None:

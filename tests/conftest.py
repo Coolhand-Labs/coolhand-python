@@ -1,19 +1,9 @@
 """Pytest fixtures for Coolhand tests."""
 
-import sys
 import time
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-
-# AsyncMock is only available in Python 3.8+
-if sys.version_info >= (3, 8):
-    from unittest.mock import AsyncMock
-else:
-    # Create a simple AsyncMock for Python 3.7
-    class AsyncMock(MagicMock):
-        async def __call__(self, *args, **kwargs):
-            return super().__call__(*args, **kwargs)
 
 
 @pytest.fixture

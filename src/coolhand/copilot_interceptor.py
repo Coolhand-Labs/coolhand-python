@@ -3,7 +3,8 @@
 import logging
 import threading
 import time
-from typing import Any, Callable, Dict, List, Optional
+from collections.abc import Callable
+from typing import Any
 
 from .types import RequestData, ResponseData
 
@@ -12,17 +13,15 @@ logger = logging.getLogger(__name__)
 COPILOT_INTERCEPTOR_PENDING_TTL_SECONDS = 300
 
 _patched = False
-_original_request: Optional[Callable] = None
-_original_handle_message: Optional[Callable] = None
-_handler: Optional[
-    Callable[[RequestData, Optional[ResponseData], Optional[str]], None]
-] = None
+_original_request: Callable | None = None
+_original_handle_message: Callable | None = None
+_handler: Callable[[RequestData, ResponseData | None, str | None], None] | None = None
 
 # Per-session FIFO queues keyed by sessionId.  Entries are pushed here BEFORE
 # the await in patched_request so that _handle_message can correlate an
 # assistant.message notification that arrives on the reader thread before the
 # event loop schedules the awaiting coroutine's resumption.
-_pre_pending: Dict[Optional[str], List[Dict[str, Any]]] = {}
+_pre_pending: dict[str | None, list[dict[str, Any]]] = {}
 
 # session.create params keyed by sessionId — provides system prompt and other
 # session-level config that is not repeated in subsequent session.send calls.
@@ -30,17 +29,17 @@ _pre_pending: Dict[Optional[str], List[Dict[str, Any]]] = {}
 # Note: entries are evicted after COPILOT_INTERCEPTOR_PENDING_TTL_SECONDS (300s).
 # Sessions longer than this TTL will have their system prompt absent from
 # session.send bodies logged after eviction — a logging gap, not a functional bug.
-_session_params: Dict[Optional[str], Dict[str, Any]] = {}
+_session_params: dict[str | None, dict[str, Any]] = {}
 
 # Model name keyed by sessionId, updated on session.model.change notifications.
 # Stored as {"model": str, "start": float}; timestamp refreshes on each change.
 # Same TTL caveat as _session_params applies.
-_session_models: Dict[Optional[str], Dict[str, Any]] = {}
+_session_models: dict[str | None, dict[str, Any]] = {}
 
 _lock = threading.Lock()
 
 
-def _remove_from_pre_pending(session_id: Optional[str], entry: Dict[str, Any]) -> bool:
+def _remove_from_pre_pending(session_id: str | None, entry: dict[str, Any]) -> bool:
     """Remove entry from _pre_pending by object identity. Returns True if removed.
 
     Caller must hold _lock.
@@ -101,7 +100,7 @@ def _sweep_stale() -> None:
 
 
 def set_handler(
-    handler: Callable[[RequestData, Optional[ResponseData], Optional[str]], None],
+    handler: Callable[[RequestData, ResponseData | None, str | None], None],
 ) -> None:
     """Set the handler for captured Copilot interactions."""
     global _handler
@@ -187,7 +186,7 @@ def patch() -> bool:
         # _handle_message synchronously between resolving the send-response
         # Future and the event loop scheduling this coroutine's resumption.
         # Storing here ensures _handle_message finds the entry at that moment.
-        entry: Dict[str, Any] = {"req_data": req_data, "start": start}
+        entry: dict[str, Any] = {"req_data": req_data, "start": start}
         with _lock:
             _pre_pending.setdefault(session_id, []).append(entry)
 

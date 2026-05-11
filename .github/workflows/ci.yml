@@ -64,14 +64,11 @@ jobs:
           python -m pip install --upgrade pip
           pip install -e ".[dev]"
 
-      - name: Run flake8
-        run: flake8 src/ tests/ --max-line-length=100 --extend-ignore=E203,W503
+      - name: Run ruff (lint)
+        run: ruff check src/ tests/
 
-      - name: Run black (check)
-        run: black --check src/ tests/
-
-      - name: Run isort (check)
-        run: isort --check-only src/ tests/
+      - name: Run ruff (format check)
+        run: ruff format --check src/ tests/
 
       - name: Run mypy
         run: mypy src/coolhand --ignore-missing-imports

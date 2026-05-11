@@ -85,10 +85,7 @@ def simulate_anthropic_request():
         response_status=200,
         response_body={
             "content": [
-                {
-                    "text": "Quantum computing is a revolutionary "
-                    "computing paradigm..."
-                }
+                {"text": "Quantum computing is a revolutionary computing paradigm..."}
             ],
             "usage": {"input_tokens": 10, "output_tokens": 25},
         },

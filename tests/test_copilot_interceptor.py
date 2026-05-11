@@ -7,15 +7,6 @@ from unittest.mock import MagicMock
 
 import pytest
 
-if sys.version_info >= (3, 8):
-    from unittest.mock import AsyncMock
-else:
-
-    class AsyncMock(MagicMock):
-        async def __call__(self, *args, **kwargs):
-            return super().__call__(*args, **kwargs)
-
-
 # ---------------------------------------------------------------------------
 # Helpers: build and inject a fake copilot SDK into sys.modules
 # ---------------------------------------------------------------------------

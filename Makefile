@@ -8,8 +8,8 @@ help:
 	@echo "  clean        Clean build artifacts and cache"
 	@echo "  test         Run tests"
 	@echo "  test-cov     Run tests with coverage"
-	@echo "  lint         Run linting (flake8)"
-	@echo "  format       Format code (black + isort)"
+	@echo "  lint         Run linting (ruff)"
+	@echo "  format       Format code (ruff)"
 	@echo "  type-check   Run type checking (mypy)"
 	@echo "  build        Build package"
 	@echo "  publish      Publish package to PyPI"
@@ -48,11 +48,11 @@ test-cov:
 
 # Code quality
 lint:
-	flake8 src tests examples
+	ruff check src tests examples
 
 format:
-	black src tests examples
-	isort src tests examples
+	ruff check --fix src tests examples
+	ruff format src tests examples
 
 type-check:
 	mypy src

@@ -84,7 +84,9 @@ class TestFeedbackServiceInit:
 
     def test_init_base_url_via_config(self):
         """base_url can be set via config dict."""
-        service = FeedbackService(config={"api_key": "key", "base_url": "https://staging.coolhandlabs.com"})
+        service = FeedbackService(
+            config={"api_key": "key", "base_url": "https://staging.coolhandlabs.com"}
+        )
         assert service._base_url == "https://staging.coolhandlabs.com"
 
     def test_init_base_url_via_kwarg(self):

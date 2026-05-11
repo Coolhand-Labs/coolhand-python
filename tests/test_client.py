@@ -1,8 +1,8 @@
 """Tests for coolhand.client module."""
 
 from coolhand.client import (
-    CoolhandClient,
     _DEFAULT_BASE_URL,
+    CoolhandClient,
     _get_default_config,
     _mask_value,
     _parse_body,

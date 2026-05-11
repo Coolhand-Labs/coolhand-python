@@ -1,5 +1,8 @@
 """Tests for coolhand.client module."""
 
+import pytest
+
+from coolhand._utils import _validate_base_url
 from coolhand.client import (
     CoolhandClient,
     _get_default_config,
@@ -195,6 +198,44 @@ class TestToIso8601:
         assert result.endswith("Z")
 
 
+class TestValidateBaseUrl:
+    """Tests for _validate_base_url helper function."""
+
+    def test_accepts_https_url(self):
+        """https:// URLs are accepted as-is."""
+        assert (
+            _validate_base_url("https://coolhandlabs.com") == "https://coolhandlabs.com"
+        )
+
+    def test_strips_trailing_slash(self):
+        """Trailing slashes are stripped from the URL."""
+        assert _validate_base_url("https://example.com/") == "https://example.com"
+        assert _validate_base_url("https://example.com///") == "https://example.com"
+
+    def test_accepts_localhost_http(self):
+        """http://localhost is accepted for local dev."""
+        assert _validate_base_url("http://localhost:8080") == "http://localhost:8080"
+
+    def test_accepts_127_0_0_1_http(self):
+        """http://127.0.0.1 is accepted for local dev."""
+        assert _validate_base_url("http://127.0.0.1:3000") == "http://127.0.0.1:3000"
+
+    def test_rejects_plain_http(self):
+        """http:// on non-localhost hosts raises ValueError."""
+        with pytest.raises(ValueError, match="must use https://"):
+            _validate_base_url("http://example.com")
+
+    def test_rejects_no_scheme(self):
+        """URL without a scheme raises ValueError."""
+        with pytest.raises(ValueError, match="must use https://"):
+            _validate_base_url("example.com")
+
+    def test_rejects_https_with_empty_hostname(self):
+        """https:// with no hostname raises ValueError."""
+        with pytest.raises(ValueError, match="must use https://"):
+            _validate_base_url("https://")
+
+
 class TestGetDefaultConfig:
     """Tests for _get_default_config function."""
 
@@ -210,6 +251,18 @@ class TestGetDefaultConfig:
         """Session ID is generated with timestamp."""
         config = _get_default_config()
         assert config["session_id"].startswith("session_")
+
+    def test_reads_base_url_env_var(self, monkeypatch):
+        """COOLHAND_BASE_URL env var is read into config."""
+        monkeypatch.setenv("COOLHAND_BASE_URL", "https://custom.example.com")
+        config = _get_default_config()
+        assert config["base_url"] == "https://custom.example.com"
+
+    def test_base_url_none_when_unset(self, monkeypatch):
+        """base_url is None when COOLHAND_BASE_URL is not set."""
+        monkeypatch.delenv("COOLHAND_BASE_URL", raising=False)
+        config = _get_default_config()
+        assert config["base_url"] is None
 
 
 class TestCoolhandClient:
@@ -514,6 +567,33 @@ class TestFlushAPISubmission:
 
         assert "Unexpected error submitting interaction" in caplog.text
         assert len(client._queue) == 0
+
+    def test_flush_uses_custom_base_url(self, reset_global_instance):
+        """flush POSTs to the configured base_url instead of the default."""
+        from unittest.mock import MagicMock, patch
+
+        client = CoolhandClient(
+            auto_submit=False,
+            api_key="real-api-key-12345",
+            base_url="https://self-hosted.example.com",
+        )
+        client._queue.append({"id": "test-id", "method": "post", "url": "test"})
+
+        with patch("coolhand.client.urlopen") as mock_urlopen:
+            mock_response = MagicMock()
+            mock_response.status = 201
+            mock_response.__enter__ = MagicMock(return_value=mock_response)
+            mock_response.__exit__ = MagicMock(return_value=False)
+            mock_urlopen.return_value = mock_response
+            client.flush()
+
+        called_url = mock_urlopen.call_args[0][0].full_url
+        assert called_url.startswith("https://self-hosted.example.com")
+
+    def test_client_rejects_invalid_base_url(self, reset_global_instance):
+        """CoolhandClient raises ValueError for non-https base_url."""
+        with pytest.raises(ValueError, match="must use https://"):
+            CoolhandClient(base_url="http://remote-host.example.com")
 
     def test_log_interaction_with_auto_submit(
         self, mock_request_data, mock_response_data, reset_global_instance

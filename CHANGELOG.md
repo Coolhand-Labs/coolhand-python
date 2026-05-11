@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.5.0] - Unreleased
+
+### Added
+
+- **`base_url` configuration and `COOLHAND_BASE_URL` env var** — redirect all log and feedback POSTs to a self-hosted endpoint instead of `coolhandlabs.com`. Accepts `https://` URLs; `http://localhost` and `http://127.0.0.1` are also accepted for local development. Non-`https://` remote URLs raise `ValueError` at initialisation time. Trailing slashes are normalised automatically. (#21)
+
 ## [0.4.0] - 2026-04-30
 
 ### Added

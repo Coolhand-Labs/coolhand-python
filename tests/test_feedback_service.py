@@ -459,7 +459,9 @@ class TestFeedbackServiceBaseUrl:
 
     def test_base_url_from_config_dict(self):
         """base_url in config dict is used."""
-        service = FeedbackService(config={"api_key": "key", "base_url": "https://custom.example.com"})
+        service = FeedbackService(
+            config={"api_key": "key", "base_url": "https://custom.example.com"}
+        )
         assert service.config["base_url"] == "https://custom.example.com"
 
     def test_base_url_trailing_slash_normalized(self):
@@ -476,12 +478,15 @@ class TestFeedbackServiceBaseUrl:
     def test_constructor_overrides_env(self, monkeypatch):
         """Explicit base_url overrides COOLHAND_BASE_URL."""
         monkeypatch.setenv("COOLHAND_BASE_URL", "https://env.example.com")
-        service = FeedbackService(api_key="key", base_url="https://explicit.example.com")
+        service = FeedbackService(
+            api_key="key", base_url="https://explicit.example.com"
+        )
         assert service.config["base_url"] == "https://explicit.example.com"
 
     def test_invalid_base_url_raises(self):
         """Non-https base_url raises ValueError."""
         import pytest
+
         with pytest.raises(ValueError, match="must use https://"):
             FeedbackService(api_key="key", base_url="http://evil.example.com")
 

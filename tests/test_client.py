@@ -559,7 +559,10 @@ class TestNormalizeBaseUrl:
         assert _normalize_base_url("https://example.com") == "https://example.com"
 
     def test_accepts_https_with_path(self):
-        assert _normalize_base_url("https://feedback.example.com") == "https://feedback.example.com"
+        assert (
+            _normalize_base_url("https://feedback.example.com")
+            == "https://feedback.example.com"
+        )
 
     def test_strips_trailing_slash(self):
         assert _normalize_base_url("https://example.com/") == "https://example.com"
@@ -575,34 +578,40 @@ class TestNormalizeBaseUrl:
 
     def test_rejects_plain_http(self):
         import pytest
+
         with pytest.raises(ValueError, match="must use https://"):
             _normalize_base_url("http://example.com")
 
     def test_rejects_ftp(self):
         import pytest
+
         with pytest.raises(ValueError, match="must use https://"):
             _normalize_base_url("ftp://example.com")
 
     def test_rejects_empty_string(self):
         import pytest
+
         with pytest.raises(ValueError, match="must use https://"):
             _normalize_base_url("")
 
     def test_rejects_localhost_subdomain_spoof(self):
         """http://localhost.attacker.com must not pass the localhost check."""
         import pytest
+
         with pytest.raises(ValueError, match="must use https://"):
             _normalize_base_url("http://localhost.attacker.com")
 
     def test_rejects_127_subdomain_spoof(self):
         """http://127.0.0.1.attacker.com must not pass the 127.0.0.1 check."""
         import pytest
+
         with pytest.raises(ValueError, match="must use https://"):
             _normalize_base_url("http://127.0.0.1.attacker.com")
 
     def test_rejects_localhost_at_spoof(self):
         """http://localhost@attacker.com userinfo bypass is rejected."""
         import pytest
+
         with pytest.raises(ValueError, match="must use https://"):
             _normalize_base_url("http://localhost@attacker.com")
 
@@ -653,6 +662,7 @@ class TestBaseUrlConfig:
     def test_invalid_base_url_raises(self, reset_global_instance):
         """Non-https base_url raises ValueError."""
         import pytest
+
         with pytest.raises(ValueError, match="must use https://"):
             CoolhandClient(base_url="http://evil.example.com", auto_submit=False)
 

@@ -30,7 +30,6 @@ SENSITIVE_HEADERS = [
 SENSITIVE_QUERY_PARAMS = {"key", "api_key", "apikey", "token", "access_token", "secret"}
 
 
-
 def _get_default_config() -> Config:
     """Get default configuration from environment."""
     return {

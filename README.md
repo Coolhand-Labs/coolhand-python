@@ -57,6 +57,7 @@ response = client.chat.completions.create(
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
 | `COOLHAND_API_KEY` | Yes | - | Your Coolhand API key for authentication |
+| `COOLHAND_BASE_URL` | No | `https://coolhandlabs.com` | Override the API host (self-hosted deployments) |
 | `COOLHAND_SILENT` | No | `true` | Set to `false` for verbose logging output |
 
 ### Manual Configuration
@@ -69,6 +70,32 @@ coolhand_client = Coolhand(
     silent=False,  # Enable verbose logging
 )
 ```
+
+### Self-Hosted Deployments
+
+If you run your own Coolhand-compatible backend (e.g. for compliance or data-residency requirements), point the SDK at your host with `base_url`:
+
+```python
+from coolhand import Coolhand
+
+coolhand_client = Coolhand(
+    api_key='your-api-key',
+    base_url='https://feedback.example.com',  # must use https://
+)
+```
+
+Or via environment variable (useful for 12-factor deployments):
+
+```bash
+export COOLHAND_API_KEY=your-api-key
+export COOLHAND_BASE_URL=https://feedback.example.com
+```
+
+```python
+import coolhand  # picks up COOLHAND_BASE_URL automatically
+```
+
+The SDK rejects non-`https://` URLs by default. `http://localhost` and `http://127.0.0.1` are allowed for local development only.
 
 ## Usage Examples
 

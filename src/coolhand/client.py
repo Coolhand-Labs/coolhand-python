@@ -56,7 +56,8 @@ def _validate_base_url(url: str | None) -> str:
             f"got {host!r}. Use https:// for remote hosts."
         )
     raise ValueError(
-        f"base_url must use https:// (or http:// for localhost/127.0.0.1), got scheme {scheme!r}."
+        f"base_url must use https:// (or http:// for localhost/127.0.0.1),"
+        f" got scheme {scheme!r}."
     )
 
 

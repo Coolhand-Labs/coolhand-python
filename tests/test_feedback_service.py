@@ -178,15 +178,18 @@ class TestCreateFeedback:
     def test_create_feedback_explicit_sentiment_not_overridden_by_like(
         self, feedback_service, mock_feedback_urlopen
     ):
-        """Explicit sentiment takes precedence — like does not override it."""
+        """Explicit sentiment takes precedence; like is stripped from wire payload."""
         with warnings.catch_warnings():
             warnings.simplefilter("error", DeprecationWarning)
             feedback_service.create_feedback(
                 {"llm_request_log_id": 12345, "like": True, "sentiment": "neutral"}
             )
 
-        payload = json.loads(mock_feedback_urlopen.call_args[0][0].data.decode("utf-8"))
-        assert payload["llm_request_log_feedback"]["sentiment"] == "neutral"
+        fb = json.loads(mock_feedback_urlopen.call_args[0][0].data.decode("utf-8"))[
+            "llm_request_log_feedback"
+        ]
+        assert fb["sentiment"] == "neutral"
+        assert "like" not in fb  # like stripped even when sentiment is already set
 
     def test_create_feedback_like_with_sentiment_no_warning(
         self, feedback_service, mock_feedback_urlopen
@@ -466,6 +469,22 @@ class TestFeedbackServiceLogging:
         assert "..." in caplog.text
         # Should not contain the full 150 char explanation
         assert long_explanation not in caplog.text
+
+    def test_log_feedback_info_like_auto_conversion_logs_sentiment_string(
+        self, mock_config, mock_feedback_urlopen, caplog
+    ):
+        """When like is auto-converted, the log reflects the sent sentiment string."""
+        import logging
+
+        caplog.set_level(logging.INFO)
+        mock_config["silent"] = False
+        service = FeedbackService(config=mock_config)
+
+        with pytest.warns(DeprecationWarning):
+            service.create_feedback({"llm_request_log_id": 12345, "like": True})
+
+        assert "Sentiment: like" in caplog.text
+        assert "thumbs up" not in caplog.text
 
     def test_log_feedback_info_without_like_uses_sentiment(self, mock_config, caplog):
         """_log_feedback_info uses sentiment string when like is absent."""

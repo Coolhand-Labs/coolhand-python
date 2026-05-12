@@ -151,14 +151,14 @@ class FeedbackService:
             feedback_with_collector["sentiment"] = (
                 "like" if feedback_with_collector["like"] else "dislike"
             )
-            feedback_with_collector.pop("like")
+        feedback_with_collector.pop("like", None)  # always strip deprecated field
         feedback_with_collector.setdefault("collector", self._get_collector_string())
 
         # Build payload
         payload = {"llm_request_log_feedback": feedback_with_collector}
 
-        # Log feedback info
-        self._log_feedback_info(feedback)
+        # Log the converted payload so the log matches what was sent
+        self._log_feedback_info(feedback_with_collector)
 
         # Send request
         try:

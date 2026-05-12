@@ -3,6 +3,7 @@
 import json
 import logging
 import os
+import warnings
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
@@ -26,7 +27,7 @@ class FeedbackService:
         >>> service = FeedbackService(api_key="your-key")
         >>> response = service.create_feedback({
         ...     "llm_request_log_id": 12345,
-        ...     "like": True,
+        ...     "sentiment": "like",
         ...     "explanation": "Response was accurate and helpful"
         ... })
     """
@@ -73,30 +74,32 @@ class FeedbackService:
         """Submit feedback for an LLM response.
 
         Args:
-            feedback: Feedback data containing at minimum:
-                - like (bool): Required. Thumbs up (True) or down (False).
-                - At least one matching field to identify the LLM request:
-                    - llm_request_log_id: Coolhand log ID (exact match)
-                    - llm_provider_unique_id: Provider's x-request-id (exact match)
-                    - original_output: Original response text (fuzzy match)
-                    - client_unique_id: Your internal identifier
+            feedback: Feedback data. All fields are optional, but at least one
+                matching field should be provided to link the feedback to a log:
+                - llm_request_log_id: Coolhand log ID (exact match)
+                - llm_provider_unique_id: Provider's x-request-id (exact match)
+                - original_output: Original response text (fuzzy match)
+                - client_unique_id: Your internal identifier
 
-                Optional fields:
+                Sentiment fields (both optional, neither required):
+                - sentiment: Preferred. One of "like", "dislike", "neutral".
+                - like (bool): Deprecated — use sentiment instead.
+
+                Other optional fields:
                 - explanation: Why the response was good/bad
                 - revised_output: User's corrected version of the response
                 - creator_unique_id: ID of the user providing feedback
+                - workload_hashid: Associate feedback with a specific workload
+                - collector: Override the SDK-generated collector string
 
         Returns:
             FeedbackResponse with created feedback details, or None on error.
 
-        Raises:
-            ValueError: If 'like' field is missing from feedback.
-
         Example:
-            >>> # Feedback with exact ID match
+            >>> # Feedback with sentiment (preferred)
             >>> service.create_feedback({
             ...     "llm_request_log_id": 12345,
-            ...     "like": False,
+            ...     "sentiment": "dislike",
             ...     "explanation": "Response contained incorrect information",
             ...     "revised_output": "The correct answer is..."
             ... })
@@ -104,13 +107,16 @@ class FeedbackService:
             >>> # Feedback with fuzzy text match
             >>> service.create_feedback({
             ...     "original_output": "The capital of France is London.",
-            ...     "like": False,
+            ...     "sentiment": "dislike",
             ...     "revised_output": "The capital of France is Paris."
             ... })
         """
-        # Validate required field
-        if "like" not in feedback:
-            raise ValueError("'like' field is required in feedback data")
+        if "like" in feedback and "sentiment" not in feedback:
+            warnings.warn(
+                "'like' is deprecated; use 'sentiment' instead",
+                DeprecationWarning,
+                stacklevel=2,
+            )
 
         # Check for at least one matching field
         matching_fields = [
@@ -135,9 +141,18 @@ class FeedbackService:
             logger.warning("No API key configured, feedback will not be submitted")
             return None
 
-        # Add collector to feedback
+        # Convert deprecated like (bool) → sentiment (string) when sentiment is absent.
+        # true → "like", false → "dislike". sentiment takes precedence if both are set.
         feedback_with_collector = dict(feedback)
-        feedback_with_collector["collector"] = self._get_collector_string()
+        if (
+            "like" in feedback_with_collector
+            and "sentiment" not in feedback_with_collector
+        ):
+            feedback_with_collector["sentiment"] = (
+                "like" if feedback_with_collector["like"] else "dislike"
+            )
+            feedback_with_collector.pop("like")
+        feedback_with_collector.setdefault("collector", self._get_collector_string())
 
         # Build payload
         payload = {"llm_request_log_feedback": feedback_with_collector}
@@ -183,11 +198,19 @@ class FeedbackService:
             return
 
         log_id = feedback.get("llm_request_log_id", "N/A")
+        sentiment = feedback.get("sentiment")
         like = feedback.get("like")
-        like_str = "thumbs up" if like else "thumbs down"
+        if sentiment:
+            sentiment_str = sentiment
+        elif like is True:
+            sentiment_str = "thumbs up"
+        elif like is False:
+            sentiment_str = "thumbs down"
+        else:
+            sentiment_str = "unknown"
 
         self._log(f"Creating feedback for LLM Request Log ID: {log_id}")
-        self._log(f"Sentiment: {like_str}")
+        self._log(f"Sentiment: {sentiment_str}")
 
         explanation = feedback.get("explanation")
         if explanation:

@@ -1,6 +1,6 @@
 """Minimal type definitions for Coolhand."""
 
-from typing import Any
+from typing import Any, Literal
 
 from typing_extensions import TypedDict
 
@@ -55,10 +55,13 @@ class FeedbackData(TypedDict, total=False):
     client_unique_id: str | None
 
     # Feedback fields
-    like: bool  # Required: thumbs up (True) or down (False)
+    sentiment: Literal["like", "dislike", "neutral"] | None  # Preferred over `like`
+    like: bool  # Deprecated — use `sentiment` instead
     explanation: str | None  # Why the response was good/bad
     revised_output: str | None  # User's corrected version
     creator_unique_id: str | None  # User who created the feedback
+    collector: str | None  # Collection method / SDK version identifier
+    workload_hashid: str | None  # Associate feedback with a specific workload
 
 
 class FeedbackResponse(TypedDict, total=False):
@@ -66,11 +69,13 @@ class FeedbackResponse(TypedDict, total=False):
 
     id: int
     llm_request_log_id: int
+    sentiment: Literal["like", "dislike", "neutral"] | None
     like: bool
     explanation: str | None
     revised_output: str | None
     llm_provider_unique_id: str | None
     original_output: str | None
     client_unique_id: str | None
+    workload_hashid: str | None
     created_at: str
     updated_at: str

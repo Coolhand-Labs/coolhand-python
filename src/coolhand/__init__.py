@@ -14,6 +14,7 @@ import logging
 from . import copilot_interceptor, httpx_interceptor
 from .client import CoolhandClient, get_instance, initialize, set_instance
 from .feedback_service import FeedbackService, create_feedback, get_feedback_service
+from .httpx_interceptor import DEFAULT_EXCLUDE_API_PATTERNS
 from .types import Config, FeedbackData, FeedbackResponse, RequestData, ResponseData
 from .version import __version__
 
@@ -45,6 +46,9 @@ class Coolhand(CoolhandClient):
         addresses = self.config.get("intercept_addresses")
         if addresses:
             httpx_interceptor.set_intercept_addresses(addresses)
+        exclude_patterns = self.config.get("exclude_api_patterns")
+        if exclude_patterns is not None:
+            httpx_interceptor.set_exclude_api_patterns(exclude_patterns)
         httpx_interceptor.set_handler(self.log_interaction)
         httpx_interceptor.patch()
         copilot_interceptor.set_handler(self.log_interaction)
@@ -133,6 +137,7 @@ __all__ = [
     "__version__",
     "Coolhand",
     "Config",
+    "DEFAULT_EXCLUDE_API_PATTERNS",
     "RequestData",
     "ResponseData",
     "FeedbackData",

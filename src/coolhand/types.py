@@ -35,6 +35,7 @@ class Config(TypedDict, total=False):
     auto_submit: bool
     session_id: str | None
     intercept_addresses: list[str] | None
+    exclude_api_patterns: list[str] | None
 
 
 class FeedbackData(TypedDict, total=False):

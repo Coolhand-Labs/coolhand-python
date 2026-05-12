@@ -1,8 +1,10 @@
 """httpx interceptor for capturing API calls."""
 
+import json
 import logging
 import time
 from collections.abc import Callable
+from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
 
@@ -17,6 +19,7 @@ _original_async_send: Callable | None = None
 _original_requests_send: Callable | None = None
 _handler: Callable[[RequestData, ResponseData | None, str | None], None] | None = None
 _intercept_addresses: list[str] | None = None
+_exclude_api_patterns: list[str] | None = None
 
 
 # Default intercept addresses (domains and path substrings)
@@ -24,16 +27,27 @@ DEFAULT_INTERCEPT_ADDRESSES = [
     "api.openai.com",
     "api.anthropic.com",
     "generativelanguage.googleapis.com",
+    "models.github.ai",
     "models.inference.ai.azure.com",
     ":generateContent",
     ":streamGenerateContent",
 ]
+
+DEFAULT_EXCLUDE_API_PATTERNS: list[str] = json.loads(
+    (Path(__file__).parent / "default_exclude_api_patterns.json").read_text()
+)
 
 
 def set_intercept_addresses(addresses: list[str]) -> None:
     """Set custom intercept addresses (domains and/or path substrings)."""
     global _intercept_addresses
     _intercept_addresses = addresses
+
+
+def set_exclude_api_patterns(patterns: list[str]) -> None:
+    """Set URL substring patterns to exclude from capture (deny-list)."""
+    global _exclude_api_patterns
+    _exclude_api_patterns = patterns
 
 
 def _is_localhost(url: str) -> bool:
@@ -50,6 +64,19 @@ def _is_llm_api(url: str) -> bool:
     try:
         addresses = _intercept_addresses or DEFAULT_INTERCEPT_ADDRESSES
         return any(addr in url for addr in addresses)
+    except Exception:
+        return False
+
+
+def _is_excluded(url: str) -> bool:
+    """Check if URL matches any exclude pattern (deny-list after allow-list)."""
+    try:
+        patterns = (
+            _exclude_api_patterns
+            if _exclude_api_patterns is not None
+            else DEFAULT_EXCLUDE_API_PATTERNS
+        )
+        return any(p in url for p in patterns)
     except Exception:
         return False
 
@@ -105,7 +132,12 @@ def patch() -> bool:
         url = str(request.url)
 
         # Only capture LLM API requests
-        if not _is_llm_api(url) or _is_localhost(url) or not _handler:
+        if (
+            not _is_llm_api(url)
+            or _is_localhost(url)
+            or _is_excluded(url)
+            or not _handler
+        ):
             return _original_send(self, request, **kwargs)
 
         start = time.time()
@@ -141,7 +173,12 @@ def patch() -> bool:
         url = str(request.url)
 
         # Only capture LLM API requests
-        if not _is_llm_api(url) or _is_localhost(url) or not _handler:
+        if (
+            not _is_llm_api(url)
+            or _is_localhost(url)
+            or _is_excluded(url)
+            or not _handler
+        ):
             return await _original_async_send(self, request, **kwargs)
 
         start = time.time()
@@ -266,7 +303,12 @@ def patch() -> bool:
         def patched_requests_send(self, request, **kwargs):
             url = str(request.url or "")
 
-            if not _is_llm_api(url) or _is_localhost(url) or not _handler:
+            if (
+                not _is_llm_api(url)
+                or _is_localhost(url)
+                or _is_excluded(url)
+                or not _handler
+            ):
                 return _original_requests_send(self, request, **kwargs)
 
             start = time.time()
@@ -325,7 +367,7 @@ def patch() -> bool:
 
 def unpatch() -> None:
     """Restore original httpx methods."""
-    global _patched, _original_requests_send
+    global _patched, _original_requests_send, _exclude_api_patterns
 
     if not _patched:
         return
@@ -349,6 +391,7 @@ def unpatch() -> None:
         pass
 
     _original_requests_send = None
+    _exclude_api_patterns = None
     _patched = False
     logger.info("Global HTTP monitoring disabled")
 

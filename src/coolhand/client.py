@@ -12,6 +12,7 @@ from urllib.parse import parse_qs, urlencode, urlparse, urlunparse
 from urllib.request import Request, urlopen
 
 from ._config import _DEFAULT_BASE_URL, _normalize_base_url
+from .httpx_interceptor import DEFAULT_EXCLUDE_API_PATTERNS
 from .types import Config, RequestData, ResponseData
 from .version import __version__
 
@@ -38,6 +39,7 @@ def _get_default_config() -> Config:
         "silent": os.getenv("COOLHAND_SILENT", "true").lower() == "true",
         "auto_submit": True,
         "session_id": f"session_{int(time.time() * 1000)}",
+        "exclude_api_patterns": list(DEFAULT_EXCLUDE_API_PATTERNS),
     }
 
 

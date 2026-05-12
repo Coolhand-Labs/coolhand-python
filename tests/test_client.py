@@ -1,5 +1,8 @@
 """Tests for coolhand.client module."""
 
+import pytest
+
+from coolhand._urls import normalize_base_url
 from coolhand.client import (
     CoolhandClient,
     _get_default_config,
@@ -549,3 +552,130 @@ class TestGeminiCapture:
         assert isinstance(result, dict)
         assert "candidates" in result
         assert result["candidates"][0]["content"]["parts"][0]["text"] == "Hello"
+
+
+class TestNormalizeBaseUrl:
+    """Tests for normalize_base_url helper function."""
+
+    def test_none_returns_none(self):
+        assert normalize_base_url(None) is None
+
+    def test_https_url_accepted(self):
+        assert (
+            normalize_base_url("https://feedback.example.com")
+            == "https://feedback.example.com"
+        )
+
+    def test_https_trailing_slash_stripped(self):
+        assert (
+            normalize_base_url("https://feedback.example.com/")
+            == "https://feedback.example.com"
+        )
+        assert (
+            normalize_base_url("https://feedback.example.com///")
+            == "https://feedback.example.com"
+        )
+
+    def test_http_localhost_accepted(self):
+        assert normalize_base_url("http://localhost") == "http://localhost"
+
+    def test_http_localhost_with_port_accepted(self):
+        assert normalize_base_url("http://localhost:8080") == "http://localhost:8080"
+
+    def test_http_127_accepted(self):
+        assert normalize_base_url("http://127.0.0.1:3000") == "http://127.0.0.1:3000"
+
+    def test_http_other_host_raises(self):
+        with pytest.raises(ValueError, match="must use https://"):
+            normalize_base_url("http://example.com")
+
+    def test_http_localhost_like_hostname_rejected(self):
+        with pytest.raises(ValueError, match="must use https://"):
+            normalize_base_url("http://evil.localhost.com")
+
+    def test_ftp_scheme_raises(self):
+        with pytest.raises(ValueError, match="must use https://"):
+            normalize_base_url("ftp://example.com")
+
+
+class TestDefaultConfigBaseUrl:
+    """Tests for base_url in _get_default_config."""
+
+    def test_base_url_defaults_to_none(self, monkeypatch):
+        monkeypatch.delenv("COOLHAND_BASE_URL", raising=False)
+        config = _get_default_config()
+        assert config.get("base_url") is None
+
+    def test_base_url_from_env_var(self, monkeypatch):
+        monkeypatch.setenv("COOLHAND_BASE_URL", "https://self-hosted.example.com")
+        config = _get_default_config()
+        assert config["base_url"] == "https://self-hosted.example.com"
+
+    def test_empty_env_var_gives_none(self, monkeypatch):
+        monkeypatch.setenv("COOLHAND_BASE_URL", "")
+        config = _get_default_config()
+        assert config.get("base_url") is None
+
+
+class TestCoolhandClientBaseUrl:
+    """Tests for base_url flowing through CoolhandClient."""
+
+    def test_base_url_kwarg_normalized(self):
+        client = CoolhandClient(base_url="https://self-hosted.example.com/")
+        assert client.config["base_url"] == "https://self-hosted.example.com"
+
+    def test_base_url_from_env_var(self, monkeypatch):
+        monkeypatch.setenv("COOLHAND_BASE_URL", "https://env-host.example.com")
+        client = CoolhandClient()
+        assert client.config["base_url"] == "https://env-host.example.com"
+
+    def test_invalid_base_url_raises_on_init(self):
+        with pytest.raises(ValueError, match="must use https://"):
+            CoolhandClient(base_url="http://evil.example.com")
+
+    def test_base_url_none_when_unset(self, monkeypatch):
+        monkeypatch.delenv("COOLHAND_BASE_URL", raising=False)
+        client = CoolhandClient()
+        assert client.config["base_url"] is None
+
+    def test_base_url_used_in_flush(self, mock_request_data, mock_response_data):
+        """Custom base_url is used as destination host in flush()."""
+        from unittest.mock import patch
+
+        client = CoolhandClient(
+            api_key="test-key-12345678",
+            base_url="https://self-hosted.example.com",
+            auto_submit=False,
+        )
+        client.log_interaction(mock_request_data, mock_response_data)
+
+        with patch("coolhand.client.urlopen") as mock_urlopen:
+            mock_resp = mock_urlopen.return_value.__enter__.return_value
+            mock_resp.status = 201
+            client.flush()
+
+        call_args = mock_urlopen.call_args
+        request_obj = call_args[0][0]
+        assert request_obj.full_url.startswith("https://self-hosted.example.com")
+
+    def test_default_base_url_used_in_flush_when_unset(
+        self, mock_request_data, mock_response_data, monkeypatch
+    ):
+        """Falls back to coolhandlabs.com when base_url is not configured."""
+        from unittest.mock import patch
+
+        monkeypatch.delenv("COOLHAND_BASE_URL", raising=False)
+        client = CoolhandClient(
+            api_key="test-key-12345678",
+            auto_submit=False,
+        )
+        client.log_interaction(mock_request_data, mock_response_data)
+
+        with patch("coolhand.client.urlopen") as mock_urlopen:
+            mock_resp = mock_urlopen.return_value.__enter__.return_value
+            mock_resp.status = 201
+            client.flush()
+
+        call_args = mock_urlopen.call_args
+        request_obj = call_args[0][0]
+        assert "coolhandlabs.com" in request_obj.full_url

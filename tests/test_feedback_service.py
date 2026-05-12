@@ -442,3 +442,77 @@ class TestFeedbackServiceEdgeCases:
         # Should be different instances
         assert service1 is not service2
         assert service2.api_key == mock_config["api_key"]
+
+
+class TestFeedbackServiceBaseUrl:
+    """Tests for base_url configuration in FeedbackService."""
+
+    def test_base_url_from_config(self, mock_config):
+        """base_url from config dict is stored and normalized."""
+        service = FeedbackService(config=mock_config)
+        assert service.config["base_url"] == "https://test.coolhandlabs.com"
+
+    def test_base_url_from_kwargs(self):
+        """base_url kwarg is stored and normalized."""
+        service = FeedbackService(base_url="https://self-hosted.example.com/")
+        assert service.config["base_url"] == "https://self-hosted.example.com"
+
+    def test_base_url_from_env_var(self, monkeypatch):
+        """COOLHAND_BASE_URL env var is read by FeedbackService."""
+        monkeypatch.setenv("COOLHAND_BASE_URL", "https://env-host.example.com")
+        service = FeedbackService()
+        assert service.config["base_url"] == "https://env-host.example.com"
+
+    def test_base_url_defaults_to_none_when_unset(self, monkeypatch):
+        """base_url is None when env var is not set."""
+        monkeypatch.delenv("COOLHAND_BASE_URL", raising=False)
+        service = FeedbackService()
+        assert service.config.get("base_url") is None
+
+    def test_invalid_base_url_raises_on_init(self):
+        """Invalid base_url raises ValueError at init time."""
+        import pytest
+
+        with pytest.raises(ValueError, match="must use https://"):
+            FeedbackService(base_url="http://evil.example.com")
+
+    def test_base_url_used_in_post(self, mock_config, mock_feedback_urlopen):
+        """Custom base_url is used as the POST destination."""
+        mock_config["base_url"] = "https://self-hosted.example.com"
+        service = FeedbackService(config=mock_config)
+
+        feedback: FeedbackData = {"llm_request_log_id": 1, "like": True}
+        service.create_feedback(feedback)
+
+        call_args = mock_feedback_urlopen.call_args
+        request_obj = call_args[0][0]
+        assert request_obj.full_url.startswith("https://self-hosted.example.com")
+
+    def test_default_base_url_used_in_post_when_unset(
+        self, monkeypatch, mock_feedback_urlopen
+    ):
+        """Falls back to coolhandlabs.com when base_url is not configured."""
+        monkeypatch.delenv("COOLHAND_BASE_URL", raising=False)
+        service = FeedbackService(api_key="test-key-12345678")
+
+        feedback: FeedbackData = {"llm_request_log_id": 1, "like": True}
+        service.create_feedback(feedback)
+
+        call_args = mock_feedback_urlopen.call_args
+        request_obj = call_args[0][0]
+        assert "coolhandlabs.com" in request_obj.full_url
+
+    def test_log_line_shows_custom_base_url(self, mock_config, caplog):
+        """Log line shows custom base_url destination."""
+        import logging
+
+        caplog.set_level(logging.INFO)
+        mock_config["silent"] = False
+        mock_config["base_url"] = "https://self-hosted.example.com"
+        service = FeedbackService(config=mock_config)
+
+        feedback: FeedbackData = {"llm_request_log_id": 1, "like": True}
+        service._log_feedback_info(feedback)
+
+        assert "self-hosted.example.com" in caplog.text
+        assert "coolhandlabs.com" not in caplog.text

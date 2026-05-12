@@ -32,6 +32,7 @@ class Config(TypedDict, total=False):
     api_key: str | None
     silent: bool
     auto_submit: bool
+    base_url: str | None
     session_id: str | None
     intercept_addresses: list[str] | None
 

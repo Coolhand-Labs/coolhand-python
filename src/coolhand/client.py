@@ -31,15 +31,41 @@ SENSITIVE_QUERY_PARAMS = {"key", "api_key", "apikey", "token", "access_token", "
 
 BASE_URL = "https://coolhandlabs.com"
 
+_LOCALHOST_HOSTNAMES = {"localhost", "127.0.0.1", "::1"}
+
+
+def validate_base_url(url: str) -> str:
+    """Validate and normalize a base URL, stripping any trailing slash.
+
+    Accepts https:// URLs and http:// URLs whose hostname is exactly
+    localhost, 127.0.0.1, or ::1 (for local dev). Raises ValueError
+    otherwise so that typos and http:// remote hosts are caught early.
+    """
+    stripped = url.rstrip("/")
+    if stripped.startswith("https://"):
+        return stripped
+    if stripped.startswith("http://"):
+        hostname = urlparse(stripped).hostname
+        if hostname in _LOCALHOST_HOSTNAMES:
+            return stripped
+    raise ValueError(
+        f"Invalid base_url {url!r}: must start with 'https://' "
+        "or be a localhost http:// address (e.g. http://localhost:3000)"
+    )
+
 
 def _get_default_config() -> Config:
     """Get default configuration from environment."""
-    return {
+    config: Config = {
         "api_key": os.getenv("COOLHAND_API_KEY") or None,
         "silent": os.getenv("COOLHAND_SILENT", "true").lower() == "true",
         "auto_submit": True,
         "session_id": f"session_{int(time.time() * 1000)}",
     }
+    env_base_url = os.getenv("COOLHAND_BASE_URL")
+    if env_base_url:
+        config["base_url"] = validate_base_url(env_base_url)
+    return config
 
 
 def _mask_value(value: str) -> str:
@@ -123,6 +149,8 @@ class CoolhandClient:
         if config:
             self.config.update(config)
         self.config.update(kwargs)
+        if self.config.get("base_url"):
+            self.config["base_url"] = validate_base_url(self.config["base_url"])
 
         self._queue: list[dict[str, Any]] = []
         self._interaction_count = 0
@@ -204,7 +232,10 @@ class CoolhandClient:
                 }
 
                 request = Request(
-                    url=f"{BASE_URL}/api/v2/llm_request_logs",
+                    url=(
+                        f"{self.config.get('base_url') or BASE_URL}"
+                        "/api/v2/llm_request_logs"
+                    ),
                     data=json.dumps(payload, default=str).encode("utf-8"),
                     headers={
                         "X-API-Key": api_key,

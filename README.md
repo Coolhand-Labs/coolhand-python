@@ -58,6 +58,7 @@ response = client.chat.completions.create(
 |----------|----------|---------|-------------|
 | `COOLHAND_API_KEY` | Yes | - | Your Coolhand API key for authentication |
 | `COOLHAND_SILENT` | No | `true` | Set to `false` for verbose logging output |
+| `COOLHAND_BASE_URL` | No | `https://coolhandlabs.com` | Override the API host for self-hosted or staging deployments |
 
 ### Manual Configuration
 
@@ -69,6 +70,28 @@ coolhand_client = Coolhand(
     silent=False,  # Enable verbose logging
 )
 ```
+
+### Self-Hosted / Staging Deployments
+
+If you run your own Coolhand-compatible backend, point the SDK at it with `base_url`:
+
+```python
+from coolhand import Coolhand
+
+coolhand_client = Coolhand(
+    api_key='your-api-key',
+    base_url='https://feedback.example.com',
+)
+```
+
+Or via environment variable (useful in CI/CD or Docker):
+
+```bash
+export COOLHAND_API_KEY=your-api-key
+export COOLHAND_BASE_URL=https://feedback.example.com
+```
+
+`base_url` must use `https://`. The only exception is `http://localhost` and `http://127.0.0.1` for local development. Trailing slashes are stripped automatically.
 
 ## Usage Examples
 

@@ -288,6 +288,40 @@ class TestCoolhandClassEdgeCases:
         instance.stop_monitoring()
 
 
+class TestBaseUrlInit:
+    """Tests for base_url configuration in Coolhand class."""
+
+    def test_base_url_from_env_var(self, monkeypatch, reset_global_instance):
+        """COOLHAND_BASE_URL env var is used by Coolhand."""
+        from unittest.mock import patch
+
+        monkeypatch.setenv("COOLHAND_BASE_URL", "https://self-hosted.example.com")
+        with patch("coolhand.httpx_interceptor.patch"):
+            instance = Coolhand()
+        assert instance.config["base_url"] == "https://self-hosted.example.com"
+        instance.stop_monitoring()
+
+    def test_base_url_kwarg_overrides_env(self, monkeypatch, reset_global_instance):
+        """Explicit base_url kwarg overrides COOLHAND_BASE_URL."""
+        from unittest.mock import patch
+
+        monkeypatch.setenv("COOLHAND_BASE_URL", "https://env.example.com")
+        with patch("coolhand.httpx_interceptor.patch"):
+            instance = Coolhand(base_url="https://explicit.example.com")
+        assert instance.config["base_url"] == "https://explicit.example.com"
+        instance.stop_monitoring()
+
+    def test_invalid_base_url_raises_on_init(self, reset_global_instance):
+        """Non-https base_url raises ValueError during Coolhand init."""
+        from unittest.mock import patch
+
+        import pytest
+
+        with patch("coolhand.httpx_interceptor.patch"):
+            with pytest.raises(ValueError, match="must use https://"):
+                Coolhand(base_url="http://evil.example.com")
+
+
 class TestVersionConstant:
     """Tests for version constant edge cases."""
 

@@ -2,6 +2,18 @@
 
 All notable changes to this project will be documented in this file.
 
+## [Unreleased]
+
+### Added
+
+- **`base_url` configuration** — `Coolhand` and `FeedbackService` now accept a `base_url` kwarg and read a `COOLHAND_BASE_URL` environment variable. When unset, behavior is unchanged (defaults to `https://coolhandlabs.com`). Intended for self-hosted deployments and staging environments. (#21)
+- Shared `src/coolhand/_config.py` module — houses `_normalize_base_url` and `_DEFAULT_BASE_URL` to avoid cross-module private imports between `client.py` and `feedback_service.py`.
+
+### Changed
+
+- `base_url` validation rejects non-`https://` values at construction time. `http://localhost` and `http://127.0.0.1` (and `http://[::1]`) are allowed for local development. Hostname check uses `urlparse` to block subdomain and userinfo spoofing (e.g. `http://localhost.attacker.com`, `http://localhost@attacker.com`).
+- `Config` TypedDict gains a `base_url: str` field.
+
 ## [0.4.0] - 2026-04-30
 
 ### Added

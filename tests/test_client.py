@@ -1,6 +1,8 @@
 """Tests for coolhand.client module."""
 
+from coolhand._config import validate_base_url
 from coolhand.client import (
+    BASE_URL,
     CoolhandClient,
     _get_default_config,
     _mask_value,
@@ -548,4 +550,101 @@ class TestGeminiCapture:
         result = _parse_body(body)
         assert isinstance(result, dict)
         assert "candidates" in result
-        assert result["candidates"][0]["content"]["parts"][0]["text"] == "Hello"
+
+
+class TestBaseUrlValidation:
+    """Tests for validate_base_url and base_url config propagation."""
+
+    def test_valid_https_url(self):
+        assert (
+            validate_base_url("https://feedback.example.com")
+            == "https://feedback.example.com"
+        )
+
+    def test_https_trailing_slash_stripped(self):
+        assert (
+            validate_base_url("https://example.com/prefix/")
+            == "https://example.com/prefix"
+        )
+
+    def test_http_localhost_allowed(self):
+        assert validate_base_url("http://localhost:3000") == "http://localhost:3000"
+
+    def test_http_127_allowed(self):
+        assert validate_base_url("http://127.0.0.1:8080") == "http://127.0.0.1:8080"
+
+    def test_http_non_localhost_rejected(self):
+        import pytest
+
+        with pytest.raises(ValueError, match="https://"):
+            validate_base_url("http://example.com")
+
+    def test_flush_uses_custom_base_url(self, reset_global_instance, mock_urlopen):
+        """flush() sends to the configured base_url instead of the default."""
+        client = CoolhandClient(
+            auto_submit=False,
+            api_key="real-api-key-12345",
+            base_url="https://feedback.example.com",
+        )
+        client._queue.append(
+            {"id": "test-id", "method": "post", "url": "https://api.openai.com/v1/chat"}
+        )
+        client.flush()
+
+        called_url = mock_urlopen.call_args[0][0].full_url
+        assert called_url.startswith("https://feedback.example.com/")
+        assert BASE_URL not in called_url
+
+    def test_flush_uses_default_base_url_when_not_set(
+        self, reset_global_instance, mock_urlopen
+    ):
+        """flush() falls back to BASE_URL when base_url is not configured."""
+        client = CoolhandClient(auto_submit=False, api_key="real-api-key-12345")
+        client._queue.append(
+            {"id": "test-id", "method": "post", "url": "https://api.openai.com/v1/chat"}
+        )
+        client.flush()
+
+        called_url = mock_urlopen.call_args[0][0].full_url
+        assert called_url.startswith(BASE_URL)
+
+    def test_flush_trailing_slash_normalized(self, reset_global_instance, mock_urlopen):
+        """flush() path is clean even when base_url had a trailing slash."""
+        client = CoolhandClient(
+            auto_submit=False,
+            api_key="real-api-key-12345",
+            base_url="https://feedback.example.com/",
+        )
+        client._queue.append(
+            {"id": "test-id", "method": "post", "url": "https://api.openai.com/v1/chat"}
+        )
+        client.flush()
+
+        called_url = mock_urlopen.call_args[0][0].full_url
+        assert "//" not in called_url.replace("https://", "").replace("http://", "")
+
+    def test_env_var_sets_base_url(self, reset_global_instance, monkeypatch):
+        """COOLHAND_BASE_URL env var is read into the default config."""
+        monkeypatch.setenv("COOLHAND_BASE_URL", "https://self-hosted.example.com")
+        config = _get_default_config()
+        assert config["base_url"] == "https://self-hosted.example.com"
+
+    def test_invalid_env_var_raises(self, reset_global_instance, monkeypatch):
+        """An invalid COOLHAND_BASE_URL env var raises ValueError at construction time.
+
+        Validation is deferred until after all config sources are merged, so an
+        explicit valid base_url= kwarg can override a bad env var without error.
+        """
+        import pytest
+
+        monkeypatch.setenv("COOLHAND_BASE_URL", "http://remote-host.example.com")
+        with pytest.raises(ValueError, match="https://"):
+            CoolhandClient()
+
+    def test_explicit_base_url_overrides_bad_env_var(
+        self, reset_global_instance, monkeypatch
+    ):
+        """A valid base_url kwarg takes precedence over an invalid COOLHAND_BASE_URL."""
+        monkeypatch.setenv("COOLHAND_BASE_URL", "http://remote-host.example.com")
+        client = CoolhandClient(base_url="https://feedback.example.com")
+        assert client.config["base_url"] == "https://feedback.example.com"

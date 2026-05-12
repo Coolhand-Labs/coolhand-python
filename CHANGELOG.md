@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [Unreleased]
+
+### Added
+
+- **`base_url` configuration for self-hosted deployments** — `Coolhand(base_url=...)` and `FeedbackService(base_url=...)` now accept a custom API host, and the `COOLHAND_BASE_URL` environment variable sets the default for both. When unset, behaviour is unchanged (host: `https://coolhandlabs.com`). Non-`https://` values are rejected at construction time; `http://localhost` and `http://127.0.0.1` are permitted for local development. Closes #21.
+
 ## [0.4.0] - 2026-04-30
 
 ### Added

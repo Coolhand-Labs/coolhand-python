@@ -11,6 +11,7 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import parse_qs, urlencode, urlparse, urlunparse
 from urllib.request import Request, urlopen
 
+from ._config import validate_base_url
 from .types import Config, RequestData, ResponseData
 from .version import __version__
 
@@ -39,6 +40,7 @@ def _get_default_config() -> Config:
         "silent": os.getenv("COOLHAND_SILENT", "true").lower() == "true",
         "auto_submit": True,
         "session_id": f"session_{int(time.time() * 1000)}",
+        "base_url": os.getenv("COOLHAND_BASE_URL") or None,
     }
 
 
@@ -124,6 +126,9 @@ class CoolhandClient:
             self.config.update(config)
         self.config.update(kwargs)
 
+        if self.config.get("base_url"):
+            self.config["base_url"] = validate_base_url(self.config["base_url"])
+
         self._queue: list[dict[str, Any]] = []
         self._interaction_count = 0
 
@@ -203,8 +208,9 @@ class CoolhandClient:
                     }
                 }
 
+                base_url = self.config.get("base_url") or BASE_URL
                 request = Request(
-                    url=f"{BASE_URL}/api/v2/llm_request_logs",
+                    url=f"{base_url}/api/v2/llm_request_logs",
                     data=json.dumps(payload, default=str).encode("utf-8"),
                     headers={
                         "X-API-Key": api_key,

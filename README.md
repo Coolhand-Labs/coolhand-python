@@ -58,6 +58,7 @@ response = client.chat.completions.create(
 |----------|----------|---------|-------------|
 | `COOLHAND_API_KEY` | Yes | - | Your Coolhand API key for authentication |
 | `COOLHAND_SILENT` | No | `true` | Set to `false` for verbose logging output |
+| `COOLHAND_BASE_URL` | No | `https://coolhandlabs.com` | Override the API host for self-hosted deployments. Must use `https://`; `http://localhost` and `http://127.0.0.1` are also accepted for local development. |
 
 ### Manual Configuration
 

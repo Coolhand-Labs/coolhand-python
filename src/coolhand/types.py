@@ -33,6 +33,7 @@ class Config(TypedDict, total=False):
     silent: bool
     auto_submit: bool
     session_id: str | None
+    base_url: str | None
     intercept_addresses: list[str] | None
 
 

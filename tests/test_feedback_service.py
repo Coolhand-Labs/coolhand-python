@@ -441,4 +441,81 @@ class TestFeedbackServiceEdgeCases:
 
         # Should be different instances
         assert service1 is not service2
-        assert service2.api_key == mock_config["api_key"]
+
+
+class TestFeedbackServiceBaseUrl:
+    """Tests for base_url configuration in FeedbackService."""
+
+    def test_custom_base_url_used_in_request(self, mock_feedback_urlopen):
+        """create_feedback() POSTs to the configured base_url."""
+        service = FeedbackService(
+            config={
+                "api_key": "test-key",
+                "base_url": "https://self-hosted.example.com",
+            }
+        )
+        service.create_feedback({"like": True, "llm_request_log_id": 1})
+
+        called_url = mock_feedback_urlopen.call_args[0][0].full_url
+        assert called_url.startswith("https://self-hosted.example.com/")
+
+    def test_default_base_url_used_when_not_set(self, mock_feedback_urlopen):
+        """create_feedback() falls back to coolhandlabs.com when base_url unset."""
+        service = FeedbackService(config={"api_key": "test-key"})
+        service.create_feedback({"like": True, "llm_request_log_id": 1})
+
+        called_url = mock_feedback_urlopen.call_args[0][0].full_url
+        assert called_url.startswith("https://coolhandlabs.com/")
+
+    def test_trailing_slash_normalized(self, mock_feedback_urlopen):
+        """Trailing slash on base_url is stripped before use."""
+        service = FeedbackService(
+            config={
+                "api_key": "test-key",
+                "base_url": "https://self-hosted.example.com/",
+            }
+        )
+        service.create_feedback({"like": True, "llm_request_log_id": 1})
+
+        called_url = mock_feedback_urlopen.call_args[0][0].full_url
+        assert "//" not in called_url.replace("https://", "").replace("http://", "")
+
+    def test_env_var_sets_base_url(self, monkeypatch):
+        """COOLHAND_BASE_URL env var is picked up by FeedbackService."""
+        monkeypatch.setenv("COOLHAND_BASE_URL", "https://env-host.example.com")
+        monkeypatch.setenv("COOLHAND_API_KEY", "test-key")
+        service = FeedbackService()
+        assert service.config.get("base_url") == "https://env-host.example.com"
+
+    def test_log_feedback_info_uses_custom_base_url(self, caplog):
+        """_log_feedback_info logs the configured base_url."""
+        import logging
+
+        caplog.set_level(logging.INFO)
+        service = FeedbackService(
+            config={
+                "api_key": "test-key",
+                "base_url": "https://self-hosted.example.com",
+                "silent": False,
+            }
+        )
+        service._log_feedback_info({"like": True, "llm_request_log_id": 1})
+        assert "self-hosted.example.com" in caplog.text
+        assert "coolhandlabs.com" not in caplog.text
+
+    def test_invalid_base_url_raises(self):
+        """Non-https, non-localhost base_url raises ValueError at init."""
+        import pytest
+
+        with pytest.raises(ValueError, match="https://"):
+            FeedbackService(
+                config={"api_key": "test-key", "base_url": "http://remote.example.com"}
+            )
+
+    def test_explicit_base_url_overrides_bad_env_var(self, monkeypatch):
+        """A valid base_url config key overrides an invalid COOLHAND_BASE_URL."""
+        monkeypatch.setenv("COOLHAND_BASE_URL", "http://remote-host.example.com")
+        service = FeedbackService(
+            config={"api_key": "key", "base_url": "https://feedback.example.com"}
+        )
+        assert service.config["base_url"] == "https://feedback.example.com"

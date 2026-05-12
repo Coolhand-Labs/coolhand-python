@@ -32,10 +32,24 @@ SENSITIVE_QUERY_PARAMS = {"key", "api_key", "apikey", "token", "access_token", "
 BASE_URL = "https://coolhandlabs.com"
 
 
+def _validate_base_url(base_url: str) -> str:
+    """Validate and normalize base_url. Strips trailing slash."""
+    hostname = urlparse(base_url).hostname
+    is_localhost = hostname in {"localhost", "127.0.0.1"}
+    if not base_url.startswith("https://") and not is_localhost:
+        raise ValueError(
+            f"base_url must use https:// (got: {base_url!r}). "
+            "For local development, http://localhost and "
+            "http://127.0.0.1 are permitted."
+        )
+    return base_url.rstrip("/")
+
+
 def _get_default_config() -> Config:
     """Get default configuration from environment."""
     return {
         "api_key": os.getenv("COOLHAND_API_KEY") or None,
+        "base_url": os.getenv("COOLHAND_BASE_URL") or None,
         "silent": os.getenv("COOLHAND_SILENT", "true").lower() == "true",
         "auto_submit": True,
         "session_id": f"session_{int(time.time() * 1000)}",
@@ -124,6 +138,9 @@ class CoolhandClient:
             self.config.update(config)
         self.config.update(kwargs)
 
+        if self.config.get("base_url"):
+            self.config["base_url"] = _validate_base_url(self.config["base_url"])
+
         self._queue: list[dict[str, Any]] = []
         self._interaction_count = 0
 
@@ -203,8 +220,9 @@ class CoolhandClient:
                     }
                 }
 
+                base_url = self.config.get("base_url") or BASE_URL
                 request = Request(
-                    url=f"{BASE_URL}/api/v2/llm_request_logs",
+                    url=f"{base_url}/api/v2/llm_request_logs",
                     data=json.dumps(payload, default=str).encode("utf-8"),
                     headers={
                         "X-API-Key": api_key,

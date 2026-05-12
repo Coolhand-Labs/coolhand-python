@@ -76,6 +76,46 @@ class TestFeedbackServiceInit:
         assert service.api_key == "env-key-12345"
         assert service.silent is False
 
+    def test_init_base_url_from_config(self):
+        """base_url in config is stored and used."""
+        service = FeedbackService(
+            api_key="key", base_url="https://feedback.example.com"
+        )
+        assert service._base_url == "https://feedback.example.com"
+
+    def test_init_base_url_trailing_slash_stripped(self):
+        """Trailing slash in base_url is normalized."""
+        service = FeedbackService(
+            api_key="key", base_url="https://feedback.example.com/"
+        )
+        assert service._base_url == "https://feedback.example.com"
+
+    def test_init_base_url_defaults_to_coolhandlabs(self, monkeypatch):
+        """When base_url is unset, _base_url falls back to coolhandlabs.com."""
+        monkeypatch.delenv("COOLHAND_BASE_URL", raising=False)
+        service = FeedbackService(api_key="key")
+        assert service._base_url == "https://coolhandlabs.com"
+
+    def test_init_base_url_from_env_var(self, monkeypatch):
+        """COOLHAND_BASE_URL env var sets _base_url."""
+        monkeypatch.setenv("COOLHAND_BASE_URL", "https://env.example.com")
+        service = FeedbackService(api_key="key")
+        assert service._base_url == "https://env.example.com"
+
+    def test_init_invalid_base_url_raises(self):
+        """Non-https base_url raises ValueError at construction time."""
+        import pytest
+
+        with pytest.raises(ValueError, match="must use https://"):
+            FeedbackService(api_key="key", base_url="http://feedback.example.com")
+
+    def test_init_localhost_spoof_raises(self):
+        """http://localhost.evil.com is rejected by FeedbackService too."""
+        import pytest
+
+        with pytest.raises(ValueError, match="must use https://"):
+            FeedbackService(api_key="key", base_url="http://localhost.evil.com")
+
 
 class TestCreateFeedback:
     """Test FeedbackService.create_feedback method."""
@@ -186,6 +226,20 @@ class TestCreateFeedback:
         collector = payload["llm_request_log_feedback"]["collector"]
         assert "coolhand-python" in collector
         assert "manual" in collector
+
+    def test_create_feedback_uses_custom_base_url(self, mock_feedback_urlopen):
+        """custom base_url is used in feedback POST URL."""
+        service = FeedbackService(
+            api_key="test-api-key-12345678",
+            base_url="https://feedback.example.com",
+            silent=True,
+        )
+        feedback: FeedbackData = {"llm_request_log_id": 1, "like": True}
+        service.create_feedback(feedback)
+
+        call_args = mock_feedback_urlopen.call_args
+        request = call_args[0][0]
+        assert request.full_url.startswith("https://feedback.example.com/")
 
     def test_create_feedback_warns_no_matching_field(
         self, feedback_service, mock_feedback_urlopen, caplog

@@ -6,6 +6,7 @@ import os
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
+from .client import _validate_base_url
 from .types import Config, FeedbackData, FeedbackResponse
 from .version import __version__
 
@@ -36,15 +37,19 @@ class FeedbackService:
 
         Args:
             config: Configuration dictionary with api_key and optional settings.
-            **kwargs: Override config values (api_key, silent).
+            **kwargs: Override config values (api_key, base_url, silent).
         """
         self.config: Config = {
             "api_key": os.getenv("COOLHAND_API_KEY", ""),
+            "base_url": os.getenv("COOLHAND_BASE_URL") or None,
             "silent": os.getenv("COOLHAND_SILENT", "true").lower() == "true",
         }
         if config:
             self.config.update(config)
         self.config.update(kwargs)
+
+        raw_base_url = self.config.get("base_url") or BASE_URL
+        self._base_url = _validate_base_url(raw_base_url)
 
     @property
     def api_key(self) -> str:
@@ -144,7 +149,7 @@ class FeedbackService:
         # Send request
         try:
             request = Request(
-                url=f"{BASE_URL}{FEEDBACK_ENDPOINT}",
+                url=f"{self._base_url}{FEEDBACK_ENDPOINT}",
                 data=json.dumps(payload, default=str).encode("utf-8"),
                 headers={
                     "X-API-Key": self.api_key,
@@ -195,7 +200,7 @@ class FeedbackService:
         if feedback.get("revised_output"):
             self._log("Includes revised output")
 
-        self._log(f"Sending to: {BASE_URL}{FEEDBACK_ENDPOINT}")
+        self._log(f"Sending to: {self._base_url}{FEEDBACK_ENDPOINT}")
 
 
 # Module-level convenience function

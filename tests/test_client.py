@@ -8,6 +8,7 @@ from coolhand.client import (
     _sanitize_headers,
     _sanitize_url,
     _to_iso8601,
+    _validate_base_url,
     get_instance,
     initialize,
     set_instance,
@@ -527,6 +528,147 @@ class TestFlushAPISubmission:
             mock_flush.return_value = True
             client.log_interaction(mock_request_data, mock_response_data)
             mock_flush.assert_called_once()
+
+
+class TestBaseUrl:
+    """Tests for base_url configuration."""
+
+    def test_validate_base_url_accepts_https(self):
+        """https:// URLs are accepted and returned normalized."""
+        assert (
+            _validate_base_url("https://feedback.example.com")
+            == "https://feedback.example.com"
+        )
+
+    def test_validate_base_url_strips_trailing_slash(self):
+        """Trailing slashes are stripped."""
+        assert (
+            _validate_base_url("https://feedback.example.com/")
+            == "https://feedback.example.com"
+        )
+        assert (
+            _validate_base_url("https://feedback.example.com///")
+            == "https://feedback.example.com"
+        )
+
+    def test_validate_base_url_accepts_localhost_http(self):
+        """http://localhost is accepted for local dev."""
+        assert _validate_base_url("http://localhost:8000") == "http://localhost:8000"
+
+    def test_validate_base_url_accepts_127_http(self):
+        """http://127.0.0.1 is accepted for local dev."""
+        assert _validate_base_url("http://127.0.0.1:3000") == "http://127.0.0.1:3000"
+
+    def test_validate_base_url_rejects_plain_http(self):
+        """Non-localhost http:// URLs are rejected."""
+        import pytest
+
+        with pytest.raises(ValueError, match="must use https://"):
+            _validate_base_url("http://feedback.example.com")
+
+    def test_validate_base_url_rejects_http_non_localhost(self):
+        """http:// with a non-localhost host is rejected."""
+        import pytest
+
+        with pytest.raises(ValueError, match="must use https://"):
+            _validate_base_url("http://192.168.1.1:8000")
+
+    def test_validate_base_url_rejects_localhost_prefix_spoof(self):
+        """http://localhost.evil.com is rejected (exact hostname match only)."""
+        import pytest
+
+        with pytest.raises(ValueError, match="must use https://"):
+            _validate_base_url("http://localhost.evil.com")
+
+    def test_validate_base_url_rejects_127_prefix_spoof(self):
+        """http://127.0.0.1.attacker.example is rejected."""
+        import pytest
+
+        with pytest.raises(ValueError, match="must use https://"):
+            _validate_base_url("http://127.0.0.1.attacker.example")
+
+    def test_client_accepts_base_url_kwarg(self, reset_global_instance, mock_urlopen):
+        """base_url kwarg is used in flush() POST URL."""
+        client = CoolhandClient(
+            auto_submit=False,
+            api_key="real-api-key-12345",
+            base_url="https://feedback.example.com",
+        )
+        client._queue.append({"id": "x", "method": "post", "url": "test"})
+        client.flush()
+
+        call_args = mock_urlopen.call_args
+        request = call_args[0][0]
+        assert request.full_url.startswith("https://feedback.example.com/")
+
+    def test_client_accepts_base_url_in_config(
+        self, reset_global_instance, mock_urlopen
+    ):
+        """base_url in config dict is used in flush() POST URL."""
+        client = CoolhandClient(
+            config={
+                "auto_submit": False,
+                "api_key": "real-api-key-12345",
+                "base_url": "https://other.example.com",
+            }
+        )
+        client._queue.append({"id": "x", "method": "post", "url": "test"})
+        client.flush()
+
+        call_args = mock_urlopen.call_args
+        request = call_args[0][0]
+        assert request.full_url.startswith("https://other.example.com/")
+
+    def test_client_base_url_defaults_to_coolhandlabs(
+        self, reset_global_instance, mock_urlopen
+    ):
+        """When base_url is unset, flush() posts to coolhandlabs.com."""
+        client = CoolhandClient(auto_submit=False, api_key="real-api-key-12345")
+        client._queue.append({"id": "x", "method": "post", "url": "test"})
+        client.flush()
+
+        call_args = mock_urlopen.call_args
+        request = call_args[0][0]
+        assert "coolhandlabs.com" in request.full_url
+
+    def test_client_base_url_trailing_slash_normalized(self, reset_global_instance):
+        """Trailing slash in base_url is stripped during construction."""
+        client = CoolhandClient(
+            auto_submit=False, base_url="https://feedback.example.com/"
+        )
+        assert client.config["base_url"] == "https://feedback.example.com"
+
+    def test_client_invalid_base_url_raises(self, reset_global_instance):
+        """Non-https base_url raises ValueError at construction time."""
+        import pytest
+
+        with pytest.raises(ValueError, match="must use https://"):
+            CoolhandClient(base_url="http://feedback.example.com")
+
+    def test_base_url_from_env_var(self, reset_global_instance, monkeypatch):
+        """COOLHAND_BASE_URL env var is read by _get_default_config."""
+        monkeypatch.setenv("COOLHAND_BASE_URL", "https://env.example.com")
+        config = _get_default_config()
+        assert config["base_url"] == "https://env.example.com"
+
+    def test_base_url_env_var_used_in_flush(
+        self, reset_global_instance, mock_urlopen, monkeypatch
+    ):
+        """COOLHAND_BASE_URL env var is used in flush() POST URL."""
+        monkeypatch.setenv("COOLHAND_BASE_URL", "https://env.example.com")
+        client = CoolhandClient(auto_submit=False, api_key="real-api-key-12345")
+        client._queue.append({"id": "x", "method": "post", "url": "test"})
+        client.flush()
+
+        call_args = mock_urlopen.call_args
+        request = call_args[0][0]
+        assert "env.example.com" in request.full_url
+
+    def test_base_url_none_when_env_not_set(self, monkeypatch):
+        """base_url is None in default config when env var is absent."""
+        monkeypatch.delenv("COOLHAND_BASE_URL", raising=False)
+        config = _get_default_config()
+        assert config["base_url"] is None
 
 
 class TestGeminiCapture:

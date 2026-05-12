@@ -15,7 +15,7 @@ def _normalize_base_url(url: str) -> str:
     """
     url = url.rstrip("/")
     parsed = urlparse(url)
-    if parsed.scheme == "https":
+    if parsed.scheme == "https" and parsed.hostname:
         return url
     if parsed.scheme == "http" and parsed.hostname in {
         "localhost",

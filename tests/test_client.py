@@ -615,6 +615,38 @@ class TestNormalizeBaseUrl:
         with pytest.raises(ValueError, match="must use https://"):
             _normalize_base_url("http://localhost@attacker.com")
 
+    def test_rejects_localhostevil_no_separator(self):
+        """http://localhostevil.com has no separator — must be rejected."""
+        import pytest
+
+        with pytest.raises(ValueError, match="must use https://"):
+            _normalize_base_url("http://localhostevil.com")
+
+    def test_rejects_https_no_hostname(self):
+        """https:// with no hostname is rejected (would produce broken URLs)."""
+        import pytest
+
+        with pytest.raises(ValueError, match="must use https://"):
+            _normalize_base_url("https://")
+
+    def test_rejects_https_scheme_only(self):
+        """https: with no slashes or hostname is rejected."""
+        import pytest
+
+        with pytest.raises(ValueError, match="must use https://"):
+            _normalize_base_url("https:")
+
+    def test_rejects_ws_scheme(self):
+        """ws:// is rejected — only https and loopback http are allowed."""
+        import pytest
+
+        with pytest.raises(ValueError, match="must use https://"):
+            _normalize_base_url("ws://example.com")
+
+    def test_accepts_http_ipv6_loopback(self):
+        """http://[::1] is accepted as a loopback address for local dev."""
+        assert _normalize_base_url("http://[::1]:8080") == "http://[::1]:8080"
+
 
 class TestBaseUrlConfig:
     """Tests for base_url in CoolhandClient."""

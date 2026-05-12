@@ -29,16 +29,33 @@ SENSITIVE_HEADERS = [
 SENSITIVE_QUERY_PARAMS = {"key", "api_key", "apikey", "token", "access_token", "secret"}
 
 
-BASE_URL = "https://coolhandlabs.com"
+DEFAULT_BASE_URL = "https://coolhandlabs.com"
+
+
+def _validate_base_url(url: str) -> str:
+    url = url.rstrip("/")
+    if url.startswith("https://"):
+        return url
+    if url.startswith("http://"):
+        # Use urlparse so userinfo-embedded attacks like
+        # http://localhost:8080@evil.com are caught (hostname would be evil.com).
+        if urlparse(url).hostname == "localhost":
+            return url
+    raise ValueError(
+        f"Invalid base_url {url!r}: only https:// URLs are accepted, "
+        "except http://localhost:* for local development."
+    )
 
 
 def _get_default_config() -> Config:
     """Get default configuration from environment."""
+    raw_base_url = os.getenv("COOLHAND_BASE_URL")
     return {
         "api_key": os.getenv("COOLHAND_API_KEY") or None,
         "silent": os.getenv("COOLHAND_SILENT", "true").lower() == "true",
         "auto_submit": True,
         "session_id": f"session_{int(time.time() * 1000)}",
+        "base_url": _validate_base_url(raw_base_url) if raw_base_url else None,
     }
 
 
@@ -124,6 +141,9 @@ class CoolhandClient:
             self.config.update(config)
         self.config.update(kwargs)
 
+        if self.config.get("base_url"):
+            self.config["base_url"] = _validate_base_url(self.config["base_url"])
+
         self._queue: list[dict[str, Any]] = []
         self._interaction_count = 0
 
@@ -203,8 +223,9 @@ class CoolhandClient:
                     }
                 }
 
+                _base = self.config.get("base_url") or DEFAULT_BASE_URL
                 request = Request(
-                    url=f"{BASE_URL}/api/v2/llm_request_logs",
+                    url=f"{_base}/api/v2/llm_request_logs",
                     data=json.dumps(payload, default=str).encode("utf-8"),
                     headers={
                         "X-API-Key": api_key,

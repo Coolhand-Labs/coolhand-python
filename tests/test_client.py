@@ -1,6 +1,9 @@
 """Tests for coolhand.client module."""
 
+import pytest
+
 from coolhand.client import (
+    DEFAULT_BASE_URL,
     CoolhandClient,
     _get_default_config,
     _mask_value,
@@ -8,6 +11,7 @@ from coolhand.client import (
     _sanitize_headers,
     _sanitize_url,
     _to_iso8601,
+    _validate_base_url,
     get_instance,
     initialize,
     set_instance,
@@ -549,3 +553,151 @@ class TestGeminiCapture:
         assert isinstance(result, dict)
         assert "candidates" in result
         assert result["candidates"][0]["content"]["parts"][0]["text"] == "Hello"
+
+
+class TestValidateBaseUrl:
+    """Tests for _validate_base_url helper."""
+
+    def test_accepts_https_url(self):
+        assert (
+            _validate_base_url("https://feedback.example.com")
+            == "https://feedback.example.com"
+        )
+
+    def test_strips_trailing_slash(self):
+        assert (
+            _validate_base_url("https://feedback.example.com/")
+            == "https://feedback.example.com"
+        )
+
+    def test_strips_multiple_trailing_slashes(self):
+        assert (
+            _validate_base_url("https://feedback.example.com///")
+            == "https://feedback.example.com"
+        )
+
+    def test_accepts_localhost_http(self):
+        assert _validate_base_url("http://localhost:3000") == "http://localhost:3000"
+
+    def test_accepts_localhost_no_port(self):
+        assert _validate_base_url("http://localhost") == "http://localhost"
+
+    def test_accepts_localhost_with_path(self):
+        assert _validate_base_url("http://localhost/path") == "http://localhost/path"
+
+    def test_rejects_localhostevil(self):
+        with pytest.raises(ValueError, match="Invalid base_url"):
+            _validate_base_url("http://localhostevil.com")
+
+    def test_rejects_localhost_userinfo_ssrf(self):
+        # RFC 3986: userinfo@host — hostname is evil.com, not localhost
+        with pytest.raises(ValueError, match="Invalid base_url"):
+            _validate_base_url("http://localhost:8080@evil.com")
+
+    def test_rejects_plain_http(self):
+        with pytest.raises(ValueError, match="Invalid base_url"):
+            _validate_base_url("http://feedback.example.com")
+
+    def test_rejects_ws_scheme(self):
+        with pytest.raises(ValueError, match="Invalid base_url"):
+            _validate_base_url("ws://feedback.example.com")
+
+    def test_rejects_empty_string(self):
+        with pytest.raises(ValueError):
+            _validate_base_url("")
+
+    def test_error_message_contains_url(self):
+        bad_url = "http://bad.example.com"
+        with pytest.raises(ValueError, match=bad_url):
+            _validate_base_url(bad_url)
+
+
+class TestBaseUrlConfig:
+    """Tests for base_url configuration in CoolhandClient."""
+
+    def test_default_base_url_used_when_unset(
+        self, reset_global_instance, mock_urlopen
+    ):
+        client = CoolhandClient(auto_submit=False, api_key="real-api-key-12345")
+        client._queue.append(
+            {"method": "post", "url": "https://api.openai.com/v1/chat/completions"}
+        )
+        client.flush()
+        request_obj = mock_urlopen.call_args[0][0]
+        expected = f"{DEFAULT_BASE_URL}/api/v2/llm_request_logs"
+        assert request_obj.get_full_url() == expected
+
+    def test_custom_base_url_used_in_flush(self, reset_global_instance, mock_urlopen):
+        client = CoolhandClient(
+            auto_submit=False,
+            api_key="real-api-key-12345",
+            base_url="https://self-hosted.example.com",
+        )
+        client._queue.append(
+            {"method": "post", "url": "https://api.openai.com/v1/chat/completions"}
+        )
+        client.flush()
+        request_obj = mock_urlopen.call_args[0][0]
+        assert request_obj.get_full_url() == (
+            "https://self-hosted.example.com/api/v2/llm_request_logs"
+        )
+
+    def test_base_url_from_env_var(
+        self, reset_global_instance, mock_urlopen, monkeypatch
+    ):
+        monkeypatch.setenv("COOLHAND_BASE_URL", "https://env.example.com")
+        client = CoolhandClient(auto_submit=False, api_key="real-api-key-12345")
+        client._queue.append(
+            {"method": "post", "url": "https://api.openai.com/v1/chat/completions"}
+        )
+        client.flush()
+        request_obj = mock_urlopen.call_args[0][0]
+        assert request_obj.get_full_url() == (
+            "https://env.example.com/api/v2/llm_request_logs"
+        )
+
+    def test_constructor_base_url_overrides_env(
+        self, reset_global_instance, mock_urlopen, monkeypatch
+    ):
+        monkeypatch.setenv("COOLHAND_BASE_URL", "https://env.example.com")
+        client = CoolhandClient(
+            auto_submit=False,
+            api_key="real-api-key-12345",
+            base_url="https://explicit.example.com",
+        )
+        client._queue.append(
+            {"method": "post", "url": "https://api.openai.com/v1/chat/completions"}
+        )
+        client.flush()
+        request_obj = mock_urlopen.call_args[0][0]
+        assert request_obj.get_full_url() == (
+            "https://explicit.example.com/api/v2/llm_request_logs"
+        )
+
+    def test_invalid_base_url_raises_on_init(self, reset_global_instance):
+        with pytest.raises(ValueError, match="Invalid base_url"):
+            CoolhandClient(base_url="http://remote.example.com")
+
+    def test_invalid_env_base_url_raises_on_init(
+        self, reset_global_instance, monkeypatch
+    ):
+        monkeypatch.setenv("COOLHAND_BASE_URL", "ftp://bad.example.com")
+        with pytest.raises(ValueError, match="Invalid base_url"):
+            CoolhandClient(api_key="test-key")
+
+    def test_trailing_slash_normalized_in_flush(
+        self, reset_global_instance, mock_urlopen
+    ):
+        client = CoolhandClient(
+            auto_submit=False,
+            api_key="real-api-key-12345",
+            base_url="https://self-hosted.example.com/",
+        )
+        client._queue.append(
+            {"method": "post", "url": "https://api.openai.com/v1/chat/completions"}
+        )
+        client.flush()
+        request_obj = mock_urlopen.call_args[0][0]
+        url = request_obj.get_full_url()
+        assert "//api/v2" not in url
+        assert url == "https://self-hosted.example.com/api/v2/llm_request_logs"

@@ -1,5 +1,7 @@
 """Tests for coolhand public API (__init__.py)."""
 
+import pytest
+
 import coolhand
 from coolhand import (
     Config,
@@ -331,3 +333,26 @@ class TestExportsComplete:
         ]
         for name in expected:
             assert name in coolhand.__all__, f"Missing from __all__: {name}"
+
+
+class TestCoolhandBaseUrl:
+    """Tests for base_url propagation through the Coolhand class."""
+
+    def test_coolhand_passes_base_url_to_feedback_service(self, reset_global_instance):
+        client = Coolhand(
+            api_key="test-api-key-12345678",
+            silent=True,
+            base_url="https://self-hosted.example.com",
+        )
+        assert (
+            client._feedback_service.config.get("base_url")
+            == "https://self-hosted.example.com"
+        )
+
+    def test_coolhand_invalid_base_url_raises(self, reset_global_instance):
+        with pytest.raises(ValueError, match="Invalid base_url"):
+            Coolhand(
+                api_key="test-api-key-12345678",
+                silent=True,
+                base_url="http://remote.example.com",
+            )

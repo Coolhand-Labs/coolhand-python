@@ -34,6 +34,7 @@ class Config(TypedDict, total=False):
     auto_submit: bool
     session_id: str | None
     intercept_addresses: list[str] | None
+    base_url: str | None
 
 
 class FeedbackData(TypedDict, total=False):

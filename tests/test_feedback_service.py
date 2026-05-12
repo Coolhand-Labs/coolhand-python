@@ -11,6 +11,8 @@ from coolhand import (
     create_feedback,
     get_feedback_service,
 )
+from coolhand.client import DEFAULT_BASE_URL
+from coolhand.feedback_service import FEEDBACK_ENDPOINT
 
 
 @pytest.fixture
@@ -442,3 +444,84 @@ class TestFeedbackServiceEdgeCases:
         # Should be different instances
         assert service1 is not service2
         assert service2.api_key == mock_config["api_key"]
+
+
+class TestFeedbackServiceBaseUrl:
+    """Tests for base_url configuration in FeedbackService."""
+
+    def _make_urlopen_mock(self):
+        mock = MagicMock()
+        mock_response = MagicMock()
+        mock_response.status = 201
+        mock_response.__enter__ = MagicMock(return_value=mock_response)
+        mock_response.__exit__ = MagicMock(return_value=False)
+        mock_response.read.return_value = b'{"id": 1, "like": true}'
+        mock.return_value = mock_response
+        return mock
+
+    def test_default_base_url_used(self):
+        mock = self._make_urlopen_mock()
+        with patch("coolhand.feedback_service.urlopen", mock):
+            service = FeedbackService(api_key="real-api-key-12345")
+            service.create_feedback({"like": True, "llm_request_log_id": 1})
+        request_obj = mock.call_args[0][0]
+        assert request_obj.get_full_url() == f"{DEFAULT_BASE_URL}{FEEDBACK_ENDPOINT}"
+
+    def test_custom_base_url_in_config(self):
+        mock = self._make_urlopen_mock()
+        with patch("coolhand.feedback_service.urlopen", mock):
+            service = FeedbackService(
+                config={
+                    "api_key": "real-api-key-12345",
+                    "base_url": "https://self-hosted.example.com",
+                }
+            )
+            service.create_feedback({"like": True, "llm_request_log_id": 1})
+        request_obj = mock.call_args[0][0]
+        assert (
+            request_obj.get_full_url()
+            == f"https://self-hosted.example.com{FEEDBACK_ENDPOINT}"
+        )
+
+    def test_base_url_from_env_var(self, monkeypatch):
+        monkeypatch.setenv("COOLHAND_BASE_URL", "https://env.example.com")
+        mock = self._make_urlopen_mock()
+        with patch("coolhand.feedback_service.urlopen", mock):
+            service = FeedbackService(api_key="real-api-key-12345")
+            service.create_feedback({"like": True, "llm_request_log_id": 1})
+        request_obj = mock.call_args[0][0]
+        assert (
+            request_obj.get_full_url() == f"https://env.example.com{FEEDBACK_ENDPOINT}"
+        )
+
+    def test_invalid_base_url_raises_on_init(self):
+        with pytest.raises(ValueError, match="Invalid base_url"):
+            FeedbackService(base_url="http://remote.example.com")
+
+    def test_trailing_slash_normalized(self):
+        mock = self._make_urlopen_mock()
+        with patch("coolhand.feedback_service.urlopen", mock):
+            service = FeedbackService(
+                config={
+                    "api_key": "real-api-key-12345",
+                    "base_url": "https://self-hosted.example.com/",
+                }
+            )
+            service.create_feedback({"like": True, "llm_request_log_id": 1})
+        request_obj = mock.call_args[0][0]
+        url = request_obj.get_full_url()
+        assert "//api/v2" not in url
+        assert url == f"https://self-hosted.example.com{FEEDBACK_ENDPOINT}"
+
+    def test_localhost_base_url_allowed(self):
+        mock = self._make_urlopen_mock()
+        with patch("coolhand.feedback_service.urlopen", mock):
+            service = FeedbackService(
+                config={
+                    "api_key": "real-api-key-12345",
+                    "base_url": "http://localhost:8080",
+                }
+            )
+            service.create_feedback({"like": True, "llm_request_log_id": 1})
+        request_obj = mock.call_args[0][0]
+        assert request_obj.get_full_url() == f"http://localhost:8080{FEEDBACK_ENDPOINT}"

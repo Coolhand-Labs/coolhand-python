@@ -1,33 +1,42 @@
-.PHONY: help install install-dev clean test test-cov lint format type-check build publish dev-setup pre-commit
+.PHONY: help install test lint format type-check verify check build publish clean
 
-# Default target
 help:
 	@echo "Available commands:"
-	@echo "  install      Install package in current environment"
-	@echo "  install-dev  Install package with development dependencies"
-	@echo "  clean        Clean build artifacts and cache"
+	@echo "  install      Install all dependencies (dev + test)"
 	@echo "  test         Run tests"
-	@echo "  test-cov     Run tests with coverage"
-	@echo "  lint         Run linting (ruff)"
-	@echo "  format       Format code (ruff)"
-	@echo "  type-check   Run type checking (mypy)"
+	@echo "  lint         Run ruff linter"
+	@echo "  format       Format code with ruff"
+	@echo "  type-check   Run mypy"
+	@echo "  verify       Run all CI checks (lint + format check + tests)"
+	@echo "  check        Alias for verify"
 	@echo "  build        Build package"
 	@echo "  publish      Publish package to PyPI"
-	@echo "  dev-setup    Set up development environment"
-	@echo "  pre-commit   Run pre-commit hooks"
+	@echo "  clean        Remove build artifacts"
 
-# Installation
 install:
-	pip install .
+	uv sync --all-extras
 
-install-dev:
-	pip install -e ".[dev,test]"
+test:
+	uv run pytest
 
-# Development setup
-dev-setup: install-dev
-	pre-commit install
+lint:
+	uv run ruff check src tests examples
 
-# Cleaning
+format:
+	uv run ruff check --fix src tests examples
+	uv run ruff format src tests examples
+
+type-check:
+	uv run mypy src
+
+# Canonical "is this ready to commit?" — mirrors exactly what CI runs
+verify:
+	uv run ruff check src tests examples
+	uv run ruff format --check src tests examples
+	uv run pytest
+
+check: verify
+
 clean:
 	rm -rf build/
 	rm -rf dist/
@@ -39,48 +48,13 @@ clean:
 	find . -type d -name __pycache__ -delete
 	find . -type f -name "*.pyc" -delete
 
-# Testing
-test:
-	pytest
-
-test-cov:
-	pytest --cov=src/coolhand --cov-report=html --cov-report=term-missing
-
-# Code quality
-lint:
-	ruff check src tests examples
-
-format:
-	ruff check --fix src tests examples
-	ruff format src tests examples
-
-type-check:
-	mypy src
-
-# Pre-commit
-pre-commit:
-	pre-commit run --all-files
-
-# Quality check (run all checks)
-check: lint type-check test
-
-# Building and publishing
 build: clean
-	python -m build
+	uv run python -m build
 
-# Use local .pypirc if it exists, otherwise use default
 PYPIRC := $(shell if [ -f .pypirc ]; then echo "--config-file .pypirc"; fi)
 
 publish: build
-	python -m twine upload $(PYPIRC) dist/*
+	uv run python -m twine upload $(PYPIRC) dist/*
 
 publish-test: build
-	python -m twine upload $(PYPIRC) --repository testpypi dist/*
-
-# Development workflow
-dev: format lint type-check test
-	@echo "Development checks completed successfully!"
-
-# Quick development cycle
-quick: format test
-	@echo "Quick development cycle completed!"
+	uv run python -m twine upload $(PYPIRC) --repository testpypi dist/*

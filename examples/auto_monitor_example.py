@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# Usage: cd <repo-root> && uv run python examples/auto_monitor_example.py
 """
 Auto-monitoring example for Coolhand Python SDK.
 
@@ -34,32 +35,44 @@ def simulate_openai_request():
     # )
 
     # For this example, we'll simulate the request manually
-    coolhand.log_request(
-        method="POST",
-        url="https://api.openai.com/v1/chat/completions",
-        headers={
-            "Authorization": "Bearer sk-proj-example...",
-            "Content-Type": "application/json",
-        },
-        body={
-            "model": "gpt-4",
-            "messages": [{"role": "user", "content": "Hello!"}],
-            "max_tokens": 100,
-        },
-        response_status=200,
-        response_body={
-            "choices": [
-                {
-                    "message": {
-                        "role": "assistant",
-                        "content": "Hello! How can I help you?",
-                    }
-                }
-            ],
-            "usage": {"total_tokens": 20},
-        },
-        duration=1.1,
-    )
+    instance = coolhand.get_global_instance()
+    if instance:
+        import time as _time
+
+        instance.log_interaction(
+            request={
+                "method": "POST",
+                "url": "https://api.openai.com/v1/chat/completions",
+                "headers": {
+                    "Authorization": "Bearer sk-proj-example...",
+                    "Content-Type": "application/json",
+                },
+                "body": {
+                    "model": "gpt-4",
+                    "messages": [{"role": "user", "content": "Hello!"}],
+                    "max_tokens": 100,
+                },
+                "timestamp": _time.time(),
+            },
+            response={
+                "status_code": 200,
+                "headers": {},
+                "body": {
+                    "choices": [
+                        {
+                            "message": {
+                                "role": "assistant",
+                                "content": "Hello! How can I help you?",
+                            }
+                        }
+                    ],
+                    "usage": {"total_tokens": 20},
+                },
+                "timestamp": _time.time(),
+                "duration": 1.1,
+                "is_streaming": False,
+            },
+        )
 
     print("✓ Request completed and automatically logged")
 
@@ -69,28 +82,44 @@ def simulate_anthropic_request():
     print("Making simulated Anthropic API request...")
 
     # Simulate Claude API request
-    coolhand.log_request(
-        method="POST",
-        url="https://api.anthropic.com/v1/messages",
-        headers={
-            "x-api-key": "sk-ant-example...",
-            "Content-Type": "application/json",
-            "anthropic-version": "2023-06-01",
-        },
-        body={
-            "model": "claude-3-sonnet-20240229",
-            "max_tokens": 100,
-            "messages": [{"role": "user", "content": "Explain quantum computing"}],
-        },
-        response_status=200,
-        response_body={
-            "content": [
-                {"text": "Quantum computing is a revolutionary computing paradigm..."}
-            ],
-            "usage": {"input_tokens": 10, "output_tokens": 25},
-        },
-        duration=0.9,
-    )
+    instance = coolhand.get_global_instance()
+    if instance:
+        import time as _time
+
+        instance.log_interaction(
+            request={
+                "method": "POST",
+                "url": "https://api.anthropic.com/v1/messages",
+                "headers": {
+                    "x-api-key": "sk-ant-example...",
+                    "Content-Type": "application/json",
+                    "anthropic-version": "2023-06-01",
+                },
+                "body": {
+                    "model": "claude-3-sonnet-20240229",
+                    "max_tokens": 100,
+                    "messages": [
+                        {"role": "user", "content": "Explain quantum computing"}
+                    ],
+                },
+                "timestamp": _time.time(),
+            },
+            response={
+                "status_code": 200,
+                "headers": {},
+                "body": {
+                    "content": [
+                        {
+                            "text": "Quantum computing is a revolutionary computing paradigm..."
+                        }
+                    ],
+                    "usage": {"input_tokens": 10, "output_tokens": 25},
+                },
+                "timestamp": _time.time(),
+                "duration": 0.9,
+                "is_streaming": False,
+            },
+        )
 
     print("✓ Request completed and automatically logged")
 
@@ -105,14 +134,13 @@ def demonstrate_auto_initialization():
 
     if instance:
         print("✓ Coolhand was automatically initialized!")
-        print(f"  Session ID: {instance.get_session_id()}")
-        print(f"  Monitoring enabled: {instance.is_monitoring()}")
+        print(f"  Session ID: {instance.session_id}")
+        print(f"  Monitoring enabled: {instance.get_stats()['monitoring']['enabled']}")
         print("  Config source: Environment variables and auto-detection")
 
         # Show current stats
         stats = instance.get_stats()
         print(f"  Has API key: {stats['config']['has_api_key']}")
-        print(f"  Base URL: {stats['config']['base_url']}")
 
     else:
         print("⚠ Coolhand was not automatically initialized")
@@ -143,11 +171,13 @@ def demonstrate_zero_config_usage():
     print("Using Coolhand with zero configuration...")
 
     # Just use the global functions directly
-    coolhand.thumbs_up("This auto-monitoring is awesome!")
-    print("✓ Submitted thumbs up feedback")
+    coolhand.create_feedback(
+        {"sentiment": "like", "explanation": "This auto-monitoring is awesome!"}
+    )
+    print("✓ Submitted positive feedback")
 
-    coolhand.rate(9, "Love the automatic setup")
-    print("✓ Submitted rating")
+    coolhand.create_feedback({"explanation": "Love the automatic setup"})
+    print("✓ Submitted feedback with explanation")
 
     # Make some API requests (they'll be automatically captured)
     simulate_openai_request()
@@ -161,32 +191,39 @@ def demonstrate_setup_modes():
     print("\nDifferent Setup Modes")
     print("-" * 25)
 
-    # Save current instance
+    # Save current instance to restore after demo
     current_instance = coolhand.get_global_instance()
 
     try:
-        # 1. Notebook setup
-        print("\n1. Notebook Setup (interactive, more verbose):")
-        notebook_instance = coolhand.setup_for_notebook()
-        print(f"   ✓ Log level: {notebook_instance.config['log_level']}")
-        print(f"   ✓ Enabled: {notebook_instance.config['enabled']}")
+        # 1. Notebook / interactive setup (verbose logging)
+        print("\n1. Notebook Setup (interactive, verbose):")
+        notebook_instance = coolhand.Coolhand(
+            api_key=os.getenv("COOLHAND_API_KEY"),
+            silent=False,
+        )
+        print(f"   ✓ silent: {notebook_instance.config['silent']}")
 
-        # 2. Production setup
-        print("\n2. Production Setup (minimal logging, robust):")
-        prod_instance = coolhand.setup_for_production()
-        print(f"   ✓ Log level: {prod_instance.config['log_level']}")
-        print(f"   ✓ Enabled: {prod_instance.config['enabled']}")
+        # 2. Production setup (quiet)
+        print("\n2. Production Setup (silent):")
+        prod_instance = coolhand.Coolhand(
+            api_key=os.getenv("COOLHAND_API_KEY"),
+            silent=True,
+        )
+        print(f"   ✓ silent: {prod_instance.config['silent']}")
 
-        # 3. Development setup
-        print("\n3. Development Setup (debug mode, detailed logging):")
-        dev_instance = coolhand.setup_for_development()
-        print(f"   ✓ Log level: {dev_instance.config['log_level']}")
-        print(f"   ✓ Enabled: {dev_instance.config['enabled']}")
+        # 3. Self-hosted / staging setup
+        print("\n3. Self-Hosted Setup (custom base_url):")
+        dev_instance = coolhand.Coolhand(
+            api_key=os.getenv("COOLHAND_API_KEY"),
+            base_url=os.getenv("COOLHAND_BASE_URL", "https://coolhandlabs.com"),
+            silent=True,
+        )
+        print(f"   ✓ base_url: {dev_instance.config['base_url']}")
 
     finally:
         # Restore original instance
         if current_instance:
-            coolhand.set_global_instance(current_instance)
+            coolhand.set_instance(current_instance)
 
 
 def demonstrate_environment_detection():
@@ -253,18 +290,14 @@ def demonstrate_monitoring_context():
 
     instance = coolhand.get_global_instance()
 
-    # Temporarily disable monitoring
-    print("Current monitoring status:", instance.is_monitoring())
+    stats = instance.get_stats()
+    print("Current monitoring status:", stats["monitoring"]["enabled"])
 
-    print("\nUsing context manager to temporarily disable monitoring:")
-    with coolhand.MonitoringContext(enabled=False):
-        print(
-            "  Inside context - monitoring disabled:",
-            coolhand.is_monitoring_enabled(),
-        )
-        # Any HTTP requests here would not be monitored
-
-    print("Outside context - monitoring restored:", coolhand.is_monitoring_enabled())
+    print("\nTemporarily stopping and restarting monitoring:")
+    coolhand.stop_monitoring()
+    print("  Monitoring stopped — HTTP requests will pass through unlogged")
+    coolhand.start_monitoring()
+    print("  Monitoring restored:", instance.get_stats()["monitoring"]["enabled"])
 
 
 def main():
@@ -292,12 +325,11 @@ def main():
     print("-" * 23)
 
     # Simulate user feedback after AI interactions
-    coolhand.thumbs_up("The auto-monitoring just works!")
-    coolhand.rate(10, "Perfect zero-config experience")
-    coolhand.submit_feedback(
-        rating=9,
-        comment="Love how it automatically detects my AI usage",
-        metadata={"feature": "auto_initialization", "environment": "demo"},
+    coolhand.create_feedback(
+        {"sentiment": "like", "explanation": "The auto-monitoring just works!"}
+    )
+    coolhand.create_feedback(
+        {"explanation": "Love how it automatically detects my AI usage"}
     )
 
     print("✓ Collected feedback on auto-monitoring experience")
@@ -307,7 +339,7 @@ def main():
     print("-" * 12)
 
     final_stats = instance.get_stats()
-    print(f"Session ID: {instance.get_session_id()}")
+    print(f"Session ID: {instance.session_id}")
     count = final_stats["logging"].get("interaction_count", 0)
     print(f"Total interactions logged: {count}")
     print(f"Monitoring active: {final_stats['monitoring']['enabled']}")
@@ -323,7 +355,9 @@ def main():
     print("1. Just 'import coolhand' can be enough to get started")
     print("2. Auto-initialization detects AI/ML environments")
     print("3. Zero configuration needed in many cases")
-    print("4. Use setup_for_*() functions for specific environments")
+    print(
+        "4. Pass silent=True/False and base_url to Coolhand() for environment-specific setups"
+    )
     print("5. Environment variables control auto-initialization")
 
 

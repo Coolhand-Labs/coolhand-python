@@ -6,9 +6,9 @@ import os
 import subprocess
 import sys
 
-if sys.version_info < (3, 8):
+if sys.version_info < (3, 10):
     sys.exit(
-        "Python 3.8+ required. Run with: python3.11 -m uvicorn main:app --reload --port 8188"
+        "Python 3.10+ required. Run with: python3.12 -m uvicorn main:app --reload --port 8188"
     )
 
 from dotenv import load_dotenv
@@ -333,7 +333,7 @@ async def submit_feedback(body: SubmitFeedbackRequest):
     liked_count = len(body.liked_bands)
     total_count = len(body.all_bands) if body.all_bands else 1
 
-    like = liked_count >= (total_count / 2)
+    sentiment = "like" if liked_count >= (total_count / 2) else "dislike"
 
     disliked = [b for b in body.all_bands if b not in body.liked_bands]
     liked_str = ", ".join(body.liked_bands) if body.liked_bands else "none"
@@ -344,7 +344,7 @@ async def submit_feedback(body: SubmitFeedbackRequest):
         _ch.create_feedback(
             {
                 "original_output": body.raw_response,
-                "like": like,
+                "sentiment": sentiment,
                 "explanation": explanation,
             }
         )

@@ -28,7 +28,7 @@ The app deliberately replicates the dependency environment of a real client (Tel
 
 After the user checks off bands they like, the app calls `_ch.create_feedback()` with:
 - `original_output` — the raw LLM response, used by coolhand to fuzzy-match the logged interaction
-- `like` — `True` if the user liked at least half the suggestions
+- `sentiment` — `"like"` if the user liked at least half the suggestions, `"dislike"` otherwise
 - `explanation` — a human-readable summary ("Liked: X, Y. Disliked: Z.")
 
 ## Setup
@@ -40,14 +40,38 @@ cp .env.example .env
 pip install -r requirements.txt
 ```
 
+## Testing locally (against an unreleased SDK build)
+
+To run the app against your local checkout of `coolhand-python` instead of the version installed from git:
+
+```bash
+cd examples/band-guesser
+
+uv venv --python 3.12 .venv
+source .venv/bin/activate
+
+# Install remaining deps first (skip the coolhand git line)
+grep -v '^coolhand' requirements.txt | uv pip install -r -
+
+# Install local SDK in editable mode (takes precedence)
+uv pip install -e ../../
+```
+
+Then start the server:
+
+```bash
+source .venv/bin/activate
+uvicorn main:app --reload --port 8188
+```
+
 ## Running
 
 ```bash
 # Development (single worker, auto-reload)
-python3.11 -m uvicorn main:app --reload --port 8188
+python -m uvicorn main:app --reload --port 8188
 
 # Production-like (2 gunicorn workers — tests multi-process behaviour)
-python3.11 -m gunicorn -c gunicorn.conf.py main:app
+python -m gunicorn -c gunicorn.conf.py main:app
 ```
 
 ## GitHub token

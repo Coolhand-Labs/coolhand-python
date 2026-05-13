@@ -49,7 +49,7 @@ clean:
 	find . -type f -name "*.pyc" -delete
 
 build: clean
-	uv run python -m build
+	uv build
 
 PYPIRC := $(shell if [ -f .pypirc ]; then echo "--config-file .pypirc"; fi)
 

@@ -87,12 +87,20 @@ def _is_streaming_content_type(content_type: str) -> bool:
     return "text/event-stream" in content_type or "application/x-ndjson" in content_type
 
 
+def _is_binary_content_type(content_type: str) -> bool:
+    """Check if content type indicates non-text binary data (audio, video, image, etc.)."""
+    binary_prefixes = ("audio/", "video/", "image/", "application/octet-stream")
+    return any(content_type.startswith(p) for p in binary_prefixes)
+
+
 def _read_response_body(response: Any) -> Any:
     """Safely read response body."""
     try:
         content_type = response.headers.get("content-type", "")
         if _is_streaming_content_type(content_type):
             return "[streaming]"
+        if _is_binary_content_type(content_type):
+            return "[binary]"
 
         if hasattr(response, "_content") and response._content:
             return response._content
@@ -336,6 +344,8 @@ def patch() -> bool:
                     is_streaming = _is_streaming_content_type(content_type)
                     if is_streaming:
                         res_body = "[streaming]"
+                    elif _is_binary_content_type(content_type):
+                        res_body = "[binary]"
                     else:
                         res_body = response.content.decode("utf-8", errors="replace")
                 except Exception:

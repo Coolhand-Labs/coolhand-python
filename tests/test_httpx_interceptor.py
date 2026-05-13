@@ -7,6 +7,7 @@ import pytest
 from coolhand.httpx_interceptor import (
     DEFAULT_EXCLUDE_API_PATTERNS,
     DEFAULT_INTERCEPT_ADDRESSES,
+    _is_binary_content_type,
     _is_excluded,
     _is_llm_api,
     _is_localhost,
@@ -190,6 +191,34 @@ class TestIsStreamingContentType:
         assert _is_streaming_content_type("text/plain") is False
 
 
+class TestIsBinaryContentType:
+    """Tests for _is_binary_content_type helper function."""
+
+    def test_audio(self):
+        """Detects audio/* content types."""
+        assert _is_binary_content_type("audio/mpeg") is True
+        assert _is_binary_content_type("audio/wav") is True
+
+    def test_video(self):
+        """Detects video/* content types."""
+        assert _is_binary_content_type("video/mp4") is True
+
+    def test_image(self):
+        """Detects image/* content types."""
+        assert _is_binary_content_type("image/png") is True
+        assert _is_binary_content_type("image/jpeg") is True
+
+    def test_octet_stream(self):
+        """Detects application/octet-stream."""
+        assert _is_binary_content_type("application/octet-stream") is True
+
+    def test_non_binary(self):
+        """Rejects text and JSON content types."""
+        assert _is_binary_content_type("application/json") is False
+        assert _is_binary_content_type("text/plain") is False
+        assert _is_binary_content_type("text/event-stream") is False
+
+
 class TestReadResponseBody:
     """Tests for _read_response_body helper function."""
 
@@ -198,6 +227,12 @@ class TestReadResponseBody:
         response = MagicMock()
         response.headers = {"content-type": "text/event-stream"}
         assert _read_response_body(response) == "[streaming]"
+
+    def test_binary_returns_placeholder(self):
+        """Binary responses return [binary] placeholder instead of raw bytes."""
+        response = MagicMock()
+        response.headers = {"content-type": "audio/mpeg"}
+        assert _read_response_body(response) == "[binary]"
 
     def test_reads_content_attribute(self):
         """Reads from _content if available."""

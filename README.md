@@ -71,6 +71,35 @@ coolhand_client = Coolhand(
 )
 ```
 
+### Excluding API Patterns
+
+Some endpoints — batch jobs, health checks, internal metrics — generate high-volume traffic that isn't useful to log. Use `exclude_api_patterns` to skip them:
+
+```python
+from coolhand import Coolhand
+
+coolhand_client = Coolhand(
+    api_key='your-api-key',
+    exclude_api_patterns=[
+        '/health',
+        '/metrics',
+        '/batchPredictionJobs/',
+    ],
+)
+```
+
+Any request whose URL contains one of the listed substrings is passed through without logging. The default list (`DEFAULT_EXCLUDE_API_PATTERNS`) excludes `/batchPredictionJobs/`; setting `exclude_api_patterns` replaces the default entirely.
+
+```python
+from coolhand import DEFAULT_EXCLUDE_API_PATTERNS
+
+# Extend the defaults rather than replace them
+coolhand_client = Coolhand(
+    api_key='your-api-key',
+    exclude_api_patterns=DEFAULT_EXCLUDE_API_PATTERNS + ['/health'],
+)
+```
+
 ### Self-Hosted Deployments
 
 If you run your own Coolhand-compatible backend (e.g. for compliance or data-residency requirements), point the SDK at your host with `base_url`:

@@ -1,5 +1,5 @@
 # Install dependencies:
-coolhand @ git+https://github.com/Coolhand-Labs/coolhand-python.git@mikecarroll/requests-interception
+coolhand @ git+https://github.com/Coolhand-Labs/coolhand-python.git@main
 fastapi>=0.100.0
 uvicorn[standard]>=0.29.0
 httpx>=0.27.0

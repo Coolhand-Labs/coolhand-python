@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# Usage: cd <repo-root> && uv run python examples/basic_usage.py
 """
 Basic usage example for Coolhand Python SDK.
 

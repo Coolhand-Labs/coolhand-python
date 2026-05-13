@@ -88,7 +88,7 @@ def _is_streaming_content_type(content_type: str) -> bool:
 
 
 def _is_binary_content_type(content_type: str) -> bool:
-    """Check if content type indicates non-text binary data (audio, video, image, etc.)."""
+    """Check if content type indicates binary data (audio, video, image, etc.)."""
     binary_prefixes = ("audio/", "video/", "image/", "application/octet-stream")
     return any(content_type.startswith(p) for p in binary_prefixes)
 

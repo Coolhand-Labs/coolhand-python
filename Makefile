@@ -54,7 +54,7 @@ build: clean
 PYPIRC := $(shell if [ -f .pypirc ]; then echo "--config-file .pypirc"; fi)
 
 publish: build
-	uv publish $(PYPIRC) dist/*
+	uv run python -m twine upload $(PYPIRC) dist/*
 
 publish-test: build
-	uv publish $(PYPIRC) --publish-url https://test.pypi.org/legacy/ dist/*
+	uv run python -m twine upload $(PYPIRC) --repository testpypi dist/*

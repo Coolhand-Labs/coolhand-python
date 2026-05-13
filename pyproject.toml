@@ -54,6 +54,7 @@ dev = [
     "ruff>=0.6.0",
     "mypy>=1.0.0",
     "pre-commit>=3.0.0",
+    "twine>=5.0.0",
 ]
 test = [
     "pytest>=9.0.3",

@@ -5,12 +5,15 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from coolhand.httpx_interceptor import (
+    DEFAULT_EXCLUDE_API_PATTERNS,
     DEFAULT_INTERCEPT_ADDRESSES,
+    _is_excluded,
     _is_llm_api,
     _is_localhost,
     _is_streaming_content_type,
     _read_response_body,
     is_patched,
+    set_exclude_api_patterns,
     set_handler,
     set_intercept_addresses,
     unpatch,
@@ -56,7 +59,8 @@ class TestIsLlmApi:
         assert _is_llm_api("https://api.anthropic.com/v1/messages") is True
 
     def test_github_models(self):
-        """Detects models.inference.ai.azure.com."""
+        """Detects models.github.ai and the deprecated models.inference.ai.azure.com."""
+        assert _is_llm_api("https://models.github.ai/chat/completions") is True
         assert (
             _is_llm_api("https://models.inference.ai.azure.com/chat/completions")
             is True
@@ -606,3 +610,144 @@ class TestReadResponseBodyEdgeCases:
 
         result = _read_response_body(response)
         assert result is None
+
+
+class TestIsExcluded:
+    """Tests for _is_excluded helper function."""
+
+    def test_excluded_by_default_pattern(self, reset_global_instance):
+        """batchPredictionJobs URLs are excluded by default."""
+        url = (
+            "https://aiplatform.googleapis.com/v1/projects/my-project"
+            "/locations/us-central1/batchPredictionJobs/123456"
+        )
+        assert _is_excluded(url) is True
+
+    def test_llm_inference_not_excluded(self, reset_global_instance):
+        """Normal LLM inference endpoints are not excluded."""
+        assert _is_excluded("https://api.openai.com/v1/chat/completions") is False
+        assert _is_excluded("https://api.anthropic.com/v1/messages") is False
+        url = (
+            "https://us-central1-aiplatform.googleapis.com/v1/projects/my-project"
+            "/locations/us-central1/publishers/google/models/gemini-pro:generateContent"
+        )
+        assert _is_excluded(url) is False
+
+    def test_custom_pattern_excludes(self, reset_global_instance):
+        """Custom patterns override defaults."""
+        set_exclude_api_patterns(["/myOperationalEndpoint/"])
+        assert _is_excluded("https://example.com/myOperationalEndpoint/status") is True
+        assert _is_excluded("https://api.openai.com/v1/chat/completions") is False
+
+    def test_empty_list_disables_exclusions(self, reset_global_instance):
+        """Empty pattern list disables all exclusions."""
+        set_exclude_api_patterns([])
+        url = (
+            "https://aiplatform.googleapis.com/v1/projects/my-project"
+            "/locations/us-central1/batchPredictionJobs/123"
+        )
+        assert _is_excluded(url) is False
+
+    def test_uses_default_when_none(self, reset_global_instance):
+        """When _exclude_api_patterns is None, DEFAULT_EXCLUDE_API_PATTERNS is used."""
+        from coolhand import httpx_interceptor
+
+        httpx_interceptor._exclude_api_patterns = None
+        url = (
+            "https://aiplatform.googleapis.com/v1/projects/my-project"
+            "/locations/us-central1/batchPredictionJobs/123"
+        )
+        assert _is_excluded(url) is True
+
+    def test_default_constant_contains_batch_prediction_jobs(self):
+        """DEFAULT_EXCLUDE_API_PATTERNS contains the expected default."""
+        assert "/batchPredictionJobs/" in DEFAULT_EXCLUDE_API_PATTERNS
+
+
+class TestExcludeIntegration:
+    """Integration tests for exclude_api_patterns in the patched senders."""
+
+    def test_excluded_url_not_captured_sync(self, reset_global_instance):
+        """Excluded URL is not forwarded to the handler in sync send."""
+        captured = []
+
+        def capture_handler(req, res, err):
+            captured.append(req)
+
+        set_handler(capture_handler)
+        # Allow aiplatform.googleapis.com via intercept_addresses
+        set_intercept_addresses(["aiplatform.googleapis.com"])
+        # Keep default exclude patterns (batchPredictionJobs)
+        patch_httpx()
+
+        try:
+            import httpx
+
+            from coolhand import httpx_interceptor
+
+            mock_response = MagicMock()
+            mock_response.status_code = 200
+            mock_response.headers = {"content-type": "application/json"}
+            mock_response._content = b'{"done": true}'
+            mock_response.content = b'{"done": true}'
+
+            original_original = httpx_interceptor._original_send
+            httpx_interceptor._original_send = MagicMock(return_value=mock_response)
+
+            mock_request = MagicMock()
+            mock_request.method = "GET"
+            mock_request.url = (
+                "https://aiplatform.googleapis.com/v1/projects/proj"
+                "/locations/us-central1/batchPredictionJobs/999"
+            )
+            mock_request.headers = {}
+            mock_request.content = b""
+
+            client = httpx.Client()
+            httpx.Client.send(client, mock_request)
+
+            httpx_interceptor._original_send = original_original
+
+            assert len(captured) == 0
+        finally:
+            unpatch()
+
+    def test_non_excluded_llm_url_captured_sync(self, reset_global_instance):
+        """Non-excluded LLM URL is still captured in sync send."""
+        captured = []
+
+        def capture_handler(req, res, err):
+            captured.append(req)
+
+        set_handler(capture_handler)
+        patch_httpx()
+
+        try:
+            import httpx
+
+            from coolhand import httpx_interceptor
+
+            mock_response = MagicMock()
+            mock_response.status_code = 200
+            mock_response.headers = {"content-type": "application/json"}
+            mock_response._content = b'{"result": "ok"}'
+            mock_response.content = b'{"result": "ok"}'
+
+            original_original = httpx_interceptor._original_send
+            httpx_interceptor._original_send = MagicMock(return_value=mock_response)
+
+            mock_request = MagicMock()
+            mock_request.method = "POST"
+            mock_request.url = "https://api.openai.com/v1/chat/completions"
+            mock_request.headers = {"Content-Type": "application/json"}
+            mock_request.content = b'{"model": "gpt-4"}'
+
+            client = httpx.Client()
+            httpx.Client.send(client, mock_request)
+
+            httpx_interceptor._original_send = original_original
+
+            assert len(captured) == 1
+            assert "openai" in captured[0]["url"]
+        finally:
+            unpatch()

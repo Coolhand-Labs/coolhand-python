@@ -49,12 +49,12 @@ clean:
 	find . -type f -name "*.pyc" -delete
 
 build: clean
-	uv run python -m build
+	uv build
 
 PYPIRC := $(shell if [ -f .pypirc ]; then echo "--config-file .pypirc"; fi)
 
 publish: build
-	uv run python -m twine upload $(PYPIRC) dist/*
+	uv publish $(PYPIRC) dist/*
 
 publish-test: build
-	uv run python -m twine upload $(PYPIRC) --repository testpypi dist/*
+	uv publish $(PYPIRC) --publish-url https://test.pypi.org/legacy/ dist/*

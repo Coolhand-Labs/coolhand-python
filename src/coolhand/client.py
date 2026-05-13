@@ -11,7 +11,7 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import parse_qs, urlencode, urlparse, urlunparse
 from urllib.request import Request, urlopen
 
-from ._config import _DEFAULT_BASE_URL, _normalize_base_url
+from ._config import _DEFAULT_BASE_URL, _normalize_base_url, _ssl_context
 from .httpx_interceptor import DEFAULT_EXCLUDE_API_PATTERNS
 from .types import Config, RequestData, ResponseData
 from .version import __version__
@@ -218,7 +218,7 @@ class CoolhandClient:
                     method="POST",
                 )
 
-                with urlopen(request, timeout=10) as resp:
+                with urlopen(request, context=_ssl_context, timeout=10) as resp:
                     if resp.status == 200 or resp.status == 201:
                         success_count += 1
 

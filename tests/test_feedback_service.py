@@ -355,6 +355,54 @@ class TestFeedbackServiceHTTPErrors:
             result = feedback_service.create_feedback(feedback)
             assert result is None
 
+    def test_create_feedback_passes_ssl_context_to_urlopen(self, feedback_service):
+        """create_feedback passes _ssl_context as context= argument to urlopen."""
+        import ssl
+        from unittest.mock import MagicMock
+
+        sentinel_ctx = ssl.create_default_context()
+        mock_resp = MagicMock()
+        mock_resp.__enter__ = lambda s: s
+        mock_resp.__exit__ = MagicMock(return_value=False)
+        mock_resp.status = 201
+        mock_resp.read.return_value = b'{"id": 1}'
+
+        feedback: FeedbackData = {"llm_request_log_id": 12345, "sentiment": "like"}
+
+        with (
+            patch("coolhand.feedback_service._ssl_context", sentinel_ctx),
+            patch(
+                "coolhand.feedback_service.urlopen", return_value=mock_resp
+            ) as mock_open,
+        ):
+            feedback_service.create_feedback(feedback)
+            _, kwargs = mock_open.call_args
+            assert kwargs.get("context") is sentinel_ctx
+
+    def test_create_feedback_ssl_context_none_when_certifi_missing(
+        self, feedback_service
+    ):
+        """create_feedback passes context=None to urlopen when certifi unavailable."""
+        from unittest.mock import MagicMock
+
+        mock_resp = MagicMock()
+        mock_resp.__enter__ = lambda s: s
+        mock_resp.__exit__ = MagicMock(return_value=False)
+        mock_resp.status = 201
+        mock_resp.read.return_value = b'{"id": 1}'
+
+        feedback: FeedbackData = {"llm_request_log_id": 12345, "sentiment": "like"}
+
+        with (
+            patch("coolhand.feedback_service._ssl_context", None),
+            patch(
+                "coolhand.feedback_service.urlopen", return_value=mock_resp
+            ) as mock_open,
+        ):
+            feedback_service.create_feedback(feedback)
+            _, kwargs = mock_open.call_args
+            assert kwargs.get("context") is None
+
 
 class TestModuleLevelFunctions:
     """Test module-level convenience functions."""

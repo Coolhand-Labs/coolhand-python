@@ -529,6 +529,62 @@ class TestFlushAPISubmission:
             client.log_interaction(mock_request_data, mock_response_data)
             mock_flush.assert_called_once()
 
+    def test_flush_passes_ssl_context_to_urlopen(self, reset_global_instance):
+        """flush passes _ssl_context as context= argument to urlopen."""
+        import ssl
+        from unittest.mock import MagicMock, patch
+
+        sentinel_ctx = ssl.create_default_context()
+        client = CoolhandClient(auto_submit=False, api_key="real-api-key-12345")
+        client._queue.append(
+            {
+                "id": "test-id",
+                "method": "post",
+                "url": "https://api.openai.com/v1/chat",
+                "timestamp": "2024-01-01T00:00:00Z",
+            }
+        )
+
+        mock_resp = MagicMock()
+        mock_resp.__enter__ = lambda s: s
+        mock_resp.__exit__ = MagicMock(return_value=False)
+        mock_resp.status = 200
+
+        with (
+            patch("coolhand.client._ssl_context", sentinel_ctx),
+            patch("coolhand.client.urlopen", return_value=mock_resp) as mock_open,
+        ):
+            client.flush()
+            _, kwargs = mock_open.call_args
+            assert kwargs.get("context") is sentinel_ctx
+
+    def test_flush_ssl_context_none_when_certifi_missing(self, reset_global_instance):
+        """flush passes context=None to urlopen when certifi is unavailable."""
+        from unittest.mock import MagicMock, patch
+
+        client = CoolhandClient(auto_submit=False, api_key="real-api-key-12345")
+        client._queue.append(
+            {
+                "id": "test-id",
+                "method": "post",
+                "url": "https://api.openai.com/v1/chat",
+                "timestamp": "2024-01-01T00:00:00Z",
+            }
+        )
+
+        mock_resp = MagicMock()
+        mock_resp.__enter__ = lambda s: s
+        mock_resp.__exit__ = MagicMock(return_value=False)
+        mock_resp.status = 200
+
+        with (
+            patch("coolhand.client._ssl_context", None),
+            patch("coolhand.client.urlopen", return_value=mock_resp) as mock_open,
+        ):
+            client.flush()
+            _, kwargs = mock_open.call_args
+            assert kwargs.get("context") is None
+
 
 class TestGeminiCapture:
     """Tests for Gemini API capture and sanitization."""

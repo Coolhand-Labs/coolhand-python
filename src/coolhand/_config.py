@@ -1,6 +1,15 @@
 """Shared configuration helpers used by both client and feedback_service."""
 
+import ssl
 from urllib.parse import urlparse
+
+try:
+    import certifi
+
+    _ssl_context = ssl.create_default_context()
+    _ssl_context.load_verify_locations(cafile=certifi.where())
+except ImportError:
+    _ssl_context = None
 
 _DEFAULT_BASE_URL = "https://coolhandlabs.com"
 

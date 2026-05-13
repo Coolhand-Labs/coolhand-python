@@ -7,7 +7,7 @@ import warnings
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
-from ._config import _DEFAULT_BASE_URL, _normalize_base_url
+from ._config import _DEFAULT_BASE_URL, _normalize_base_url, _ssl_context
 from .types import Config, FeedbackData, FeedbackResponse
 from .version import __version__
 
@@ -173,7 +173,7 @@ class FeedbackService:
                 method="POST",
             )
 
-            with urlopen(request, timeout=10) as resp:
+            with urlopen(request, context=_ssl_context, timeout=10) as resp:
                 if resp.status in (200, 201):
                     response_data = json.loads(resp.read().decode("utf-8"))
                     self._log("Successfully created feedback")

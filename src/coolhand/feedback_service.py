@@ -200,7 +200,7 @@ class FeedbackService:
         log_id = feedback.get("llm_request_log_id", "N/A")
         sentiment = feedback.get("sentiment")
         like = feedback.get("like")
-        if sentiment:
+        if sentiment is not None:
             sentiment_str = sentiment
         elif like is True:
             sentiment_str = "thumbs up"

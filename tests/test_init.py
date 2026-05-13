@@ -250,7 +250,7 @@ class TestCoolhandClassEdgeCases:
             result = instance.create_feedback(
                 {
                     "llm_request_log_id": 12345,
-                    "like": True,
+                    "sentiment": "like",
                 }
             )
 

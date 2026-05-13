@@ -6,13 +6,22 @@ All notable changes to this project will be documented in this file.
 
 ### Added
 
+- **`sentiment` field** on `FeedbackData` and `FeedbackResponse` — string `"like"`, `"dislike"`, or `"neutral"`. This is now the preferred way to express feedback polarity; `like` (bool) is deprecated. (#37)
+- **`workload_hashid` field** on `FeedbackData` and `FeedbackResponse` — associates feedback with a specific workload. (#37)
+- **`collector` field** on `FeedbackData` — callers can now override the SDK-generated collector string; the SDK default is used only when this field is absent. (#37)
 - **`base_url` configuration** — `Coolhand` and `FeedbackService` now accept a `base_url` kwarg and read a `COOLHAND_BASE_URL` environment variable. When unset, behavior is unchanged (defaults to `https://coolhandlabs.com`). Intended for self-hosted deployments and staging environments. (#21)
 - Shared `src/coolhand/_config.py` module — houses `_normalize_base_url` and `_DEFAULT_BASE_URL` to avoid cross-module private imports between `client.py` and `feedback_service.py`.
 
 ### Changed
 
+- **`like` is deprecated** — use `sentiment` instead. Passing `like` without `sentiment` emits a `DeprecationWarning`. The SDK auto-converts `like=True` → `sentiment="like"` and `like=False` → `sentiment="dislike"` before sending, then strips `like` from the wire payload entirely. (#37)
 - `base_url` validation rejects non-`https://` values at construction time. `http://localhost` and `http://127.0.0.1` (and `http://[::1]`) are allowed for local development. Hostname check uses `urlparse` to block subdomain and userinfo spoofing (e.g. `http://localhost.attacker.com`, `http://localhost@attacker.com`).
 - `Config` TypedDict gains a `base_url: str` field.
+
+### Breaking changes
+
+- **`like` is no longer required** — `create_feedback` no longer raises `ValueError` when `like` is absent. Callers using that exception as input validation will now silently send sentiment-less feedback. (#37)
+- **`like` field is stripped from the wire payload** — even when the caller explicitly provides it, `like` is removed before the HTTP request is sent. Callers inspecting the raw request body should use `sentiment` instead. (#37)
 
 ## [0.4.0] - 2026-04-30
 

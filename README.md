@@ -71,6 +71,35 @@ coolhand_client = Coolhand(
 )
 ```
 
+### Excluding API Patterns
+
+Some endpoints — batch jobs, health checks, internal metrics — generate high-volume traffic that isn't useful to log. Use `exclude_api_patterns` to skip them:
+
+```python
+from coolhand import Coolhand
+
+coolhand_client = Coolhand(
+    api_key='your-api-key',
+    exclude_api_patterns=[
+        '/health',
+        '/metrics',
+        '/batchPredictionJobs/',
+    ],
+)
+```
+
+Any request whose URL contains one of the listed substrings is passed through without logging. The default list (`DEFAULT_EXCLUDE_API_PATTERNS`) excludes `/batchPredictionJobs/`; setting `exclude_api_patterns` replaces the default entirely.
+
+```python
+from coolhand import DEFAULT_EXCLUDE_API_PATTERNS
+
+# Extend the defaults rather than replace them
+coolhand_client = Coolhand(
+    api_key='your-api-key',
+    exclude_api_patterns=DEFAULT_EXCLUDE_API_PATTERNS + ['/health'],
+)
+```
+
 ### Self-Hosted Deployments
 
 If you run your own Coolhand-compatible backend (e.g. for compliance or data-residency requirements), point the SDK at your host with `base_url`:
@@ -214,7 +243,7 @@ For non-LLM endpoints, requests pass through unchanged with zero overhead.
 
 ## Feedback Service
 
-Collect user feedback on LLM responses to improve your AI outputs. The FeedbackService lets you capture thumbs up/down ratings, explanations, and corrections.
+Collect user feedback on LLM responses to improve your AI outputs. The FeedbackService lets you capture sentiment ratings, explanations, and corrections.
 
 > **Frontend Feedback Widget**: For browser-based feedback collection, see [coolhand-js](https://github.com/Coolhand-Labs/coolhand-js) - an accessible, lightweight JavaScript widget that leverages best UX practices to capture actionable user feedback on any AI output.
 
@@ -229,32 +258,35 @@ ch = Coolhand(api_key='your-api-key')
 # Submit positive feedback
 ch.create_feedback({
     'llm_request_log_id': 12345,  # From Coolhand logs
-    'like': True,
+    'sentiment': 'like',
     'explanation': 'Very helpful response!'
 })
 
 # Using original output for fuzzy matching
 ch.create_feedback({
     'original_output': 'The capital of France is London.',
-    'like': False,
+    'sentiment': 'dislike',
     'revised_output': 'The capital of France is Paris.'
 })
 ```
 
 ### Feedback Fields
 
-| Field | Type | Required | Description |
-|-------|------|----------|-------------|
-| `like` | bool | Yes | Thumbs up (`True`) or down (`False`) |
-| `llm_request_log_id` | int | No* | Coolhand log ID (exact match) |
-| `llm_provider_unique_id` | str | No* | Provider's x-request-id (exact match) |
-| `original_output` | str | No* | Original response text (fuzzy match) |
-| `client_unique_id` | str | No* | Your internal identifier |
-| `explanation` | str | No | Why the response was good/bad |
-| `revised_output` | str | No | User's corrected version |
-| `creator_unique_id` | str | No | ID of user providing feedback |
+All fields are optional. At least one matching field (marked \*) is recommended to link feedback to the original LLM request.
 
-*At least one matching field is recommended to link feedback to the original request.
+| Field | Type | Description |
+|-------|------|-------------|
+| `sentiment` | str | **Preferred.** `"like"`, `"dislike"`, or `"neutral"` |
+| `like` | bool | **Deprecated** — use `sentiment` instead. Auto-converted and stripped from the wire payload. Emits `DeprecationWarning`. |
+| `llm_request_log_id` | int | \* Coolhand log ID (exact match) |
+| `llm_provider_unique_id` | str | \* Provider's x-request-id (exact match) |
+| `original_output` | str | \* Original response text (fuzzy match) |
+| `client_unique_id` | str | \* Your internal identifier |
+| `explanation` | str | Why the response was good/bad |
+| `revised_output` | str | User's corrected version |
+| `creator_unique_id` | str | ID of user providing feedback |
+| `workload_hashid` | str | Associate feedback with a specific workload |
+| `collector` | str | Override the SDK-generated collector string |
 
 ## Troubleshooting
 

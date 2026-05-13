@@ -1,6 +1,7 @@
 """Tests for FeedbackService."""
 
 import json
+import warnings
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -84,7 +85,7 @@ class TestCreateFeedback:
         """Test successful feedback creation."""
         feedback: FeedbackData = {
             "llm_request_log_id": 12345,
-            "like": True,
+            "sentiment": "like",
             "explanation": "Great response",
         }
 
@@ -104,7 +105,7 @@ class TestCreateFeedback:
         """Test feedback with revised output."""
         feedback: FeedbackData = {
             "llm_request_log_id": 12345,
-            "like": False,
+            "sentiment": "dislike",
             "explanation": "Incorrect information",
             "revised_output": "The correct answer is 42.",
         }
@@ -127,7 +128,7 @@ class TestCreateFeedback:
         """Test feedback using original_output for fuzzy matching."""
         feedback: FeedbackData = {
             "original_output": "The capital of France is London.",
-            "like": False,
+            "sentiment": "dislike",
             "revised_output": "The capital of France is Paris.",
         }
 
@@ -140,28 +141,121 @@ class TestCreateFeedback:
         """Test feedback using llm_provider_unique_id."""
         feedback: FeedbackData = {
             "llm_provider_unique_id": "req-abc123",
-            "like": True,
+            "sentiment": "like",
         }
 
         result = feedback_service.create_feedback(feedback)
         assert result is not None
 
-    def test_create_feedback_missing_like_raises_error(self, feedback_service):
-        """Test that missing 'like' field raises ValueError."""
-        feedback = {
+    def test_create_feedback_like_true_converts_to_sentiment_like(
+        self, feedback_service, mock_feedback_urlopen
+    ):
+        """like=True is converted to sentiment='like' in the payload and warns."""
+        with pytest.warns(DeprecationWarning, match="'like' is deprecated"):
+            feedback_service.create_feedback(
+                {"llm_request_log_id": 12345, "like": True}
+            )
+
+        payload = json.loads(mock_feedback_urlopen.call_args[0][0].data.decode("utf-8"))
+        fb = payload["llm_request_log_feedback"]
+        assert fb["sentiment"] == "like"
+        assert "like" not in fb  # deprecated field stripped from wire payload
+
+    def test_create_feedback_like_false_converts_to_sentiment_dislike(
+        self, feedback_service, mock_feedback_urlopen
+    ):
+        """like=False is converted to sentiment='dislike' in the payload and warns."""
+        with pytest.warns(DeprecationWarning, match="'like' is deprecated"):
+            feedback_service.create_feedback(
+                {"llm_request_log_id": 12345, "like": False}
+            )
+
+        payload = json.loads(mock_feedback_urlopen.call_args[0][0].data.decode("utf-8"))
+        fb = payload["llm_request_log_feedback"]
+        assert fb["sentiment"] == "dislike"
+        assert "like" not in fb  # deprecated field stripped from wire payload
+
+    def test_create_feedback_explicit_sentiment_not_overridden_by_like(
+        self, feedback_service, mock_feedback_urlopen
+    ):
+        """Explicit sentiment takes precedence; like is stripped from wire payload."""
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", DeprecationWarning)
+            feedback_service.create_feedback(
+                {"llm_request_log_id": 12345, "like": True, "sentiment": "neutral"}
+            )
+
+        fb = json.loads(mock_feedback_urlopen.call_args[0][0].data.decode("utf-8"))[
+            "llm_request_log_feedback"
+        ]
+        assert fb["sentiment"] == "neutral"
+        assert "like" not in fb  # like stripped even when sentiment is already set
+
+    def test_create_feedback_like_with_sentiment_no_warning(
+        self, feedback_service, mock_feedback_urlopen
+    ):
+        """Test that passing both 'like' and 'sentiment' does not warn."""
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", DeprecationWarning)
+            feedback_service.create_feedback(
+                {"llm_request_log_id": 12345, "like": True, "sentiment": "like"}
+            )
+
+    def test_create_feedback_without_like_succeeds(
+        self, feedback_service, mock_feedback_urlopen
+    ):
+        """Test that missing 'like' does not raise an error."""
+        feedback: FeedbackData = {
             "llm_request_log_id": 12345,
             "explanation": "Some explanation",
         }
 
-        with pytest.raises(ValueError, match="'like' field is required"):
-            feedback_service.create_feedback(feedback)
+        result = feedback_service.create_feedback(feedback)
+        assert result is not None
+        mock_feedback_urlopen.assert_called_once()
+
+    def test_create_feedback_with_sentiment(
+        self, feedback_service, mock_feedback_urlopen
+    ):
+        """Test feedback using sentiment string instead of like bool."""
+        feedback: FeedbackData = {
+            "llm_request_log_id": 12345,
+            "sentiment": "dislike",
+            "explanation": "Response was incorrect",
+        }
+
+        result = feedback_service.create_feedback(feedback)
+        assert result is not None
+
+        call_args = mock_feedback_urlopen.call_args
+        request = call_args[0][0]
+        payload = json.loads(request.data.decode("utf-8"))
+        assert payload["llm_request_log_feedback"]["sentiment"] == "dislike"
+        assert "like" not in payload["llm_request_log_feedback"]
+
+    def test_create_feedback_with_workload_hashid(
+        self, feedback_service, mock_feedback_urlopen
+    ):
+        """Test feedback with workload_hashid passes through payload."""
+        feedback: FeedbackData = {
+            "llm_request_log_id": 12345,
+            "sentiment": "like",
+            "workload_hashid": "abc123",
+        }
+
+        feedback_service.create_feedback(feedback)
+
+        call_args = mock_feedback_urlopen.call_args
+        request = call_args[0][0]
+        payload = json.loads(request.data.decode("utf-8"))
+        assert payload["llm_request_log_feedback"]["workload_hashid"] == "abc123"
 
     def test_create_feedback_no_api_key_returns_none(self, mock_feedback_urlopen):
         """Test that missing API key returns None without calling API."""
         service = FeedbackService(api_key="", silent=True)
         feedback: FeedbackData = {
             "llm_request_log_id": 12345,
-            "like": True,
+            "sentiment": "like",
         }
 
         result = service.create_feedback(feedback)
@@ -174,7 +268,7 @@ class TestCreateFeedback:
         """Test that collector string is added to payload."""
         feedback: FeedbackData = {
             "llm_request_log_id": 12345,
-            "like": True,
+            "sentiment": "like",
         }
 
         feedback_service.create_feedback(feedback)
@@ -187,6 +281,23 @@ class TestCreateFeedback:
         assert "coolhand-python" in collector
         assert "manual" in collector
 
+    def test_create_feedback_does_not_override_caller_collector(
+        self, feedback_service, mock_feedback_urlopen
+    ):
+        """Test that a caller-supplied collector is not overridden by the SDK."""
+        feedback: FeedbackData = {
+            "llm_request_log_id": 12345,
+            "sentiment": "like",
+            "collector": "my-custom-collector",
+        }
+
+        feedback_service.create_feedback(feedback)
+
+        call_args = mock_feedback_urlopen.call_args
+        request = call_args[0][0]
+        payload = json.loads(request.data.decode("utf-8"))
+        assert payload["llm_request_log_feedback"]["collector"] == "my-custom-collector"
+
     def test_create_feedback_warns_no_matching_field(
         self, feedback_service, mock_feedback_urlopen, caplog
     ):
@@ -196,7 +307,7 @@ class TestCreateFeedback:
         caplog.set_level(logging.WARNING)
 
         feedback: FeedbackData = {
-            "like": True,
+            "sentiment": "like",
             "explanation": "Good response",
         }
 
@@ -223,7 +334,7 @@ class TestFeedbackServiceHTTPErrors:
 
             feedback: FeedbackData = {
                 "llm_request_log_id": 12345,
-                "like": True,
+                "sentiment": "like",
             }
 
             result = feedback_service.create_feedback(feedback)
@@ -238,11 +349,59 @@ class TestFeedbackServiceHTTPErrors:
 
             feedback: FeedbackData = {
                 "llm_request_log_id": 12345,
-                "like": True,
+                "sentiment": "like",
             }
 
             result = feedback_service.create_feedback(feedback)
             assert result is None
+
+    def test_create_feedback_passes_ssl_context_to_urlopen(self, feedback_service):
+        """create_feedback passes _ssl_context as context= argument to urlopen."""
+        import ssl
+        from unittest.mock import MagicMock
+
+        sentinel_ctx = ssl.create_default_context()
+        mock_resp = MagicMock()
+        mock_resp.__enter__ = lambda s: s
+        mock_resp.__exit__ = MagicMock(return_value=False)
+        mock_resp.status = 201
+        mock_resp.read.return_value = b'{"id": 1}'
+
+        feedback: FeedbackData = {"llm_request_log_id": 12345, "sentiment": "like"}
+
+        with (
+            patch("coolhand.feedback_service._ssl_context", sentinel_ctx),
+            patch(
+                "coolhand.feedback_service.urlopen", return_value=mock_resp
+            ) as mock_open,
+        ):
+            feedback_service.create_feedback(feedback)
+            _, kwargs = mock_open.call_args
+            assert kwargs.get("context") is sentinel_ctx
+
+    def test_create_feedback_ssl_context_none_when_certifi_missing(
+        self, feedback_service
+    ):
+        """create_feedback passes context=None to urlopen when certifi unavailable."""
+        from unittest.mock import MagicMock
+
+        mock_resp = MagicMock()
+        mock_resp.__enter__ = lambda s: s
+        mock_resp.__exit__ = MagicMock(return_value=False)
+        mock_resp.status = 201
+        mock_resp.read.return_value = b'{"id": 1}'
+
+        feedback: FeedbackData = {"llm_request_log_id": 12345, "sentiment": "like"}
+
+        with (
+            patch("coolhand.feedback_service._ssl_context", None),
+            patch(
+                "coolhand.feedback_service.urlopen", return_value=mock_resp
+            ) as mock_open,
+        ):
+            feedback_service.create_feedback(feedback)
+            _, kwargs = mock_open.call_args
+            assert kwargs.get("context") is None
 
 
 class TestModuleLevelFunctions:
@@ -273,7 +432,7 @@ class TestModuleLevelFunctions:
         """Test module-level create_feedback function."""
         feedback: FeedbackData = {
             "llm_request_log_id": 12345,
-            "like": True,
+            "sentiment": "like",
         }
 
         result = create_feedback(feedback, api_key=mock_config["api_key"])
@@ -304,7 +463,7 @@ class TestCoolhandIntegration:
 
         feedback: FeedbackData = {
             "llm_request_log_id": 12345,
-            "like": True,
+            "sentiment": "like",
         }
 
         result = instance.create_feedback(feedback)
@@ -359,6 +518,59 @@ class TestFeedbackServiceLogging:
         # Should not contain the full 150 char explanation
         assert long_explanation not in caplog.text
 
+    def test_log_feedback_info_like_auto_conversion_logs_sentiment_string(
+        self, mock_config, mock_feedback_urlopen, caplog
+    ):
+        """When like is auto-converted, the log reflects the sent sentiment string."""
+        import logging
+
+        caplog.set_level(logging.INFO)
+        mock_config["silent"] = False
+        service = FeedbackService(config=mock_config)
+
+        with pytest.warns(DeprecationWarning):
+            service.create_feedback({"llm_request_log_id": 12345, "like": True})
+
+        assert "Sentiment: like" in caplog.text
+        assert "thumbs up" not in caplog.text
+
+    def test_log_feedback_info_without_like_uses_sentiment(self, mock_config, caplog):
+        """_log_feedback_info uses sentiment string when like is absent."""
+        import logging
+
+        caplog.set_level(logging.INFO)
+
+        mock_config["silent"] = False
+        service = FeedbackService(config=mock_config)
+
+        feedback: FeedbackData = {
+            "llm_request_log_id": 12345,
+            "sentiment": "neutral",
+        }
+
+        service._log_feedback_info(feedback)
+
+        assert "neutral" in caplog.text
+        assert "thumbs down" not in caplog.text
+
+    def test_log_feedback_info_without_like_or_sentiment(self, mock_config, caplog):
+        """_log_feedback_info logs 'unknown' when neither like nor sentiment present."""
+        import logging
+
+        caplog.set_level(logging.INFO)
+
+        mock_config["silent"] = False
+        service = FeedbackService(config=mock_config)
+
+        feedback: FeedbackData = {
+            "llm_request_log_id": 12345,
+        }
+
+        service._log_feedback_info(feedback)
+
+        assert "unknown" in caplog.text
+        assert "thumbs down" not in caplog.text
+
     def test_log_feedback_info_silent_mode(self, mock_config, caplog):
         """_log_feedback_info does nothing when silent=True."""
         import logging
@@ -392,7 +604,7 @@ class TestFeedbackServiceEdgeCases:
 
             feedback: FeedbackData = {
                 "llm_request_log_id": 12345,
-                "like": True,
+                "sentiment": "like",
             }
 
             result = feedback_service.create_feedback(feedback)
@@ -414,7 +626,7 @@ class TestFeedbackServiceEdgeCases:
 
             feedback: FeedbackData = {
                 "llm_request_log_id": 12345,
-                "like": True,
+                "sentiment": "like",
             }
 
             result = feedback_service.create_feedback(feedback)
@@ -501,7 +713,7 @@ class TestFeedbackServiceBaseUrl:
             api_key="test-key-12345678",
             base_url="https://self-hosted.example.com",
         )
-        feedback: FeedbackData = {"llm_request_log_id": 1, "like": True}
+        feedback: FeedbackData = {"llm_request_log_id": 1, "sentiment": "like"}
         service.create_feedback(feedback)
 
         call_args = mock_feedback_urlopen.call_args

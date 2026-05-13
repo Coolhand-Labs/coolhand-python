@@ -70,11 +70,11 @@ class Coolhand(CoolhandClient):
         """Submit feedback for an LLM response.
 
         Args:
-            feedback: Feedback data containing:
-                - like (bool): Required. Thumbs up (True) or down (False).
-                - At least one matching field (llm_request_log_id,
-                  llm_provider_unique_id, original_output, or client_unique_id).
-                - Optional: explanation, revised_output, creator_unique_id.
+            feedback: Feedback data. All fields are optional. Provide at least
+                one matching field (llm_request_log_id, llm_provider_unique_id,
+                original_output, or client_unique_id) to link the feedback to a
+                log. For sentiment, prefer `sentiment` ("like"/"dislike"/"neutral")
+                over the deprecated boolean `like`.
 
         Returns:
             FeedbackResponse with created feedback details, or None on error.
@@ -82,7 +82,7 @@ class Coolhand(CoolhandClient):
         Example:
             >>> coolhand_instance.create_feedback({
             ...     "llm_request_log_id": 12345,
-            ...     "like": True,
+            ...     "sentiment": "like",
             ...     "explanation": "Accurate and helpful response"
             ... })
         """

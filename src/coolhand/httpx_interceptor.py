@@ -26,6 +26,7 @@ _exclude_api_patterns: list[str] | None = None
 DEFAULT_INTERCEPT_ADDRESSES = [
     "api.openai.com",
     "api.anthropic.com",
+    "api.elevenlabs.io",
     "generativelanguage.googleapis.com",
     "models.github.ai",
     "models.inference.ai.azure.com",

@@ -58,6 +58,10 @@ class TestIsLlmApi:
         """Detects api.anthropic.com."""
         assert _is_llm_api("https://api.anthropic.com/v1/messages") is True
 
+    def test_elevenlabs(self):
+        """Detects api.elevenlabs.io."""
+        assert _is_llm_api("https://api.elevenlabs.io/v1/text-to-speech") is True
+
     def test_github_models(self):
         """Detects models.github.ai and the deprecated models.inference.ai.azure.com."""
         assert _is_llm_api("https://models.github.ai/chat/completions") is True

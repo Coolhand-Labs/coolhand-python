@@ -212,6 +212,11 @@ class TestIsBinaryContentType:
         """Detects application/octet-stream."""
         assert _is_binary_content_type("application/octet-stream") is True
 
+    def test_case_insensitive(self):
+        """Content-Type matching is case-insensitive."""
+        assert _is_binary_content_type("Audio/MPEG") is True
+        assert _is_binary_content_type("Image/PNG") is True
+
     def test_non_binary(self):
         """Rejects text and JSON content types."""
         assert _is_binary_content_type("application/json") is False

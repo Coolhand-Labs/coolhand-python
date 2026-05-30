@@ -4,6 +4,11 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Added
+
+- **Vertex AI and Cloudflare AI Gateway interception** — `DEFAULT_INTERCEPT_ADDRESSES` now includes `aiplatform.googleapis.com` (covers the OpenAI-compatible `/chat/completions` endpoint in addition to the existing `:generateContent`/`:streamGenerateContent` path patterns) and `gateway.ai.cloudflare.com` (Cloudflare AI Gateway proxy). (#46)
+- **Expanded default Vertex AI exclusions** — `default_exclude_api_patterns.json` now excludes common non-LLM Vertex AI resource paths (datasets, training pipelines, feature stores, indexes, tensorboards, etc.) to limit inadvertent capture of non-LLM traffic via the `aiplatform.googleapis.com` domain match. (#46)
+
 ## [0.4.0] - 2026-05-13
 
 ### Added

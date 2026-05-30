@@ -1,1 +1,14 @@
-["/batchPredictionJobs/"]
+[
+  "/batchPredictionJobs/",
+  "/datasets/",
+  "/trainingPipelines/",
+  "/pipelineJobs/",
+  "/customJobs/",
+  "/hyperparameterTuningJobs/",
+  "/nasJobs/",
+  "/featurestores/",
+  "/featureGroups/",
+  "/tensorboards/",
+"/metadataStores/",
+  "/modelDeploymentMonitoringJobs/"
+]

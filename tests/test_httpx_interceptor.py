@@ -124,14 +124,48 @@ class TestIsLlmApi:
         )
         assert _is_llm_api(url) is True
 
-    def test_vertex_ai_unknown_path_not_matched(self):
-        """Rejects Vertex AI URL with non-matching path."""
+    def test_vertex_ai_any_path_matched(self):
+        """Detects any Vertex AI URL via aiplatform.googleapis.com domain match."""
         url = (
             "https://us-central1-aiplatform.googleapis.com/v1"
             "/projects/my-project/locations/us-central1"
             "/publishers/google/models/gemini-pro:predict"
         )
-        assert _is_llm_api(url) is False
+        assert _is_llm_api(url) is True
+
+    def test_vertex_ai_predict(self):
+        """Detects Vertex AI :predict endpoint."""
+        url = (
+            "https://us-central1-aiplatform.googleapis.com/v1"
+            "/projects/my-project/locations/us-central1"
+            "/endpoints/123456:predict"
+        )
+        assert _is_llm_api(url) is True
+
+    def test_vertex_ai_stream_raw_predict(self):
+        """Detects Vertex AI :streamRawPredict endpoint."""
+        url = (
+            "https://us-central1-aiplatform.googleapis.com/v1"
+            "/projects/my-project/locations/us-central1"
+            "/endpoints/123456:streamRawPredict"
+        )
+        assert _is_llm_api(url) is True
+
+    def test_vertex_ai_openai_compatible(self):
+        """Detects Vertex AI OpenAI-compatible /chat/completions endpoint."""
+        url = (
+            "https://aiplatform.googleapis.com/v1/projects/my-project"
+            "/locations/us-central1/endpoints/openapi/chat/completions"
+        )
+        assert _is_llm_api(url) is True
+
+    def test_cloudflare_ai_gateway(self):
+        """Detects Cloudflare AI Gateway."""
+        url = (
+            "https://gateway.ai.cloudflare.com/v1/my-account"
+            "/my-gateway/openai/chat/completions"
+        )
+        assert _is_llm_api(url) is True
 
     def test_all_default_addresses(self):
         """All default intercept addresses are detected."""
@@ -662,6 +696,23 @@ class TestIsExcluded:
     def test_default_constant_contains_batch_prediction_jobs(self):
         """DEFAULT_EXCLUDE_API_PATTERNS contains the expected default."""
         assert "/batchPredictionJobs/" in DEFAULT_EXCLUDE_API_PATTERNS
+
+    def test_default_patterns_exclude_non_llm_vertex_paths(self, reset_global_instance):
+        """Common non-LLM Vertex AI paths are excluded by default."""
+        non_llm_paths = [
+            "/datasets/",
+            "/trainingPipelines/",
+            "/pipelineJobs/",
+            "/customJobs/",
+            "/featurestores/",
+            "/tensorboards/",
+            "/metadataStores/",
+            "/modelDeploymentMonitoringJobs/",
+        ]
+        base = "https://aiplatform.googleapis.com/v1/projects/proj/locations/us"
+        for path in non_llm_paths:
+            url = base + path + "123"
+            assert _is_excluded(url) is True, f"Expected {path!r} to be excluded"
 
 
 class TestExcludeIntegration:

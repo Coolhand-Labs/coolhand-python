@@ -27,10 +27,14 @@ DEFAULT_INTERCEPT_ADDRESSES = [
     "api.openai.com",
     "api.anthropic.com",
     "generativelanguage.googleapis.com",
+    "aiplatform.googleapis.com",
+    "gateway.ai.cloudflare.com",
     "models.github.ai",
     "models.inference.ai.azure.com",
     ":generateContent",
     ":streamGenerateContent",
+    ":predict",
+    ":streamRawPredict",
 ]
 
 DEFAULT_EXCLUDE_API_PATTERNS: list[str] = json.loads(

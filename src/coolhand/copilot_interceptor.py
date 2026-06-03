@@ -126,9 +126,9 @@ def patch() -> bool:
     _original_request = JsonRpcClient.request
     _original_handle_message = JsonRpcClient._handle_message
 
-    async def patched_request(self, method, params=None, timeout=None):
+    async def patched_request(self, method, params=None, timeout=None, **kwargs):
         if not _handler:
-            return await _original_request(self, method, params, timeout)
+            return await _original_request(self, method, params, timeout, **kwargs)
 
         if method == "session.create":
             p_create = params or {}
@@ -144,7 +144,7 @@ def patch() -> bool:
                     "Copilot interceptor: session.create has no sessionId,"
                     " system prompt will not be captured"
                 )
-            result = await _original_request(self, method, params, timeout)
+            result = await _original_request(self, method, params, timeout, **kwargs)
             if session_id and isinstance(result, dict):
                 model = result.get("model") or result.get("modelId")
                 if model:
@@ -167,7 +167,7 @@ def patch() -> bool:
             return result
 
         if method != "session.send":
-            return await _original_request(self, method, params, timeout)
+            return await _original_request(self, method, params, timeout, **kwargs)
 
         start = time.time()
         p = params or {}
@@ -191,7 +191,7 @@ def patch() -> bool:
             _pre_pending.setdefault(session_id, []).append(entry)
 
         try:
-            result = await _original_request(self, method, params, timeout)
+            result = await _original_request(self, method, params, timeout, **kwargs)
         except Exception as e:
             with _lock:
                 still_owned = _remove_from_pre_pending(session_id, entry)

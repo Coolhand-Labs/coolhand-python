@@ -1519,7 +1519,9 @@ class TestNewEventTypes:
 
         instance = cls()
         instance._handle_message(
-            self._make_v1_notification("s1", "assistant.reasoning.delta", {"delta": "..."})
+            self._make_v1_notification(
+                "s1", "assistant.reasoning.delta", {"delta": "..."}
+            )
         )
 
         handler.assert_not_called()
@@ -1534,7 +1536,9 @@ class TestNewEventTypes:
 
         instance = cls()
         instance._handle_message(
-            self._make_v1_notification("s1", "assistant.message.delta", {"delta": "partial"})
+            self._make_v1_notification(
+                "s1", "assistant.message.delta", {"delta": "partial"}
+            )
         )
 
         handler.assert_not_called()
@@ -1593,7 +1597,12 @@ class TestNewEventTypes:
             )
 
         instance = cls()
-        for event_type in ("assistant.reasoning", "assistant.message.delta", "session.idle"):
+        noise_events = (
+            "assistant.reasoning",
+            "assistant.message.delta",
+            "session.idle",
+        )
+        for event_type in noise_events:
             instance._handle_message(self._make_v1_notification("s1", event_type, {}))
 
         assert "s1" in copilot_interceptor._pre_pending

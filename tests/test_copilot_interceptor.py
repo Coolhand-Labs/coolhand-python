@@ -14,7 +14,7 @@ import pytest
 
 def _make_fake_client_class():
     class FakeJsonRpcClient:
-        async def request(self, method, params=None, timeout=None):
+        async def request(self, method, params=None, timeout=None, **kwargs):
             return {"messageId": "msg-001"}
 
         def _handle_message(self, message):
@@ -1126,3 +1126,103 @@ class TestGetStats:
         libs = stats["monitoring"]["patched_libraries"]
         assert "JsonRpcClient.request" not in libs
         assert "JsonRpcClient._handle_message" not in libs
+
+
+# ---------------------------------------------------------------------------
+# TestKwargsForwarding — SDK 1.0 compatibility: on_response_inline forwarding
+# ---------------------------------------------------------------------------
+
+
+class TestKwargsForwarding:
+    """Verify that patched_request forwards **kwargs to _original_request.
+
+    github-copilot-sdk 1.0 added the keyword-only parameter on_response_inline
+    to JsonRpcClient.request. The patch must forward it (and any future kwargs)
+    transparently so callers don't receive a TypeError.
+    """
+
+    def _make_recording_client(self):
+        """Fake client that records the kwargs passed to request()."""
+        recorded = []
+
+        class RecordingClient:
+            async def request(self_inner, method, params=None, timeout=None, **kwargs):
+                recorded.append(kwargs)
+                return {"messageId": "msg-001"}
+
+            def _handle_message(self_inner, message):
+                pass
+
+        return RecordingClient, recorded
+
+    @pytest.mark.asyncio
+    async def test_kwargs_forwarded_no_handler(self):
+        from coolhand import copilot_interceptor
+
+        cls, recorded = self._make_recording_client()
+        _inject_fake_sdk(cls)
+        copilot_interceptor.patch()
+
+        sentinel = object()
+        instance = cls()
+        await instance.request("session.send", {}, on_response_inline=sentinel)
+
+        assert len(recorded) == 1
+        assert recorded[0].get("on_response_inline") is sentinel
+
+    @pytest.mark.asyncio
+    async def test_kwargs_forwarded_session_create(self, handler):
+        from coolhand import copilot_interceptor
+
+        cls, recorded = self._make_recording_client()
+        _inject_fake_sdk(cls)
+        copilot_interceptor.set_handler(handler)
+        copilot_interceptor.patch()
+
+        sentinel = object()
+        instance = cls()
+        await instance.request(
+            "session.create",
+            {"sessionId": "s1"},
+            on_response_inline=sentinel,
+        )
+
+        assert len(recorded) == 1
+        assert recorded[0].get("on_response_inline") is sentinel
+
+    @pytest.mark.asyncio
+    async def test_kwargs_forwarded_other_method(self, handler):
+        from coolhand import copilot_interceptor
+
+        cls, recorded = self._make_recording_client()
+        _inject_fake_sdk(cls)
+        copilot_interceptor.set_handler(handler)
+        copilot_interceptor.patch()
+
+        sentinel = object()
+        instance = cls()
+        await instance.request("models.list", {}, on_response_inline=sentinel)
+
+        assert len(recorded) == 1
+        assert recorded[0].get("on_response_inline") is sentinel
+
+    @pytest.mark.asyncio
+    async def test_kwargs_forwarded_session_send(self, handler):
+        from coolhand import copilot_interceptor
+
+        cls, recorded = self._make_recording_client()
+        _inject_fake_sdk(cls)
+        copilot_interceptor.set_handler(handler)
+        copilot_interceptor.patch()
+
+        sentinel = object()
+        instance = cls()
+        await instance.request(
+            "session.send",
+            {"sessionId": "s1", "prompt": "hi"},
+            on_response_inline=sentinel,
+        )
+
+        assert len(recorded) == 1
+        assert recorded[0].get("on_response_inline") is sentinel
+        assert "s1" in copilot_interceptor._pre_pending

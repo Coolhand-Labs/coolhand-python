@@ -239,7 +239,9 @@ async def _guess_via_copilot(github_token: str, sentence: str) -> str:
             chunks.append(event.data.content)
 
     try:
-        async with CopilotClient(github_token=github_token, log_level="warning") as client:
+        async with CopilotClient(
+            github_token=github_token, log_level="warning"
+        ) as client:
             async with await client.create_session(
                 on_permission_request=PermissionHandler.approve_all,
                 system_message=SystemMessageReplaceConfig(

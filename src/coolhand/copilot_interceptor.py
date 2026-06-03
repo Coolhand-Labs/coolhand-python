@@ -36,6 +36,11 @@ _session_params: dict[str | None, dict[str, Any]] = {}
 # Same TTL caveat as _session_params applies.
 _session_models: dict[str | None, dict[str, Any]] = {}
 
+# assistant.usage payload keyed by sessionId; merged into the response body on
+# assistant.message. Stored as {"data": dict, "start": float} for TTL eviction.
+# Entries are consumed (popped) when the paired assistant.message arrives.
+_session_usage: dict[str | None, dict[str, Any]] = {}
+
 _lock = threading.Lock()
 
 
@@ -55,10 +60,11 @@ def _remove_from_pre_pending(session_id: str | None, entry: dict[str, Any]) -> b
 
 
 def _sweep_stale() -> None:
-    """Evict stale entries from _pre_pending, _session_params, and _session_models.
+    """Evict stale entries from all session caches.
 
-    Runs unconditionally on every _handle_message call so entries are cleaned
-    up even when a session terminates without emitting another assistant.message.
+    Cleans _pre_pending, _session_params, _session_models, and _session_usage.
+    Runs unconditionally on every _handle_message call so entries are cleaned up
+    even when a session terminates without emitting another assistant.message.
     """
     now = time.time()
     with _lock:
@@ -89,13 +95,22 @@ def _sweep_stale() -> None:
         for k in stale_models:
             del _session_models[k]
 
-    if stale_pre_sessions or stale_sessions or stale_models:
+        stale_usage = [
+            k
+            for k, v in _session_usage.items()
+            if now - v["start"] > COPILOT_INTERCEPTOR_PENDING_TTL_SECONDS
+        ]
+        for k in stale_usage:
+            del _session_usage[k]
+
+    if stale_pre_sessions or stale_sessions or stale_models or stale_usage:
         logger.debug(
             "Copilot interceptor: evicted %d stale pre-pending,"
-            " %d stale session entries, %d stale model entries",
+            " %d stale session entries, %d stale model entries, %d stale usage entries",
             len(stale_pre_sessions),
             len(stale_sessions),
             len(stale_models),
+            len(stale_usage),
         )
 
 
@@ -235,6 +250,14 @@ def patch() -> bool:
                             " missing model or sessionId — data: %s",
                             event.get("data"),
                         )
+                elif event_type == "assistant.usage":
+                    usage_data = event.get("data", {})
+                    if session_id and usage_data:
+                        with _lock:
+                            _session_usage[session_id] = {
+                                "data": dict(usage_data),
+                                "start": time.time(),
+                            }
                 elif event_type == "assistant.message":
                     data = event.get("data", {})
                     with _lock:
@@ -246,6 +269,9 @@ def patch() -> bool:
                         else:
                             pending = None
                         cached_model = _session_models.get(session_id, {}).get("model")
+                        cached_usage = _session_usage.pop(session_id, {}).get(
+                            "data", {}
+                        )
                     if pending:
                         end = time.time()
                         res_data: ResponseData = {
@@ -253,6 +279,7 @@ def patch() -> bool:
                             "headers": {},
                             "body": {
                                 **data,
+                                **cached_usage,
                                 "sessionId": session_id,
                                 "model": data.get("model") or cached_model,
                             },
@@ -299,6 +326,7 @@ def unpatch() -> None:
         _pre_pending.clear()
         _session_params.clear()
         _session_models.clear()
+        _session_usage.clear()
 
     _patched = False
     logger.info("github-copilot-sdk monitoring disabled")

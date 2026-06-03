@@ -13,6 +13,8 @@ import pytest
 
 
 def _make_fake_client_class():
+    """Simulate github-copilot-sdk 0.1.x JsonRpcClient signature."""
+
     class FakeJsonRpcClient:
         async def request(self, method, params=None, timeout=None, **kwargs):
             return {"messageId": "msg-001"}
@@ -21,6 +23,35 @@ def _make_fake_client_class():
             pass
 
     return FakeJsonRpcClient
+
+
+def _make_fake_client_class_v1():
+    """Simulate github-copilot-sdk 1.0.x JsonRpcClient signature.
+
+    1.0.0 added ``on_response_inline`` as a keyword-only parameter to
+    ``request()``.  Calls that pass it will raise TypeError against a wrapper
+    that doesn't accept **kwargs — which is exactly the bug we're testing.
+    """
+
+    class FakeJsonRpcClientV1:
+        # Track kwargs forwarded by the interceptor so tests can assert on them.
+        last_kwargs: dict = {}
+
+        async def request(
+            self,
+            method,
+            params=None,
+            timeout=None,
+            *,
+            on_response_inline=None,
+        ):
+            FakeJsonRpcClientV1.last_kwargs = {"on_response_inline": on_response_inline}
+            return {"messageId": "msg-001"}
+
+        def _handle_message(self, message):
+            pass
+
+    return FakeJsonRpcClientV1
 
 
 def _inject_fake_sdk(client_cls=None):
@@ -1226,3 +1257,351 @@ class TestKwargsForwarding:
         assert len(recorded) == 1
         assert recorded[0].get("on_response_inline") is sentinel
         assert "s1" in copilot_interceptor._pre_pending
+
+
+# ---------------------------------------------------------------------------
+# TestSDKVersionCompatibility
+#
+# Verifies that the patched_request wrapper correctly forwards unknown keyword
+# arguments (specifically on_response_inline, added in github-copilot-sdk 1.0)
+# to the original method, and that both SDK generations produce identical logs.
+# ---------------------------------------------------------------------------
+
+
+class TestSDKVersionCompatibility:
+    @pytest.mark.asyncio
+    async def test_v1_session_create_with_on_response_inline_does_not_raise(
+        self, handler
+    ):
+        """patched_request must not raise TypeError when called with on_response_inline.
+
+        Copilot SDK 1.0 passes on_response_inline on every session.create call.
+        Without **kwargs forwarding in patched_request this raises TypeError.
+        """
+        from coolhand import copilot_interceptor
+
+        cls = _inject_fake_sdk(_make_fake_client_class_v1())
+        copilot_interceptor.set_handler(handler)
+        copilot_interceptor.patch()
+
+        instance = cls()
+        await instance.request(
+            "session.create",
+            {"sessionId": "s1", "systemMessage": {"content": "sys"}},
+            on_response_inline=lambda x: None,
+        )
+
+        handler.assert_not_called()  # session.create never calls handler directly
+
+    @pytest.mark.asyncio
+    async def test_v1_session_send_with_extra_kwargs_does_not_raise(self, handler):
+        """Extra kwargs on session.send are forwarded without error."""
+        from coolhand import copilot_interceptor
+
+        cls = _inject_fake_sdk(_make_fake_client_class_v1())
+        copilot_interceptor.set_handler(handler)
+        copilot_interceptor.patch()
+
+        instance = cls()
+        await instance.request(
+            "session.send",
+            {"sessionId": "s1", "prompt": "hello"},
+            on_response_inline=lambda x: None,
+        )
+
+        assert "s1" in copilot_interceptor._pre_pending
+
+    @pytest.mark.asyncio
+    async def test_v1_on_response_inline_forwarded_to_original(self, handler):
+        """The on_response_inline callback reaches the original request method."""
+        from coolhand import copilot_interceptor
+
+        cls = _inject_fake_sdk(_make_fake_client_class_v1())
+        copilot_interceptor.set_handler(handler)
+        copilot_interceptor.patch()
+
+        sentinel = object()
+        instance = cls()
+        await instance.request(
+            "session.create",
+            {"sessionId": "s1"},
+            on_response_inline=sentinel,
+        )
+
+        assert cls.last_kwargs["on_response_inline"] is sentinel
+
+    @pytest.mark.asyncio
+    async def test_v1_no_handler_passthrough_forwards_kwargs(self):
+        """Fast-path (no handler) also forwards kwargs to the original method."""
+        from coolhand import copilot_interceptor
+
+        cls = _inject_fake_sdk(_make_fake_client_class_v1())
+        copilot_interceptor.patch()  # no handler set
+
+        sentinel = object()
+        instance = cls()
+        await instance.request(
+            "session.create",
+            {"sessionId": "s1"},
+            on_response_inline=sentinel,
+        )
+
+        assert cls.last_kwargs["on_response_inline"] is sentinel
+
+    @pytest.mark.asyncio
+    async def test_v1_error_path_forwards_kwargs(self, handler):
+        """kwargs are forwarded even when the original raises, and handler is called."""
+        from coolhand import copilot_interceptor
+
+        received_kwargs = {}
+
+        class ErrorClientV1:
+            async def request(
+                self, method, params=None, timeout=None, *, on_response_inline=None
+            ):
+                received_kwargs["on_response_inline"] = on_response_inline
+                raise RuntimeError("rpc failed")
+
+            def _handle_message(self, message):
+                pass
+
+        _inject_fake_sdk(ErrorClientV1)
+        copilot_interceptor.set_handler(handler)
+        copilot_interceptor.patch()
+
+        sentinel = object()
+        instance = ErrorClientV1()
+        with pytest.raises(RuntimeError, match="rpc failed"):
+            await instance.request(
+                "session.send",
+                {"sessionId": "s1", "prompt": "hi"},
+                on_response_inline=sentinel,
+            )
+
+        assert received_kwargs["on_response_inline"] is sentinel
+        handler.assert_called_once()
+        _, res_data, err = handler.call_args[0]
+        assert res_data is None
+        assert "rpc failed" in err
+
+    @pytest.mark.asyncio
+    async def test_v0_and_v1_produce_identical_logs(self):
+        """Both SDK generations must emit structurally identical request/response logs.
+
+        The on_response_inline kwarg is an SDK-internal callback; it must not
+        leak into or alter the captured log data.
+        """
+        from coolhand import copilot_interceptor
+
+        def _reset_interceptor():
+            copilot_interceptor._patched = False
+            copilot_interceptor._original_request = None
+            copilot_interceptor._original_handle_message = None
+            copilot_interceptor._handler = None
+            with copilot_interceptor._lock:
+                copilot_interceptor._pre_pending.clear()
+                copilot_interceptor._session_params.clear()
+                copilot_interceptor._session_models.clear()
+
+        # --- v0 (0.1.x) run ---
+        _reset_interceptor()
+        captured_v0: dict = {}
+
+        def capture_v0(req, res, err):
+            captured_v0["req"] = req
+            captured_v0["res"] = res
+
+        cls_v0 = _inject_fake_sdk(_make_fake_client_class())
+        copilot_interceptor.set_handler(capture_v0)
+        copilot_interceptor.patch()
+
+        inst_v0 = cls_v0()
+        await inst_v0.request(
+            "session.create",
+            {"sessionId": "s1", "systemMessage": {"content": "sys"}, "model": "gpt-4o"},
+        )
+        await inst_v0.request("session.send", {"sessionId": "s1", "prompt": "hello"})
+        inst_v0._handle_message(
+            _assistant_message_notification("s1", "msg-001", "world", model="gpt-4o")
+        )
+
+        _remove_fake_sdk()
+
+        # --- v1 (1.0.x) run ---
+        _reset_interceptor()
+        captured_v1: dict = {}
+
+        def capture_v1(req, res, err):
+            captured_v1["req"] = req
+            captured_v1["res"] = res
+
+        cls_v1 = _inject_fake_sdk(_make_fake_client_class_v1())
+        copilot_interceptor.set_handler(capture_v1)
+        copilot_interceptor.patch()
+
+        inst_v1 = cls_v1()
+        # SDK 1.0 passes on_response_inline on session.create
+        await inst_v1.request(
+            "session.create",
+            {"sessionId": "s1", "systemMessage": {"content": "sys"}, "model": "gpt-4o"},
+            on_response_inline=lambda x: None,
+        )
+        await inst_v1.request("session.send", {"sessionId": "s1", "prompt": "hello"})
+        inst_v1._handle_message(
+            _assistant_message_notification("s1", "msg-001", "world", model="gpt-4o")
+        )
+
+        req_v0 = captured_v0["req"]
+        req_v1 = captured_v1["req"]
+        res_v0 = captured_v0["res"]
+        res_v1 = captured_v1["res"]
+
+        assert req_v0["url"] == req_v1["url"]
+        assert req_v0["method"] == req_v1["method"]
+        assert req_v0["body"]["prompt"] == req_v1["body"]["prompt"]
+        assert req_v0["body"]["sessionId"] == req_v1["body"]["sessionId"]
+        assert req_v0["body"]["systemMessage"] == req_v1["body"]["systemMessage"]
+        assert req_v0["body"]["model"] == req_v1["body"]["model"]
+        assert res_v0["status_code"] == res_v1["status_code"]
+        assert res_v0["body"]["content"] == res_v1["body"]["content"]
+        assert res_v0["body"]["messageId"] == res_v1["body"]["messageId"]
+        assert res_v0["body"]["sessionId"] == res_v1["body"]["sessionId"]
+        assert res_v0["body"]["model"] == res_v1["body"]["model"]
+        assert res_v0["is_streaming"] == res_v1["is_streaming"]
+
+
+# ---------------------------------------------------------------------------
+# TestNewEventTypes
+#
+# Verifies that event types added in github-copilot-sdk 1.0 pass through the
+# _handle_message interceptor without errors and without spuriously calling the
+# handler (they are not assistant.message completions).
+# ---------------------------------------------------------------------------
+
+
+class TestNewEventTypes:
+    def _make_v1_notification(self, session_id, event_type, data=None):
+        return {
+            "method": "session.event",
+            "params": {
+                "sessionId": session_id,
+                "event": {
+                    "type": event_type,
+                    "data": data or {},
+                },
+            },
+        }
+
+    def test_assistant_reasoning_event_does_not_call_handler(self, handler):
+        """assistant.reasoning is a new 1.0 event type; interceptor must ignore it."""
+        from coolhand import copilot_interceptor
+
+        cls = _inject_fake_sdk()
+        copilot_interceptor.set_handler(handler)
+        copilot_interceptor.patch()
+
+        instance = cls()
+        instance._handle_message(
+            self._make_v1_notification(
+                "s1", "assistant.reasoning", {"content": "thinking step"}
+            )
+        )
+
+        handler.assert_not_called()
+
+    def test_assistant_reasoning_delta_does_not_call_handler(self, handler):
+        """assistant.reasoning.delta (streaming chunk) must not trigger handler."""
+        from coolhand import copilot_interceptor
+
+        cls = _inject_fake_sdk()
+        copilot_interceptor.set_handler(handler)
+        copilot_interceptor.patch()
+
+        instance = cls()
+        instance._handle_message(
+            self._make_v1_notification("s1", "assistant.reasoning.delta", {"delta": "..."})
+        )
+
+        handler.assert_not_called()
+
+    def test_assistant_message_delta_does_not_call_handler(self, handler):
+        """assistant.message.delta (streaming chunk) must not trigger handler."""
+        from coolhand import copilot_interceptor
+
+        cls = _inject_fake_sdk()
+        copilot_interceptor.set_handler(handler)
+        copilot_interceptor.patch()
+
+        instance = cls()
+        instance._handle_message(
+            self._make_v1_notification("s1", "assistant.message.delta", {"delta": "partial"})
+        )
+
+        handler.assert_not_called()
+
+    def test_unknown_event_type_does_not_raise(self, handler):
+        """Any future unknown event type must not raise."""
+        from coolhand import copilot_interceptor
+
+        cls = _inject_fake_sdk()
+        copilot_interceptor.set_handler(handler)
+        copilot_interceptor.patch()
+
+        instance = cls()
+        instance._handle_message(
+            self._make_v1_notification("s1", "future.unknown.event.type", {})
+        )
+
+        handler.assert_not_called()
+
+    def test_external_tool_requested_does_not_call_handler(self, handler):
+        """external_tool.requested is a new v3-protocol event in SDK 1.0."""
+        from coolhand import copilot_interceptor
+
+        cls = _inject_fake_sdk()
+        copilot_interceptor.set_handler(handler)
+        copilot_interceptor.patch()
+
+        instance = cls()
+        instance._handle_message(
+            self._make_v1_notification(
+                "s1", "external_tool.requested", {"toolName": "bash", "input": "ls"}
+            )
+        )
+
+        handler.assert_not_called()
+
+    def test_new_event_types_do_not_corrupt_pending_state(self, handler):
+        """Interleaved new-event-type notifications must not drain _pre_pending."""
+        from coolhand import copilot_interceptor
+
+        cls = _inject_fake_sdk()
+        copilot_interceptor.set_handler(handler)
+        copilot_interceptor.patch()
+
+        start = time.time() - 0.05
+        req_data = {
+            "method": "POST",
+            "url": "copilot://session.send",
+            "headers": {},
+            "body": {"prompt": "hi", "sessionId": "s1"},
+            "timestamp": start,
+        }
+        with copilot_interceptor._lock:
+            copilot_interceptor._pre_pending.setdefault("s1", []).append(
+                {"req_data": req_data, "start": start}
+            )
+
+        instance = cls()
+        for event_type in ("assistant.reasoning", "assistant.message.delta", "session.idle"):
+            instance._handle_message(self._make_v1_notification("s1", event_type, {}))
+
+        assert "s1" in copilot_interceptor._pre_pending
+        handler.assert_not_called()
+
+        instance._handle_message(
+            _assistant_message_notification("s1", "msg-001", "done")
+        )
+
+        handler.assert_called_once()
+        assert "s1" not in copilot_interceptor._pre_pending

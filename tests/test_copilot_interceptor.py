@@ -100,6 +100,7 @@ def reset_copilot_interceptor():
         copilot_interceptor._pre_pending.clear()
         copilot_interceptor._session_params.clear()
         copilot_interceptor._session_models.clear()
+        copilot_interceptor._session_usage.clear()
 
     yield
 
@@ -109,6 +110,7 @@ def reset_copilot_interceptor():
         copilot_interceptor._pre_pending.clear()
         copilot_interceptor._session_params.clear()
         copilot_interceptor._session_models.clear()
+        copilot_interceptor._session_usage.clear()
 
     _remove_fake_sdk()
 
@@ -1614,3 +1616,169 @@ class TestNewEventTypes:
 
         handler.assert_called_once()
         assert "s1" not in copilot_interceptor._pre_pending
+
+
+# ---------------------------------------------------------------------------
+# TestAssistantUsageEvent
+# ---------------------------------------------------------------------------
+
+
+def _assistant_usage_notification(
+    session_id,
+    input_tokens=0,
+    output_tokens=0,
+    cache_read_tokens=0,
+    cache_write_tokens=0,
+    reasoning_tokens=0,
+    cost=0.0,
+):
+    return {
+        "method": "session.event",
+        "params": {
+            "sessionId": session_id,
+            "event": {
+                "type": "assistant.usage",
+                "data": {
+                    "inputTokens": input_tokens,
+                    "outputTokens": output_tokens,
+                    "cacheReadTokens": cache_read_tokens,
+                    "cacheWriteTokens": cache_write_tokens,
+                    "reasoningTokens": reasoning_tokens,
+                    "cost": cost,
+                },
+            },
+        },
+    }
+
+
+class TestAssistantUsageEvent:
+    def _prime_pending(self, copilot_interceptor, session_id, prompt="hello"):
+        start = time.time() - 0.1
+        req_data = {
+            "method": "POST",
+            "url": "copilot://session.send",
+            "headers": {},
+            "body": {"prompt": prompt, "sessionId": session_id},
+            "timestamp": start,
+        }
+        with copilot_interceptor._lock:
+            copilot_interceptor._pre_pending.setdefault(session_id, []).append(
+                {"req_data": req_data, "start": start}
+            )
+
+    def test_usage_event_merged_into_message_body(self, handler):
+        from coolhand import copilot_interceptor
+
+        cls = _inject_fake_sdk()
+        copilot_interceptor.set_handler(handler)
+        copilot_interceptor.patch()
+        self._prime_pending(copilot_interceptor, "s1")
+
+        instance = cls()
+        instance._handle_message(
+            _assistant_usage_notification(
+                "s1",
+                input_tokens=8441,
+                output_tokens=134,
+                cache_read_tokens=0,
+                cache_write_tokens=8431,
+                reasoning_tokens=102,
+                cost=0.33,
+            )
+        )
+        instance._handle_message(
+            _assistant_message_notification("s1", "msg-001", "world", output_tokens=134)
+        )
+
+        handler.assert_called_once()
+        _, res_data, err = handler.call_args[0]
+        assert err is None
+        assert res_data["body"]["inputTokens"] == 8441
+        assert res_data["body"]["outputTokens"] == 134
+        assert res_data["body"]["cacheReadTokens"] == 0
+        assert res_data["body"]["cacheWriteTokens"] == 8431
+        assert res_data["body"]["reasoningTokens"] == 102
+        assert res_data["body"]["cost"] == 0.33
+        assert res_data["body"]["content"] == "world"
+
+    def test_usage_event_consumed_after_merge(self, handler):
+        from coolhand import copilot_interceptor
+
+        cls = _inject_fake_sdk()
+        copilot_interceptor.set_handler(handler)
+        copilot_interceptor.patch()
+        self._prime_pending(copilot_interceptor, "s1")
+
+        instance = cls()
+        instance._handle_message(_assistant_usage_notification("s1", input_tokens=100))
+        instance._handle_message(
+            _assistant_message_notification("s1", "msg-001", "world")
+        )
+
+        with copilot_interceptor._lock:
+            assert "s1" not in copilot_interceptor._session_usage
+
+    def test_message_without_preceding_usage_still_works(self, handler):
+        from coolhand import copilot_interceptor
+
+        cls = _inject_fake_sdk()
+        copilot_interceptor.set_handler(handler)
+        copilot_interceptor.patch()
+        self._prime_pending(copilot_interceptor, "s1")
+
+        instance = cls()
+        instance._handle_message(
+            _assistant_message_notification(
+                "s1", "msg-001", "response", output_tokens=50
+            )
+        )
+
+        handler.assert_called_once()
+        _, res_data, err = handler.call_args[0]
+        assert err is None
+        assert res_data["body"]["content"] == "response"
+        assert res_data["body"]["outputTokens"] == 50
+        assert "inputTokens" not in res_data["body"]
+
+    def test_usage_not_applied_to_wrong_session(self, handler):
+        from coolhand import copilot_interceptor
+
+        cls = _inject_fake_sdk()
+        copilot_interceptor.set_handler(handler)
+        copilot_interceptor.patch()
+        self._prime_pending(copilot_interceptor, "s2")
+
+        instance = cls()
+        # Usage arrives for s1, but message arrives for s2
+        instance._handle_message(_assistant_usage_notification("s1", input_tokens=999))
+        instance._handle_message(
+            _assistant_message_notification("s2", "msg-002", "hello")
+        )
+
+        handler.assert_called_once()
+        _, res_data, _ = handler.call_args[0]
+        assert "inputTokens" not in res_data["body"]
+
+    def test_stale_usage_evicted_by_sweep(self, handler):
+        from coolhand import copilot_interceptor
+
+        cls = _inject_fake_sdk()
+        copilot_interceptor.set_handler(handler)
+        copilot_interceptor.patch()
+
+        # Inject a stale usage entry directly
+        with copilot_interceptor._lock:
+            copilot_interceptor._session_usage["s-stale"] = {
+                "data": {"inputTokens": 1},
+                "start": time.time()
+                - (copilot_interceptor.COPILOT_INTERCEPTOR_PENDING_TTL_SECONDS + 1),
+            }
+
+        # Any notification triggers _sweep_stale()
+        instance = cls()
+        instance._handle_message(
+            _assistant_message_notification("s-other", "msg-x", "hi")
+        )
+
+        with copilot_interceptor._lock:
+            assert "s-stale" not in copilot_interceptor._session_usage

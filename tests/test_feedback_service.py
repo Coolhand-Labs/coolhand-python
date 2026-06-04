@@ -250,6 +250,23 @@ class TestCreateFeedback:
         payload = json.loads(request.data.decode("utf-8"))
         assert payload["llm_request_log_feedback"]["workload_hashid"] == "abc123"
 
+    def test_create_feedback_with_creator_type(
+        self, feedback_service, mock_feedback_urlopen
+    ):
+        """Test feedback with creator_type passes through payload."""
+        feedback: FeedbackData = {
+            "llm_request_log_id": 12345,
+            "sentiment": "like",
+            "creator_type": "agent",
+        }
+
+        feedback_service.create_feedback(feedback)
+
+        call_args = mock_feedback_urlopen.call_args
+        request = call_args[0][0]
+        payload = json.loads(request.data.decode("utf-8"))
+        assert payload["llm_request_log_feedback"]["creator_type"] == "agent"
+
     def test_create_feedback_no_api_key_returns_none(self, mock_feedback_urlopen):
         """Test that missing API key returns None without calling API."""
         service = FeedbackService(api_key="", silent=True)

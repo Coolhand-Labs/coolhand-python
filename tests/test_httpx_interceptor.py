@@ -167,6 +167,11 @@ class TestIsLlmApi:
         )
         assert _is_llm_api(url) is True
 
+    def test_openrouter(self):
+        """Detects OpenRouter API."""
+        url = "https://openrouter.ai/api/v1/chat/completions"
+        assert _is_llm_api(url) is True
+
     def test_all_default_addresses(self):
         """All default intercept addresses are detected."""
         for addr in DEFAULT_INTERCEPT_ADDRESSES:

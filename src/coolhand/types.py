@@ -61,6 +61,9 @@ class FeedbackData(TypedDict, total=False):
     explanation: str | None  # Why the response was good/bad
     revised_output: str | None  # User's corrected version
     creator_unique_id: str | None  # User who created the feedback
+    creator_type: (
+        Literal["human", "agent", "unknown"] | None
+    )  # What kind of creator submitted the feedback
     collector: str | None  # Collection method / SDK version identifier
     workload_hashid: str | None  # Associate feedback with a specific workload
 
@@ -77,6 +80,7 @@ class FeedbackResponse(TypedDict, total=False):
     llm_provider_unique_id: str | None
     original_output: str | None
     client_unique_id: str | None
+    creator_type: Literal["human", "agent", "unknown"] | None
     workload_hashid: str | None
     created_at: str
     updated_at: str

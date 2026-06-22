@@ -287,6 +287,7 @@ All fields are optional. At least one matching field (marked \*) is recommended 
 | `explanation` | str | Why the response was good/bad |
 | `revised_output` | str | User's corrected version |
 | `creator_unique_id` | str | ID of user providing feedback |
+| `creator_type` | str | What kind of creator submitted it: `"human"`, `"agent"`, or `"unknown"` |
 | `workload_hashid` | str | Associate feedback with a specific workload |
 | `collector` | str | Override the SDK-generated collector string |
 

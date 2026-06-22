@@ -222,6 +222,7 @@ Coolhand intercepts AI API calls through two mechanisms:
 - Anthropic Python SDK
 - Google Gemini (`google-generativeai` / `google-genai`)
 - GitHub Models via Azure (`models.inference.ai.azure.com`)
+- OpenRouter (`openrouter.ai`)
 - Any other library using httpx for HTTP requests
 
 **requests patching** (covers any library built on `requests`):

@@ -51,7 +51,7 @@ See [`examples/dramatiq_pydantic_ai.py`](../examples/dramatiq_pydantic_ai.py) fo
 | pydantic-ai via `AnthropicModel` / `OpenAIModel` | ✅ Works |
 | Any httpx-based library (openai, anthropic SDKs) | ✅ Works |
 | Streaming responses | ✅ Works |
-| Process-based workers (spawned subprocesses) | ⚠️ Needs workaround — see below |
+| Process-based workers (spawned subprocesses) | ✅ Works with `CoolhandDramatiqMiddleware` |
 | Per-task session correlation in Coolhand | ⚠️ Needs workaround — see below |
 
 ## Known Gaps and Workarounds
@@ -60,20 +60,17 @@ See [`examples/dramatiq_pydantic_ai.py`](../examples/dramatiq_pydantic_ai.py) fo
 
 **Problem:** Coolhand's httpx patch lives in the parent process's memory. Worker processes started with a fresh interpreter (e.g. `python -m dramatiq myapp`) begin without the patch applied.
 
-**Workaround:** Put `import coolhand` at the top of your actors module — the same file that defines your `@dramatiq.actor` functions. Dramatiq imports this module inside each worker process at startup, so Coolhand initializes and patches httpx automatically in every process.
+**Fix:** Add `CoolhandDramatiqMiddleware` to your broker. It calls `coolhand.start_monitoring()` in Dramatiq's `after_process_boot` lifecycle hook, ensuring monitoring is active in every worker process.
 
 ```python
-# tasks.py  ← the module you pass to `python -m dramatiq tasks`
-import coolhand           # <-- this one line is all that's needed
-import asyncio
+import coolhand
 import dramatiq
-from pydantic_ai import Agent
-from pydantic_ai.models.anthropic import AnthropicModel
-from pydantic_ai.providers.anthropic import AnthropicProvider
+from coolhand.integrations.dramatiq import CoolhandDramatiqMiddleware
+from dramatiq.brokers.redis import RedisBroker
 
-@dramatiq.actor
-def my_task(text: str) -> None:
-    ...
+broker = RedisBroker(url="redis://localhost:6379")
+broker.add_middleware(CoolhandDramatiqMiddleware())
+dramatiq.set_broker(broker)
 ```
 
 Start your workers as usual:
@@ -207,9 +204,7 @@ def my_task(text: str) -> None:
 
 ## Roadmap
 
-These gaps are tracked as separate issues and will be addressed with first-class SDK support:
-
-| Gap | Planned fix |
+| Gap | Status |
 |---|---|
-| Process-based workers | A Dramatiq middleware shipped in the SDK that calls `coolhand.start_monitoring()` in the `after_worker_process_boot` lifecycle hook |
-| Per-task session correlation | A `metadata` / `tags` field on `log_interaction` (and on `RequestData` / `ResponseData`) so any task queue framework can attach arbitrary identifiers to individual LLM calls without a custom middleware |
+| Process-based workers | ✅ Fixed — use `CoolhandDramatiqMiddleware` from `coolhand.integrations.dramatiq` |
+| Per-task session correlation | Planned — a `metadata` / `tags` field on `log_interaction` so any task queue framework can attach arbitrary identifiers to individual LLM calls without a custom middleware |

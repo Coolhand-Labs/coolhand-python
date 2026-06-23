@@ -12,9 +12,9 @@ Async in threads: WORKS — asyncio.run() inside a sync Dramatiq actor creates
 pydantic-ai (AnthropicProvider): WORKS — pydantic-ai uses httpx internally;
   the class-level patch intercepts its calls just like any other httpx usage.
 
-Process workers (Redis/RabbitMQ with fork model): DOES NOT WORK out of the
-  box — forked child processes don't inherit the patch. Each worker process
-  must import coolhand at startup (e.g. in a middleware or entrypoint).
+Process workers (Redis/RabbitMQ with fork model): Fixed via
+  CoolhandDramatiqMiddleware (coolhand.integrations.dramatiq), which calls
+  coolhand.start_monitoring() in the after_worker_process_boot hook.
 
 No task-to-LLM correlation: Coolhand has no mechanism to link a Dramatiq
   message ID to the LLM interactions it triggers. Session IDs are global,
@@ -345,9 +345,8 @@ class TestKnownLimitations:
         This test simply documents the limitation — testing actual process
         forking is out of scope here.
 
-        Fix: add `import coolhand` to the worker process entrypoint, or create
-        a Dramatiq middleware with an `after_process_boot` hook that calls
-        coolhand.start_monitoring().
+        Fix: use CoolhandDramatiqMiddleware (coolhand.integrations.dramatiq),
+        which calls coolhand.start_monitoring() in after_worker_process_boot.
         """
         # The patch lives in the parent process's memory. After fork(), the
         # child has a copy of that memory, but httpx.AsyncClient.send in the
@@ -355,3 +354,63 @@ class TestKnownLimitations:
         # The real problem is workers that use spawn() (fresh interpreter) or
         # that import everything before coolhand patches httpx.
         pass
+
+
+class TestCoolhandDramatiqMiddleware:
+    """CoolhandDramatiqMiddleware activates monitoring in worker processes."""
+
+    def test_after_process_boot_with_no_instance(self) -> None:
+        """When no Coolhand instance exists (fresh spawn worker), booting
+        creates one and starts monitoring."""
+        import unittest.mock
+
+        import coolhand
+        from coolhand.integrations.dramatiq import CoolhandDramatiqMiddleware
+
+        middleware = CoolhandDramatiqMiddleware()
+        broker = unittest.mock.MagicMock()
+
+        with unittest.mock.patch("coolhand.get_instance", return_value=None):
+            with unittest.mock.patch("coolhand.Coolhand") as mock_coolhand_cls:
+                middleware.after_process_boot(broker)
+                mock_coolhand_cls.assert_called_once()
+
+        # suppress unused import warning
+        _ = coolhand
+
+    def test_after_process_boot_with_existing_instance(self) -> None:
+        """When an instance already exists (fork worker), booting re-applies
+        the monitoring patch via start_monitoring()."""
+        import unittest.mock
+
+        import coolhand
+        from coolhand.integrations.dramatiq import CoolhandDramatiqMiddleware
+
+        middleware = CoolhandDramatiqMiddleware()
+        broker = unittest.mock.MagicMock()
+        fake_instance = unittest.mock.MagicMock()
+
+        with unittest.mock.patch("coolhand.get_instance", return_value=fake_instance):
+            with unittest.mock.patch("coolhand.start_monitoring") as mock_start:
+                middleware.after_process_boot(broker)
+                mock_start.assert_called_once()
+
+        _ = coolhand
+
+    def test_import_error_without_dramatiq(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Importing the middleware without dramatiq installed raises ImportError
+        with a helpful message."""
+        import importlib
+        import sys
+        import unittest.mock
+
+        # Remove cached module so re-import triggers the guard
+        monkeypatch.delitem(
+            sys.modules, "coolhand.integrations.dramatiq", raising=False
+        )
+
+        with unittest.mock.patch.dict(sys.modules, {"dramatiq": None}):
+            with pytest.raises(ImportError, match="pip install dramatiq"):
+                importlib.import_module("coolhand.integrations.dramatiq")

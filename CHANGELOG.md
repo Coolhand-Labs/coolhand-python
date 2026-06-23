@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [0.4.3] - 2026-06-22
+
+### Added
+
+- **OpenRouter interception** — `DEFAULT_INTERCEPT_ADDRESSES` now includes `openrouter.ai`, so calls routed through OpenRouter's API are captured automatically without any configuration change.
+
 ## [0.4.2] - 2026-06-03
 
 ### Added

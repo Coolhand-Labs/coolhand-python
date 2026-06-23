@@ -171,6 +171,7 @@ Coolhand works with any library that uses httpx, requests, or the GitHub Copilot
 - GitHub Copilot SDK
 - Vertex AI
 - Cloudflare AI Gateway
+- OpenRouter
 - pydantic-ai
 - Any other library using httpx or requests
 

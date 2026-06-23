@@ -4,10 +4,28 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [0.4.3] - 2026-06-22
+
+### Added
+
+- **OpenRouter interception** — `DEFAULT_INTERCEPT_ADDRESSES` now includes `openrouter.ai`, so calls routed through OpenRouter's API are captured automatically without any configuration change.
+
+## [0.4.2] - 2026-06-03
+
 ### Added
 
 - **Vertex AI and Cloudflare AI Gateway interception** — `DEFAULT_INTERCEPT_ADDRESSES` now includes `aiplatform.googleapis.com` (covers the OpenAI-compatible `/chat/completions` endpoint in addition to the existing `:generateContent`/`:streamGenerateContent` path patterns) and `gateway.ai.cloudflare.com` (Cloudflare AI Gateway proxy). (#46)
 - **Expanded default Vertex AI exclusions** — `default_exclude_api_patterns.json` now excludes common non-LLM Vertex AI resource paths (datasets, training pipelines, feature stores, indexes, tensorboards, etc.) to limit inadvertent capture of non-LLM traffic via the `aiplatform.googleapis.com` domain match. (#46)
+
+### Fixed
+
+- **Copilot interceptor now captures full token usage** — `inputTokens`, `cacheReadTokens`, `cacheWriteTokens`, `reasoningTokens`, and `cost` were previously dropped because they arrive in a separate `assistant.usage` event that fires just before `assistant.message`. The interceptor now caches the `assistant.usage` payload by session and merges it into the response body when `assistant.message` fires. (#50)
+
+## [0.4.1] - 2026-06-03
+
+### Fixed
+
+- **Copilot interceptor compatibility with github-copilot-sdk 1.0** — `patched_request` now accepts and forwards `**kwargs` to the original `JsonRpcClient.request`. SDK 1.0 added the keyword-only `on_response_inline` parameter (used by `create_session`); the old wrapper raised `TypeError` for any call that passed it. The fix is forward-compatible: any future kwargs the SDK adds will also pass through without a code change.
 
 ## [0.4.0] - 2026-05-13
 

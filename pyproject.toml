@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "coolhand"
-version = "0.4.0"
+version = "0.4.3"
 description = "A Python SDK for monitoring and analyzing AI API interactions with LLM services"
 readme = "README.md"
 license = "Apache-2.0"
@@ -62,6 +62,8 @@ test = [
     "pytest-asyncio>=1.0.0",
     "requests>=2.25.0",
     "httpx>=0.20.0",
+    "dramatiq>=1.15.0",
+    "pydantic-ai>=0.0.14",
 ]
 
 [project.urls]

@@ -89,6 +89,8 @@ class FeedbackService:
                 - explanation: Why the response was good/bad
                 - revised_output: User's corrected version of the response
                 - creator_unique_id: ID of the user providing feedback
+                - creator_type: What kind of creator submitted it
+                  ("human", "agent", or "unknown")
                 - workload_hashid: Associate feedback with a specific workload
                 - collector: Override the SDK-generated collector string
 

@@ -219,7 +219,7 @@ async def _guess_via_azure(github_token: str, sentence: str) -> str:
 async def _guess_via_copilot(github_token: str, sentence: str) -> str:
     """Call GitHub Copilot via github-copilot-sdk (intercepted by coolhand's copilot interceptor)."""
     try:
-        from copilot import CopilotClient, SubprocessConfig
+        from copilot import CopilotClient
         from copilot.generated.session_events import AssistantMessageData
         from copilot.session import PermissionHandler, SystemMessageReplaceConfig
     except ImportError:
@@ -238,10 +238,10 @@ async def _guess_via_copilot(github_token: str, sentence: str) -> str:
         if isinstance(event.data, AssistantMessageData):
             chunks.append(event.data.content)
 
-    config = SubprocessConfig(github_token=github_token, log_level="warning")
-
     try:
-        async with CopilotClient(config) as client:
+        async with CopilotClient(
+            github_token=github_token, log_level="warning"
+        ) as client:
             async with await client.create_session(
                 on_permission_request=PermissionHandler.approve_all,
                 system_message=SystemMessageReplaceConfig(

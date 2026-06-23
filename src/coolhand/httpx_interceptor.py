@@ -41,6 +41,7 @@ DEFAULT_INTERCEPT_ADDRESSES = [
     "gateway.ai.cloudflare.com",
     "models.github.ai",
     "models.inference.ai.azure.com",
+    "openrouter.ai",
     ":generateContent",
     ":streamGenerateContent",
     ":predict",

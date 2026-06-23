@@ -1,11 +1,11 @@
 # Install dependencies:
-coolhand @ git+https://github.com/Coolhand-Labs/coolhand-python.git@main
+coolhand==0.4.2
 fastapi>=0.100.0
 uvicorn[standard]>=0.29.0
 httpx>=0.27.0
 azure-ai-inference>=1.0.0b6
 azure-core>=1.30.0
-github-copilot-sdk
+github-copilot-sdk==1.0.0
 python-dotenv>=1.0.0
 # Client compatibility testing
 structlog>=23.2.0

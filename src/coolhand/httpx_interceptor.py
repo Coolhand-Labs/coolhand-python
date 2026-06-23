@@ -1,5 +1,6 @@
 """httpx interceptor for capturing API calls."""
 
+import contextvars
 import json
 import logging
 import time
@@ -20,6 +21,15 @@ _original_requests_send: Callable | None = None
 _handler: Callable[[RequestData, ResponseData | None, str | None], None] | None = None
 _intercept_addresses: list[str] | None = None
 _exclude_api_patterns: list[str] | None = None
+
+# Reentrancy guard: prevents the handler from firing more than once per logical
+# request when the same intercepted call re-enters the public send() — e.g. a
+# requests→httpx adapter chain triggers both patched_requests_send and
+# patched_send for the same request, or any other code that calls self.send()
+# while already inside a patched send.
+_intercepting: contextvars.ContextVar[bool] = contextvars.ContextVar(
+    "coolhand_intercepting", default=False
+)
 
 
 # Default intercept addresses (domains and path substrings)
@@ -135,25 +145,34 @@ def patch() -> bool:
         """Patched sync send."""
         url = str(request.url)
 
-        # Only capture LLM API requests
+        # Only capture LLM API requests; skip if already intercepting (reentrancy
+        # guard prevents double-logging when the same intercepted call re-enters
+        # the public send(), e.g. via a requests→httpx adapter chain).
         if (
             not _is_llm_api(url)
             or _is_localhost(url)
             or _is_excluded(url)
             or not _handler
+            or _intercepting.get()
         ):
             return _original_send(self, request, **kwargs)
 
+        token = _intercepting.set(True)
         start = time.time()
-        req_data: RequestData = {
-            "method": request.method,
-            "url": url,
-            "headers": dict(request.headers),
-            "body": request.content.decode("utf-8") if request.content else None,
-            "timestamp": start,
-        }
+        req_data: RequestData | None = None
 
         try:
+            req_data = {
+                "method": request.method,
+                "url": url,
+                "headers": dict(request.headers),
+                "body": (
+                    request.content.decode("utf-8", errors="replace")
+                    if request.content
+                    else None
+                ),
+                "timestamp": start,
+            }
             response = _original_send(self, request, **kwargs)
             duration = time.time() - start
 
@@ -165,36 +184,54 @@ def patch() -> bool:
                 "duration": duration,
                 "is_streaming": False,
             }
-            _handler(req_data, res_data, None)
+            try:
+                _handler(req_data, res_data, None)
+            except Exception:
+                logger.debug("Handler error on success path", exc_info=True)
             return response
 
         except Exception as e:
-            _handler(req_data, None, str(e))
+            if req_data is not None:
+                try:
+                    _handler(req_data, None, str(e))
+                except Exception:
+                    logger.debug("Handler error on error path", exc_info=True)
             raise
+        finally:
+            _intercepting.reset(token)
 
     async def patched_async_send(self, request, **kwargs):
         """Patched async send."""
         url = str(request.url)
 
-        # Only capture LLM API requests
+        # Only capture LLM API requests; skip if already intercepting (reentrancy
+        # guard prevents double-logging when the same intercepted call re-enters
+        # the public send(), e.g. via a requests→httpx adapter chain).
         if (
             not _is_llm_api(url)
             or _is_localhost(url)
             or _is_excluded(url)
             or not _handler
+            or _intercepting.get()
         ):
             return await _original_async_send(self, request, **kwargs)
 
+        token = _intercepting.set(True)
         start = time.time()
-        req_data: RequestData = {
-            "method": request.method,
-            "url": url,
-            "headers": dict(request.headers),
-            "body": request.content.decode("utf-8") if request.content else None,
-            "timestamp": start,
-        }
+        req_data: RequestData | None = None
 
         try:
+            req_data = {
+                "method": request.method,
+                "url": url,
+                "headers": dict(request.headers),
+                "body": (
+                    request.content.decode("utf-8", errors="replace")
+                    if request.content
+                    else None
+                ),
+                "timestamp": start,
+            }
             response = await _original_async_send(self, request, **kwargs)
             duration = time.time() - start
 
@@ -218,7 +255,10 @@ def patch() -> bool:
                             "duration": time.time() - start,
                             "is_streaming": True,
                         }
-                        _handler(req_data, res_data, None)
+                        try:
+                            _handler(req_data, res_data, None)
+                        except Exception:
+                            logger.debug("Handler error in streaming", exc_info=True)
 
                 # Wrap aiter_bytes
                 if hasattr(response, "aiter_bytes"):
@@ -285,13 +325,22 @@ def patch() -> bool:
                     "duration": duration,
                     "is_streaming": False,
                 }
-                _handler(req_data, res_data, None)
+                try:
+                    _handler(req_data, res_data, None)
+                except Exception:
+                    logger.debug("Handler error on success path", exc_info=True)
 
             return response
 
         except Exception as e:
-            _handler(req_data, None, str(e))
+            if req_data is not None:
+                try:
+                    _handler(req_data, None, str(e))
+                except Exception:
+                    logger.debug("Handler error on error path", exc_info=True)
             raise
+        finally:
+            _intercepting.reset(token)
 
     # Apply httpx patches
     httpx.Client.send = patched_send
@@ -307,28 +356,34 @@ def patch() -> bool:
         def patched_requests_send(self, request, **kwargs):
             url = str(request.url or "")
 
+            # Skip if already intercepting — prevents double-logging when the
+            # same call re-enters the public send(), e.g. via a requests→httpx
+            # adapter chain triggering both this handler and patched_send.
             if (
                 not _is_llm_api(url)
                 or _is_localhost(url)
                 or _is_excluded(url)
                 or not _handler
+                or _intercepting.get()
             ):
                 return _original_requests_send(self, request, **kwargs)
 
+            token = _intercepting.set(True)
             start = time.time()
-            body: str | bytes | None = request.body
-            if isinstance(body, bytes):
-                body = body.decode("utf-8", errors="replace")
-
-            req_data: RequestData = {
-                "method": request.method or "",
-                "url": url,
-                "headers": dict(request.headers or {}),
-                "body": body,
-                "timestamp": start,
-            }
+            req_data: RequestData | None = None
 
             try:
+                body: str | bytes | None = request.body
+                if isinstance(body, bytes):
+                    body = body.decode("utf-8", errors="replace")
+
+                req_data = {
+                    "method": request.method or "",
+                    "url": url,
+                    "headers": dict(request.headers or {}),
+                    "body": body,
+                    "timestamp": start,
+                }
                 response = _original_requests_send(self, request, **kwargs)
                 duration = time.time() - start
 
@@ -352,12 +407,21 @@ def patch() -> bool:
                     "duration": duration,
                     "is_streaming": is_streaming,
                 }
-                _handler(req_data, res_data, None)
+                try:
+                    _handler(req_data, res_data, None)
+                except Exception:
+                    logger.debug("Handler error on success path", exc_info=True)
                 return response
 
             except Exception as e:
-                _handler(req_data, None, str(e))
+                if req_data is not None:
+                    try:
+                        _handler(req_data, None, str(e))
+                    except Exception:
+                        logger.debug("Handler error on error path", exc_info=True)
                 raise
+            finally:
+                _intercepting.reset(token)
 
         _requests_lib.Session.send = patched_requests_send
     except ImportError:

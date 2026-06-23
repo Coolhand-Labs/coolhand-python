@@ -62,6 +62,8 @@ test = [
     "pytest-asyncio>=1.0.0",
     "requests>=2.25.0",
     "httpx>=0.20.0",
+    "dramatiq>=1.15.0",
+    "pydantic-ai>=0.0.14",
 ]
 
 [project.urls]

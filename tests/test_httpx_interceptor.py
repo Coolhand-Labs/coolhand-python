@@ -807,3 +807,147 @@ class TestExcludeIntegration:
             assert "openai" in captured[0]["url"]
         finally:
             unpatch()
+
+
+class TestReentrancyGuard:
+    """Tests that the reentrancy guard prevents double-logging."""
+
+    def test_no_double_log_on_sync_recursive_send(self, reset_global_instance):
+        """Handler fires exactly once even when _original_send calls self.send() again
+        (simulates httpx redirect handling that recurses through patched_send)."""
+        import httpx
+
+        from coolhand import httpx_interceptor
+
+        handler = MagicMock()
+        set_handler(handler)
+        patch_httpx()
+
+        try:
+            mock_response = MagicMock()
+            mock_response.status_code = 200
+            mock_response.headers = {"content-type": "application/json"}
+            mock_response._content = b'{"id": "chatcmpl-1"}'
+            mock_response.content = b'{"id": "chatcmpl-1"}'
+
+            call_count = [0]
+
+            def recursive_original_send(self, request, **kwargs):
+                call_count[0] += 1
+                if call_count[0] == 1:
+                    # Simulate a redirect: triggers patched_send again
+                    httpx.Client.send(self, request)
+                return mock_response
+
+            original_original = httpx_interceptor._original_send
+            httpx_interceptor._original_send = recursive_original_send
+
+            mock_request = MagicMock()
+            mock_request.method = "POST"
+            mock_request.url = "https://api.openai.com/v1/chat/completions"
+            mock_request.headers = {"Content-Type": "application/json"}
+            mock_request.content = b'{"model": "gpt-4"}'
+
+            client = httpx.Client()
+            httpx.Client.send(client, mock_request)
+
+            httpx_interceptor._original_send = original_original
+
+            # Handler must fire exactly once despite the inner self.send() call
+            assert handler.call_count == 1
+        finally:
+            unpatch()
+
+    def test_no_double_log_on_async_recursive_send(self, reset_global_instance):
+        """Async handler fires exactly once even when _original_async_send recurses."""
+        import asyncio
+
+        import httpx
+
+        from coolhand import httpx_interceptor
+
+        handler = MagicMock()
+        set_handler(handler)
+        patch_httpx()
+
+        try:
+            mock_response = MagicMock()
+            mock_response.status_code = 200
+            mock_response.headers = {"content-type": "application/json"}
+            mock_response._content = b'{"id": "chatcmpl-2"}'
+            mock_response.content = b'{"id": "chatcmpl-2"}'
+
+            call_count = [0]
+
+            async def recursive_original_async_send(self, request, **kwargs):
+                call_count[0] += 1
+                if call_count[0] == 1:
+                    await httpx.AsyncClient.send(self, request)
+                return mock_response
+
+            original_original = httpx_interceptor._original_async_send
+            httpx_interceptor._original_async_send = recursive_original_async_send
+
+            mock_request = MagicMock()
+            mock_request.method = "POST"
+            mock_request.url = "https://api.openai.com/v1/chat/completions"
+            mock_request.headers = {"Content-Type": "application/json"}
+            mock_request.content = b'{"model": "gpt-4"}'
+
+            async def run():
+                client = httpx.AsyncClient()
+                await httpx.AsyncClient.send(client, mock_request)
+
+            asyncio.run(run())
+
+            httpx_interceptor._original_async_send = original_original
+
+            assert handler.call_count == 1
+        finally:
+            unpatch()
+
+    def test_handler_exception_does_not_cause_double_log(self, reset_global_instance):
+        """If the handler raises on the success path, the error-path handler does not
+        fire again — the original response is still returned to the caller."""
+        import httpx
+
+        from coolhand import httpx_interceptor
+
+        call_count = [0]
+
+        def flaky_handler(req, res, err):
+            call_count[0] += 1
+            if call_count[0] == 1:
+                raise RuntimeError("handler blew up")
+
+        set_handler(flaky_handler)
+        patch_httpx()
+
+        try:
+            mock_response = MagicMock()
+            mock_response.status_code = 200
+            mock_response.headers = {"content-type": "application/json"}
+            mock_response._content = b'{"ok": true}'
+            mock_response.content = b'{"ok": true}'
+
+            original_original = httpx_interceptor._original_send
+            httpx_interceptor._original_send = MagicMock(return_value=mock_response)
+
+            mock_request = MagicMock()
+            mock_request.method = "POST"
+            mock_request.url = "https://api.openai.com/v1/chat/completions"
+            mock_request.headers = {"Content-Type": "application/json"}
+            mock_request.content = b'{"model": "gpt-4"}'
+
+            client = httpx.Client()
+            result = httpx.Client.send(client, mock_request)
+
+            httpx_interceptor._original_send = original_original
+
+            # Handler raised on the first (success) call; must not be called a
+            # second time via the error path — total invocations must be 1.
+            assert call_count[0] == 1
+            # The original response must still reach the caller
+            assert result is mock_response
+        finally:
+            unpatch()

@@ -143,6 +143,7 @@ class CoolhandClient:
         request: RequestData,
         response: ResponseData | None = None,
         error: str | None = None,
+        metadata: dict[str, str] | None = None,
     ) -> None:
         """Log an API interaction in flat format matching Ruby/Node SDKs."""
         self._interaction_count += 1
@@ -154,8 +155,11 @@ class CoolhandClient:
         )
         duration_seconds = response.get("duration", 0.0) if response else 0.0
 
+        # Merge metadata: explicit param takes precedence over request-level metadata
+        merged_metadata = {**(request.get("metadata") or {}), **(metadata or {})}
+
         # Build flat interaction data (matching Ruby/Node format)
-        interaction = {
+        interaction: dict[str, Any] = {
             "id": str(uuid.uuid4()),
             "timestamp": _to_iso8601(req_timestamp),
             "method": request.get("method", "").lower(),
@@ -171,6 +175,8 @@ class CoolhandClient:
             "completed_at": _to_iso8601(res_timestamp),
             "is_streaming": response.get("is_streaming", False) if response else False,
         }
+        if merged_metadata:
+            interaction["metadata"] = merged_metadata
 
         # Debug output when not silent
         if not self.config.get("silent"):

@@ -329,6 +329,57 @@ class TestCoolhandClient:
 
         assert client._queue[0]["is_streaming"] is True
 
+    def test_log_interaction_metadata_param(
+        self, mock_request_data, mock_response_data, reset_global_instance
+    ):
+        """log_interaction includes metadata when passed as a parameter."""
+        client = CoolhandClient(auto_submit=False)
+        client.log_interaction(
+            mock_request_data,
+            mock_response_data,
+            metadata={"task_id": "abc123", "queue": "default"},
+        )
+
+        interaction = client._queue[0]
+        assert interaction["metadata"] == {"task_id": "abc123", "queue": "default"}
+
+    def test_log_interaction_metadata_on_request(
+        self, mock_request_data, mock_response_data, reset_global_instance
+    ):
+        """log_interaction includes metadata set directly on RequestData."""
+        mock_request_data["metadata"] = {"source": "worker"}
+        client = CoolhandClient(auto_submit=False)
+        client.log_interaction(mock_request_data, mock_response_data)
+
+        assert client._queue[0]["metadata"] == {"source": "worker"}
+
+    def test_log_interaction_metadata_param_overrides_request(
+        self, mock_request_data, mock_response_data, reset_global_instance
+    ):
+        """log_interaction param metadata is merged over request-level metadata."""
+        mock_request_data["metadata"] = {"source": "worker", "env": "prod"}
+        client = CoolhandClient(auto_submit=False)
+        client.log_interaction(
+            mock_request_data,
+            mock_response_data,
+            metadata={"env": "staging", "task_id": "xyz"},
+        )
+
+        assert client._queue[0]["metadata"] == {
+            "source": "worker",
+            "env": "staging",
+            "task_id": "xyz",
+        }
+
+    def test_log_interaction_no_metadata_omits_key(
+        self, mock_request_data, mock_response_data, reset_global_instance
+    ):
+        """log_interaction omits metadata key when none is provided."""
+        client = CoolhandClient(auto_submit=False)
+        client.log_interaction(mock_request_data, mock_response_data)
+
+        assert "metadata" not in client._queue[0]
+
     def test_flush_clears_queue(
         self, mock_request_data, mock_response_data, reset_global_instance
     ):

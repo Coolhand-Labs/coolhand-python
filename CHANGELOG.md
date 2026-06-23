@@ -4,6 +4,10 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Added
+
+- **Per-interaction metadata** — `log_interaction` now accepts an optional `metadata: dict[str, str]` parameter, and `RequestData` gains a matching `metadata` field. Arbitrary key-value tags (e.g. `{"task_id": "..."}`) are forwarded in the interaction payload, making it straightforward to correlate LLM calls with task queue messages (Dramatiq, Celery, RQ, etc.) without replacing the global handler or creating per-call `Coolhand` instances. (#56)
+
 ## [0.4.3] - 2026-06-22
 
 ### Added

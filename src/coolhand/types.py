@@ -13,6 +13,7 @@ class RequestData(TypedDict, total=False):
     headers: dict[str, str]
     body: str | bytes | dict[str, Any] | None
     timestamp: float
+    metadata: dict[str, str]
 
 
 class ResponseData(TypedDict, total=False):

@@ -86,19 +86,17 @@ python -m dramatiq tasks
 
 ---
 
-### Gap 2 — Per-task Session Correlation
+### Gap 2 — Per-task Interaction Correlation
 
 **Problem:** All LLM calls across all worker threads share a single global `session_id`. There is no built-in way to know which Coolhand interaction was triggered by which Dramatiq message.
 
-**Workaround:** Add the `CoolhandDramatiqMiddleware` below to your broker. It uses a `ContextVar` to tag each worker thread with the current message ID and routes LLM interactions to a per-task Coolhand instance carrying that ID as the `session_id`.
+**Solution:** Use `log_interaction`'s `metadata` parameter to attach the message ID to each interaction. A thin middleware stores the current message ID in a `ContextVar`; a custom handler reads it and passes it as metadata.
 
 ```python
 # coolhand_middleware.py
 import contextvars
-import os
 import threading
 
-import coolhand
 import dramatiq
 from coolhand import httpx_interceptor
 
@@ -111,8 +109,7 @@ _token_local = threading.local()
 
 class CoolhandDramatiqMiddleware(dramatiq.Middleware):
     """
-    Routes each Dramatiq message's LLM calls to a dedicated Coolhand
-    session_id derived from the message ID.
+    Tags each Dramatiq message's LLM calls with the message ID via metadata.
 
     Add to your broker before starting workers:
 
@@ -128,23 +125,19 @@ class CoolhandDramatiqMiddleware(dramatiq.Middleware):
             del _token_local.token
 
 
-def _task_routing_handler(req, res, err):
-    """httpx interceptor handler that dispatches to a per-task Coolhand instance."""
+def _task_metadata_handler(req, res, err):
+    """httpx interceptor handler that injects the current task ID as metadata."""
+    import coolhand
     task_id = _current_task_id.get()
-    global_instance = coolhand.get_global_instance()
-    session_id = task_id or (global_instance.session_id if global_instance else None)
-    instance = coolhand.Coolhand(
-        api_key=os.environ.get("COOLHAND_API_KEY", ""),
-        session_id=session_id,
-        silent=True,
-        auto_submit=True,
-    )
-    instance.log_interaction(req, res, err)
+    instance = coolhand.get_global_instance()
+    if instance:
+        metadata = {"task_id": task_id} if task_id else {}
+        instance.log_interaction(req, res, err, metadata=metadata)
 
 
-# Replace the global handler with the routing handler.
+# Replace the global handler with the metadata-injecting handler.
 # Call this once at startup, after `import coolhand`.
-httpx_interceptor.set_handler(_task_routing_handler)
+httpx_interceptor.set_handler(_task_metadata_handler)
 ```
 
 Wire it up in your broker setup:
@@ -161,9 +154,7 @@ broker.add_middleware(CoolhandDramatiqMiddleware())
 dramatiq.set_broker(broker)
 ```
 
-Each Dramatiq message ID now appears as a distinct `session_id` in the Coolhand dashboard, making it straightforward to trace which task triggered which LLM call.
-
-> **Limitation:** Each LLM call creates a lightweight `Coolhand` instance. For very high-throughput workloads, consider caching instances by `task_id` (or by a stable hash of it) to reduce object allocation.
+Each interaction now carries a `task_id` field in its metadata, making it straightforward to trace which Dramatiq message triggered which LLM call in the Coolhand dashboard.
 
 ---
 
@@ -212,4 +203,3 @@ These gaps are tracked as separate issues and will be addressed with first-class
 | Gap | Planned fix |
 |---|---|
 | Process-based workers | A Dramatiq middleware shipped in the SDK that calls `coolhand.start_monitoring()` in the `after_worker_process_boot` lifecycle hook |
-| Per-task session correlation | A `metadata` / `tags` field on `log_interaction` (and on `RequestData` / `ResponseData`) so any task queue framework can attach arbitrary identifiers to individual LLM calls without a custom middleware |

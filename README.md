@@ -73,60 +73,7 @@ coolhand_client = Coolhand(
 )
 ```
 
-### Excluding API Patterns
-
-Some endpoints — batch jobs, health checks, internal metrics — generate high-volume traffic that isn't useful to log. Use `exclude_api_patterns` to skip them:
-
-```python
-from coolhand import Coolhand
-
-coolhand_client = Coolhand(
-    api_key='your-api-key',
-    exclude_api_patterns=[
-        '/health',
-        '/metrics',
-        '/batchPredictionJobs/',
-    ],
-)
-```
-
-Any request whose URL contains one of the listed substrings is passed through without logging. The default list (`DEFAULT_EXCLUDE_API_PATTERNS`) excludes `/batchPredictionJobs/`; setting `exclude_api_patterns` replaces the default entirely.
-
-```python
-from coolhand import DEFAULT_EXCLUDE_API_PATTERNS
-
-# Extend the defaults rather than replace them
-coolhand_client = Coolhand(
-    api_key='your-api-key',
-    exclude_api_patterns=DEFAULT_EXCLUDE_API_PATTERNS + ['/health'],
-)
-```
-
-### Self-Hosted Deployments
-
-If you run your own Coolhand-compatible backend (e.g. for compliance or data-residency requirements), point the SDK at your host with `base_url`:
-
-```python
-from coolhand import Coolhand
-
-coolhand_client = Coolhand(
-    api_key='your-api-key',
-    base_url='https://feedback.example.com',  # must use https://
-)
-```
-
-Or via environment variable (useful for 12-factor deployments):
-
-```bash
-export COOLHAND_API_KEY=your-api-key
-export COOLHAND_BASE_URL=https://feedback.example.com
-```
-
-```python
-import coolhand  # picks up COOLHAND_BASE_URL automatically
-```
-
-The SDK rejects non-`https://` URLs by default. `http://localhost` and `http://127.0.0.1` are allowed for local development only.
+For excluding noisy endpoints (health checks, batch jobs) or pointing the SDK at a self-hosted backend, see [Advanced Configuration](./docs/configuration.md).
 
 ## Usage Examples
 
@@ -214,58 +161,52 @@ Headers containing API keys are automatically sanitized for security.
 
 ## Supported Libraries
 
-Coolhand intercepts AI API calls through two mechanisms:
-
-**httpx patching** (covers any library built on httpx):
+Coolhand works with any library that uses httpx, requests, or the GitHub Copilot SDK:
 
 - OpenAI Python SDK
 - Anthropic Python SDK
 - Google Gemini (`google-generativeai` / `google-genai`)
-- GitHub Models via Azure (`models.inference.ai.azure.com`)
-- OpenRouter (`openrouter.ai`)
-- Any other library using httpx for HTTP requests
+- Azure AI Inference (`azure-ai-inference`)
+- GitHub Models
+- GitHub Copilot SDK
+- Vertex AI
+- Cloudflare AI Gateway
+- OpenRouter
+- pydantic-ai
+- Any other library using httpx or requests
 
-**requests patching** (covers any library built on `requests`):
-
-- `azure-ai-inference`, `azure-openai`, and other `azure-core`-based SDKs
-- Any other library using `requests` for HTTP requests (`requests` is optional — patch is skipped if not installed)
-
-**JSON-RPC patching** (direct protocol interception):
-
-- GitHub Copilot SDK (`JsonRpcClient`)
+See [Supported Libraries](./docs/supported-libraries.md) for the full interception mechanism breakdown and streaming details.
 
 ## How It Works
 
-1. When you import `coolhand`, it automatically patches httpx, `requests.Session.send` (if installed), and the GitHub Copilot `JsonRpcClient`
-2. Requests to AI APIs are intercepted (OpenAI, Anthropic, Gemini, GitHub Models, GitHub Copilot, and more)
-3. Request and response data are captured (credentials and sensitive URL parameters sanitized)
-4. Data is sent to Coolhand asynchronously
-5. Your application continues without interruption
+Importing `coolhand` patches `httpx`, `requests`, and the GitHub Copilot `JsonRpcClient` at the class level. Requests to LLM APIs are intercepted, credentials are redacted, and data is submitted to Coolhand. Non-LLM requests pass through unchanged.
 
-For non-LLM endpoints, requests pass through unchanged with zero overhead.
+## Integrations
+
+| Integration | Status | Guide |
+|---|---|---|
+| Dramatiq + pydantic-ai | ✅ Supported | [docs/dramatiq.md](./docs/dramatiq.md) |
+| Celery | 🔜 Coming soon | — |
 
 ## Feedback Service
 
-Collect user feedback on LLM responses to improve your AI outputs. The FeedbackService lets you capture sentiment ratings, explanations, and corrections.
+Collect user feedback on LLM responses to improve your AI outputs.
 
-> **Frontend Feedback Widget**: For browser-based feedback collection, see [coolhand-js](https://github.com/Coolhand-Labs/coolhand-js) - an accessible, lightweight JavaScript widget that leverages best UX practices to capture actionable user feedback on any AI output.
-
-### Basic Usage
+> **Frontend Feedback Widget**: For browser-based feedback collection, see [coolhand-js](https://github.com/Coolhand-Labs/coolhand-js).
 
 ```python
 from coolhand import Coolhand
 
-# Initialize with your API key
 ch = Coolhand(api_key='your-api-key')
 
 # Submit positive feedback
 ch.create_feedback({
-    'llm_request_log_id': 12345,  # From Coolhand logs
+    'llm_request_log_id': 12345,
     'sentiment': 'like',
     'explanation': 'Very helpful response!'
 })
 
-# Using original output for fuzzy matching
+# Submit negative feedback with a correction
 ch.create_feedback({
     'original_output': 'The capital of France is London.',
     'sentiment': 'dislike',
@@ -273,24 +214,7 @@ ch.create_feedback({
 })
 ```
 
-### Feedback Fields
-
-All fields are optional. At least one matching field (marked \*) is recommended to link feedback to the original LLM request.
-
-| Field | Type | Description |
-|-------|------|-------------|
-| `sentiment` | str | **Preferred.** `"like"`, `"dislike"`, or `"neutral"` |
-| `like` | bool | **Deprecated** — use `sentiment` instead. Auto-converted and stripped from the wire payload. Emits `DeprecationWarning`. |
-| `llm_request_log_id` | int | \* Coolhand log ID (exact match) |
-| `llm_provider_unique_id` | str | \* Provider's x-request-id (exact match) |
-| `original_output` | str | \* Original response text (fuzzy match) |
-| `client_unique_id` | str | \* Your internal identifier |
-| `explanation` | str | Why the response was good/bad |
-| `revised_output` | str | User's corrected version |
-| `creator_unique_id` | str | ID of user providing feedback |
-| `creator_type` | str | What kind of creator submitted it: `"human"`, `"agent"`, or `"unknown"` |
-| `workload_hashid` | str | Associate feedback with a specific workload |
-| `collector` | str | Override the SDK-generated collector string |
+For the full field reference, matching strategies, and sentiment values, see [Feedback API](./docs/feedback.md).
 
 ## Troubleshooting
 
@@ -327,6 +251,13 @@ export COOLHAND_SILENT=false
 - No sensitive data is exposed in logs
 - All data is sent via HTTPS to Coolhand servers
 
+## Documentation
+
+- [Advanced Configuration](./docs/configuration.md) — exclude patterns, self-hosted deployments, custom intercept addresses
+- [Feedback API](./docs/feedback.md) — full field reference, matching strategies, sentiment values
+- [Supported Libraries](./docs/supported-libraries.md) — interception mechanisms, streaming, thread/process safety
+- [Dramatiq + pydantic-ai](./docs/dramatiq.md) — task queue integration guide, known gaps, workarounds
+
 ## Related Packages
 
 - **Frontend (Feedback Collection Widget)**: [coolhand-js](https://github.com/Coolhand-Labs/coolhand-js) - Frontend feedback widget for collecting user feedback on AI outputs
@@ -338,6 +269,10 @@ export COOLHAND_SILENT=false
 - **Questions?** [Create an issue](https://github.com/Coolhand-Labs/coolhand-python/issues)
 - **Contribute?** [Submit a pull request](https://github.com/Coolhand-Labs/coolhand-python/pulls)
 - **Support?** Visit [coolhandlabs.com](https://coolhandlabs.com)
+
+## About Coolhand Labs
+
+[Coolhand Labs](https://coolhandlabs.com) builds observability and feedback tooling for AI-powered applications. Our platform helps teams monitor LLM usage, collect structured human feedback, and improve output quality over time — across every provider and framework.
 
 ## License
 

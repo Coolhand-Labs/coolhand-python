@@ -14,7 +14,7 @@ pydantic-ai (AnthropicProvider): WORKS — pydantic-ai uses httpx internally;
 
 Process workers (Redis/RabbitMQ with fork model): Fixed via
   CoolhandDramatiqMiddleware (coolhand.integrations.dramatiq), which calls
-  coolhand.start_monitoring() in the after_worker_process_boot hook.
+  coolhand.start_monitoring() in the after_process_boot hook.
 
 No task-to-LLM correlation: Coolhand has no mechanism to link a Dramatiq
   message ID to the LLM interactions it triggers. Session IDs are global,
@@ -346,7 +346,7 @@ class TestKnownLimitations:
         forking is out of scope here.
 
         Fix: use CoolhandDramatiqMiddleware (coolhand.integrations.dramatiq),
-        which calls coolhand.start_monitoring() in after_worker_process_boot.
+        which calls coolhand.start_monitoring() in after_process_boot.
         """
         # The patch lives in the parent process's memory. After fork(), the
         # child has a copy of that memory, but httpx.AsyncClient.send in the

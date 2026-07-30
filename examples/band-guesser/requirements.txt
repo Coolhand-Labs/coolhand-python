@@ -8,7 +8,7 @@ azure-core>=1.30.0
 github-copilot-sdk==1.0.0
 python-dotenv>=1.0.0
 # Client compatibility testing
-structlog>=23.2.0
+structlog>=26.1.0
 opentelemetry-sdk>=1.21.0
 opentelemetry-instrumentation-fastapi>=0.42b0
 opentelemetry-instrumentation-requests>=0.42b0

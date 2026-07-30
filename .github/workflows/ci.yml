@@ -68,9 +68,9 @@ jobs:
       - name: Verify
         run: make verify
 
-      - name: Audit production dependencies
+      - name: Audit dependencies
         run: |
-          uv export --no-dev --no-hashes --no-emit-project --format requirements-txt -o requirements-audit.txt
+          uv export --extra test --no-hashes --no-emit-project --format requirements-txt -o requirements-audit.txt
           uvx pip-audit -r requirements-audit.txt
 
       - name: Run mypy

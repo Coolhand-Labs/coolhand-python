@@ -4,6 +4,17 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-07-30
+
+### Changed
+- **`llm_request_log_id` in `FeedbackResponse` is now `str | None`, not `int`** — the Coolhand API now returns this as a hashid, matching every other external-facing identifier on the record (it previously leaked the raw integer foreign key). `FeedbackData.llm_request_log_id` (the `create_feedback` input field) is now typed `int | str | None` — existing callers passing a raw integer are unaffected; the server still accepts either format on write.
+- **`FeedbackResponse.id` is now `str`, not `int`** — the Coolhand server has actually returned a hashid for this field for some time; the type was simply wrong. This is a type-only correction (no server behavior change), but is still breaking for code type-checked against the old `int` type.
+- **`FeedbackResponse.workload_id` added (`str | None`)** — the server now includes this as a hashid on responses.
+- **Removed `FeedbackResponse.workload_hashid`** — this field was speculative and never actually returned by the server (only accepted as a write-side parameter, which remains on `FeedbackData`); `workload_id` above is the real hashid-bearing field on responses. Since the server never populated it, no caller could have received a real value through it.
+
+### Note
+Nothing in this SDK's own logic depended on `llm_request_log_id`'s or `id`'s numeric type (both were only ever logged or checked for presence), so no runtime behavior changes here beyond the types — but this is still a type-level breaking change for any code type-checked against the previous `TypedDict` definitions.
+
 ## [0.4.3] - 2026-06-22
 
 ### Added

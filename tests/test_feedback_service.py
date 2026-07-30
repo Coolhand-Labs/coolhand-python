@@ -22,8 +22,8 @@ def mock_feedback_urlopen():
         mock_response.status = 201
         mock_response.read.return_value = json.dumps(
             {
-                "id": 123,
-                "llm_request_log_id": 12345,
+                "id": "xyz789abc123",
+                "llm_request_log_id": "abc123def456",
                 "like": True,
                 "explanation": "Great response",
                 "created_at": "2024-01-01T00:00:00Z",
@@ -92,8 +92,8 @@ class TestCreateFeedback:
         result = feedback_service.create_feedback(feedback)
 
         assert result is not None
-        assert result["id"] == 123
-        assert result["llm_request_log_id"] == 12345
+        assert result["id"] == "xyz789abc123"
+        assert result["llm_request_log_id"] == "abc123def456"
         assert result["like"] is True
 
         # Verify API was called

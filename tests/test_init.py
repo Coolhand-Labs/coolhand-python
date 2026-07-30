@@ -238,8 +238,8 @@ class TestCoolhandClassEdgeCases:
             mock_response.status = 201
             mock_response.read.return_value = json.dumps(
                 {
-                    "id": 456,
-                    "llm_request_log_id": 12345,
+                    "id": "def456ghi789",
+                    "llm_request_log_id": "abc123def456",
                     "like": True,
                 }
             ).encode("utf-8")
@@ -255,7 +255,7 @@ class TestCoolhandClassEdgeCases:
             )
 
             assert result is not None
-            assert result["id"] == 456
+            assert result["id"] == "def456ghi789"
 
         instance.stop_monitoring()
 

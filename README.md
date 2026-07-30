@@ -201,7 +201,7 @@ ch = Coolhand(api_key='your-api-key')
 
 # Submit positive feedback
 ch.create_feedback({
-    'llm_request_log_id': 12345,
+    'llm_request_log_id': 'abc123def456',  # hashid from a prior response; a raw integer FK also still works
     'sentiment': 'like',
     'explanation': 'Very helpful response!'
 })

@@ -719,6 +719,16 @@ class TestIsExcluded:
             url = base + path + "123"
             assert _is_excluded(url) is True, f"Expected {path!r} to be excluded"
 
+    def test_fails_closed_on_internal_error(self, reset_global_instance):
+        """If the exclude check itself breaks, the URL is treated as excluded."""
+        from unittest.mock import patch
+
+        with patch(
+            "coolhand.httpx_interceptor._exclude_api_patterns",
+            new=object(),  # not iterable -> `any(p in url for p in patterns)` raises
+        ):
+            assert _is_excluded("https://api.openai.com/v1/chat/completions") is True
+
 
 class TestExcludeIntegration:
     """Integration tests for exclude_api_patterns in the patched senders."""

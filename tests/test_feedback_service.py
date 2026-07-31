@@ -24,6 +24,7 @@ def mock_feedback_urlopen():
             {
                 "id": "xyz789abc123",
                 "llm_request_log_id": "abc123def456",
+                "workload_id": "wkld789xyz123",
                 "like": True,
                 "explanation": "Great response",
                 "created_at": "2024-01-01T00:00:00Z",
@@ -94,6 +95,7 @@ class TestCreateFeedback:
         assert result is not None
         assert result["id"] == "xyz789abc123"
         assert result["llm_request_log_id"] == "abc123def456"
+        assert result["workload_id"] == "wkld789xyz123"
         assert result["like"] is True
 
         # Verify API was called

@@ -6,14 +6,22 @@ All notable changes to this project will be documented in this file.
 
 ## [0.5.0] - 2026-07-30
 
-### Changed
-- **`llm_request_log_id` in `FeedbackResponse` is now `str | None`, not `int`** — the Coolhand API now returns this as a hashid, matching every other external-facing identifier on the record (it previously leaked the raw integer foreign key). `FeedbackData.llm_request_log_id` (the `create_feedback` input field) is now typed `int | str | None` — existing callers passing a raw integer are unaffected; the server still accepts either format on write.
-- **`FeedbackResponse.id` is now `str`, not `int`** — the Coolhand server has actually returned a hashid for this field for some time; the type was simply wrong. This is a type-only correction (no server behavior change), but is still breaking for code type-checked against the old `int` type.
+### Added
 - **`FeedbackResponse.workload_id` added (`str | None`)** — the server now includes this as a hashid on responses.
-- **Removed `FeedbackResponse.workload_hashid`** — this field was speculative and never actually returned by the server (only accepted as a write-side parameter, which remains on `FeedbackData`); `workload_id` above is the real hashid-bearing field on responses. Since the server never populated it, no caller could have received a real value through it.
+- **Dramatiq + pydantic-ai support verified** — Coolhand's httpx patch works out of the box with Dramatiq thread-based workers running pydantic-ai agents (via `AnthropicModel` / `OpenAIModel`). See [docs/dramatiq.md](./docs/dramatiq.md) for a quick start, a what-works/what-doesn't table, and workarounds for the two known gaps (process-based workers, per-task session correlation). Includes a runnable example (`examples/dramatiq_pydantic_ai.py`) and 8 integration tests. (#57)
 
-### Note
-Nothing in this SDK's own logic depended on `llm_request_log_id`'s or `id`'s numeric type (both were only ever logged or checked for presence), so no runtime behavior changes here beyond the types — but this is still a type-level breaking change for any code type-checked against the previous `TypedDict` definitions.
+### Fixed
+- **Double-logging in the auto-monitor interceptor** — a `contextvars.ContextVar` reentrancy guard now prevents the same intercepted call from being logged twice when it re-enters `send()` internally (e.g. a `requests`→httpx adapter chain triggering both `patched_requests_send` and `patched_send` for one logical request). This eliminated the 2–6x duplicate submissions observed server-side via `llm_provider_unique_id` collision detection. No API changes; concurrent requests on separate threads or asyncio Tasks are unaffected. (Closes #48, #58)
+
+### Security
+- **Query-string redaction now fails closed** — if `_sanitize_url`'s redaction logic hits an unexpected error, it now strips the entire query string instead of falling back to the raw, unredacted URL (which could have contained an `api_key`/`token`/`secret` param).
+- **Exclude-pattern check now fails closed** — if the deny-list check (`exclude_api_patterns`) hits an unexpected error, the URL is now treated as excluded (not captured) rather than silently falling through to capture traffic the deny-list exists to skip.
+- **Expanded header redaction** — `SENSITIVE_HEADERS` now also masks `cookie`, `set-cookie`, `proxy-authorization`, `x-amz-security-token`, and `x-amz-signature`, so session cookies and AWS SigV4 credentials aren't forwarded unmasked when a custom `intercept_addresses` target (e.g. AWS Bedrock) sends them.
+
+### Breaking changes
+- **`llm_request_log_id` in `FeedbackResponse` is now `str | None`, not `int`** — the Coolhand API now returns this as a hashid, matching every other external-facing identifier on the record (it previously leaked the raw integer foreign key). `FeedbackData.llm_request_log_id` (the `create_feedback` input field) is now typed `int | str | None` — existing callers passing a raw integer are unaffected; the server still accepts either format on write. Nothing in this SDK's own logic depended on the previous numeric type (it was only ever logged or checked for presence), so this is a type-level breaking change only — no runtime behavior changes beyond the `TypedDict` definitions.
+- **`FeedbackResponse.id` is now `str`, not `int`** — the Coolhand server has actually returned a hashid for this field for some time; the type was simply wrong. This is a type-only correction (no server behavior change), but is still breaking for code type-checked against the old `int` type.
+- **Removed `FeedbackResponse.workload_hashid`** — this field was speculative and never actually returned by the server (only accepted as a write-side parameter, which remains on `FeedbackData`); `workload_id` above is the real hashid-bearing field on responses. Since the server never populated it, no caller could have received a real value through it.
 
 ## [0.4.3] - 2026-06-22
 

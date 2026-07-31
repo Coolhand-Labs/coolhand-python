@@ -93,7 +93,9 @@ def _is_excluded(url: str) -> bool:
         )
         return any(p in url for p in patterns)
     except Exception:
-        return False
+        # Fail closed: if the exclude check itself breaks, treat the URL as
+        # excluded rather than risk capturing traffic the deny-list exists to skip.
+        return True
 
 
 def _is_streaming_content_type(content_type: str) -> bool:

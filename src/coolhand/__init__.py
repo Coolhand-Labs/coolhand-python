@@ -80,8 +80,10 @@ class Coolhand(CoolhandClient):
             FeedbackResponse with created feedback details, or None on error.
 
         Example:
+            >>> # llm_request_log_id: hashid from a prior response (a raw
+            >>> # integer FK also still works)
             >>> coolhand_instance.create_feedback({
-            ...     "llm_request_log_id": 12345,
+            ...     "llm_request_log_id": "abc123def456",
             ...     "sentiment": "like",
             ...     "explanation": "Accurate and helpful response"
             ... })

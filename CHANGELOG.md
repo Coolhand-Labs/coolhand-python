@@ -15,7 +15,6 @@ All notable changes to this project will be documented in this file.
 
 ### Security
 - **Query-string redaction now fails closed** — if `_sanitize_url`'s redaction logic hits an unexpected error, it now strips the entire query string instead of falling back to the raw, unredacted URL (which could have contained an `api_key`/`token`/`secret` param).
-- **Exclude-pattern check now fails closed** — if the deny-list check (`exclude_api_patterns`) hits an unexpected error, the URL is now treated as excluded (not captured) rather than silently falling through to capture traffic the deny-list exists to skip.
 - **Expanded header redaction** — `SENSITIVE_HEADERS` now also masks `cookie`, `set-cookie`, `proxy-authorization`, `x-amz-security-token`, and `x-amz-signature`, so session cookies and AWS SigV4 credentials aren't forwarded unmasked when a custom `intercept_addresses` target (e.g. AWS Bedrock) sends them.
 
 ### Breaking changes

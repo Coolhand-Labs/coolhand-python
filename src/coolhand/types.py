@@ -73,10 +73,7 @@ class FeedbackData(TypedDict, total=False):
 class FeedbackResponse(TypedDict, total=False):
     """Response from the feedback API."""
 
-    # Hashid, not the raw integer FK.
     id: str
-    # Hashid, not the raw integer FK — None when this feedback isn't linked to a
-    # specific logged request.
     llm_request_log_id: str | None
     sentiment: Literal["like", "dislike", "neutral"] | None
     like: bool
@@ -86,9 +83,6 @@ class FeedbackResponse(TypedDict, total=False):
     original_output: str | None
     client_unique_id: str | None
     creator_type: Literal["human", "agent", "unknown"] | None
-    # Hashid of the workload this feedback is associated with, set server-side from
-    # workload_hashid on create. There is no separate workload_hashid field on
-    # responses — workload_hashid is write-only (see FeedbackData above).
     workload_id: str | None
     created_at: str
     updated_at: str

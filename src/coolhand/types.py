@@ -50,7 +50,9 @@ class FeedbackData(TypedDict, total=False):
     """
 
     # Matching fields (at least one required)
-    llm_request_log_id: int | None
+    # Either the raw integer FK or a hashid string (e.g. from a prior response's
+    # llm_request_log_id) — the server accepts both on write.
+    llm_request_log_id: int | str | None
     llm_provider_unique_id: str | None
     original_output: str | None
     client_unique_id: str | None
@@ -71,8 +73,8 @@ class FeedbackData(TypedDict, total=False):
 class FeedbackResponse(TypedDict, total=False):
     """Response from the feedback API."""
 
-    id: int
-    llm_request_log_id: int
+    id: str
+    llm_request_log_id: str | None
     sentiment: Literal["like", "dislike", "neutral"] | None
     like: bool
     explanation: str | None
@@ -81,6 +83,6 @@ class FeedbackResponse(TypedDict, total=False):
     original_output: str | None
     client_unique_id: str | None
     creator_type: Literal["human", "agent", "unknown"] | None
-    workload_hashid: str | None
+    workload_id: str | None
     created_at: str
     updated_at: str

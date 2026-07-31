@@ -26,6 +26,11 @@ SENSITIVE_HEADERS = [
     "openai-api-key",
     "anthropic-api-key",
     "x-goog-api-key",
+    "cookie",
+    "set-cookie",
+    "proxy-authorization",
+    "x-amz-security-token",
+    "x-amz-signature",
 ]
 
 SENSITIVE_QUERY_PARAMS = {"key", "api_key", "apikey", "token", "access_token", "secret"}
@@ -77,7 +82,9 @@ def _sanitize_url(url: str) -> str:
             return url
         return urlunparse(parsed._replace(query=urlencode(params, doseq=True)))
     except Exception:
-        return url
+        # Fail closed: if redaction itself breaks, drop the query string rather
+        # than risk forwarding an unredacted secret in it.
+        return url.split("?", 1)[0]
 
 
 def _parse_body(body: str | bytes | dict | None) -> str | dict | None:

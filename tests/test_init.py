@@ -33,9 +33,9 @@ class TestVersion:
         assert parts[0].isdigit()
         assert parts[1].isdigit()
 
-    def test_version_is_0_4_3(self):
-        """Current version is 0.4.3."""
-        assert __version__ == "0.4.3"
+    def test_version_is_0_5_0(self):
+        """Current version is 0.5.0."""
+        assert __version__ == "0.5.0"
 
 
 class TestExports:
@@ -238,8 +238,9 @@ class TestCoolhandClassEdgeCases:
             mock_response.status = 201
             mock_response.read.return_value = json.dumps(
                 {
-                    "id": 456,
-                    "llm_request_log_id": 12345,
+                    "id": "def456ghi789",
+                    "llm_request_log_id": "abc123def456",
+                    "workload_id": "wkld456def789",
                     "like": True,
                 }
             ).encode("utf-8")
@@ -255,7 +256,8 @@ class TestCoolhandClassEdgeCases:
             )
 
             assert result is not None
-            assert result["id"] == 456
+            assert result["id"] == "def456ghi789"
+            assert result["workload_id"] == "wkld456def789"
 
         instance.stop_monitoring()
 

@@ -136,6 +136,16 @@ class TestSanitizeUrl:
         # "KEY" != "key", so it should NOT be redacted
         assert "value123" in result
 
+    def test_fails_closed_on_internal_error(self):
+        """If redaction breaks internally, the query string is dropped, not leaked."""
+        from unittest.mock import patch
+
+        url = "https://api.example.com/v1?api_key=secret123&model=gpt-4"
+        with patch("coolhand.client.parse_qs", side_effect=ValueError("boom")):
+            result = _sanitize_url(url)
+        assert "secret123" not in result
+        assert result == "https://api.example.com/v1"
+
 
 class TestParseBody:
     """Tests for _parse_body function."""

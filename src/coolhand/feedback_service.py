@@ -25,8 +25,10 @@ class FeedbackService:
     Example:
         >>> from coolhand import FeedbackService
         >>> service = FeedbackService(api_key="your-key")
+        >>> # llm_request_log_id: hashid from a prior response (a raw
+        >>> # integer FK also still works)
         >>> response = service.create_feedback({
-        ...     "llm_request_log_id": 12345,
+        ...     "llm_request_log_id": "abc123def456",
         ...     "sentiment": "like",
         ...     "explanation": "Response was accurate and helpful"
         ... })
@@ -98,9 +100,10 @@ class FeedbackService:
             FeedbackResponse with created feedback details, or None on error.
 
         Example:
-            >>> # Feedback with sentiment (preferred)
+            >>> # Feedback with sentiment (preferred). llm_request_log_id can
+            >>> # be a hashid from a prior response, or a raw integer FK.
             >>> service.create_feedback({
-            ...     "llm_request_log_id": 12345,
+            ...     "llm_request_log_id": "abc123def456",
             ...     "sentiment": "dislike",
             ...     "explanation": "Response contained incorrect information",
             ...     "revised_output": "The correct answer is..."

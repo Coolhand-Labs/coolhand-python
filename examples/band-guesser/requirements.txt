@@ -6,7 +6,7 @@ httpx>=0.28.1
 azure-ai-inference>=1.0.0b6
 azure-core>=1.30.0
 github-copilot-sdk==1.0.0
-python-dotenv>=1.0.0
+python-dotenv>=1.2.2
 # Client compatibility testing
 structlog>=26.1.0
 opentelemetry-sdk>=1.21.0

@@ -41,19 +41,27 @@ Effort: EFFORT
 Already fixed in prior iterations — do NOT re-flag these:
 PREVIOUS_FIXES
 
-Return a numbered list of issues with file path and line numbers. Be specific about what to fix and why.
+Tag every finding with one of these severities:
+- `[CRITICAL]` — security vulnerabilities, wrong/broken behavior, performance problems (a PyPI interface break shipped without a CHANGELOG entry and version bump is `[CRITICAL]`)
+- `[NICE-TO-HAVE]` — DRY violations, missing test coverage, code-reuse opportunities
+- `[NITPICK]` — documentation, comments, naming, formatting-adjacent issues
+
+Return a numbered list of issues with file path and line numbers, each prefixed with its severity tag, e.g. `1. [CRITICAL] file:line — problem — fix`. Be specific about what to fix and why.
 If there are NO issues, respond with exactly: LGTM: No issues found.
+End your response with a line: `TOKENS_USED: <number>` — your best estimate of tokens used this pass (approximate is fine, this isn't metered).
 ---
 
 ### Step 2 — Check Result
 
-- If the agent says `LGTM: No issues found.` → exit the loop, go to Final Summary
-- If iteration count has reached 5 → exit the loop, go to Final Summary (partial)
+- If the first line of the agent's response is exactly `LGTM: No issues found.` → exit the loop, go to CSV Run Log then Final Summary
+- If iteration count has reached 5 → exit the loop, go to CSV Run Log then Final Summary (partial)
 - Otherwise → proceed to Step 3
 
 ### Step 3 — Fix
 
-Fix EVERY issue the reviewer raised. Use Edit, Write, and Bash tools to apply fixes directly. Do not skip any finding. For any breaking interface change, update `CHANGELOG.md` and bump the version (`src/coolhand/version.py` and `pyproject.toml`) as part of the fix, not as an afterthought.
+For every finding the reviewer raised, either fix it or reject it with a one-line reason (false positive / out of scope / disagree with the call) — every finding must get one of these two dispositions. Use Edit, Write, and Bash tools to apply fixes directly. For any breaking interface change, update `CHANGELOG.md` and bump the version (`src/coolhand/version.py` and `pyproject.toml`) as part of the fix, not as an afterthought.
+
+Track, per iteration, the fixed count and the rejected count broken down by severity.
 
 Run `make verify` (ruff lint, ruff format check, pytest — never invoke these tools individually) before logging the iteration. If it fails, fix the failure before moving on.
 
@@ -67,12 +75,13 @@ Maintain this log as you work:
 
 ```
 === Iteration 1 ===
-Reviewer found N issues:
-  1. [file:line] description
+Reviewer found N issues (C critical, N nice-to-have, K nitpick):
+  1. [CRITICAL] [file:line] description
   2. ...
-Fixed:
+Fixed: X (by severity: ...)
   - Applied: [description of fix]
-  - Applied: [description of fix]
+Rejected: Y (by severity: ...)
+  - Rejected: [description] — [reason]
 make verify: PASS | FAIL (details)
 
 === Iteration 2 ===
@@ -82,12 +91,36 @@ make verify: PASS | FAIL (details)
 [CLEAN after N iterations] or [STOPPED at max iterations — N issues remain]
 ```
 
+## CSV Run Log
+
+Run once at the very end of the loop, after it exits and before Final Summary.
+
+Append one row per iteration to `~/loop-review-outputs/coolhand-python.csv`. If the directory or file doesn't exist, create them first with this header:
+
+```
+timestamp,branch,iteration,model,thinking_level,clock_seconds,tokens_used_approx,critical_found,nice_to_have_found,nitpick_found,total_found,issues_addressed,issues_ignored
+```
+
+For each iteration's row:
+- `timestamp` — `date -u +%Y-%m-%dT%H:%M:%SZ` at write time
+- `branch` — `git branch --show-current`
+- `model` — `default`
+- `thinking_level` — the EFFORT value used that iteration
+- `clock_seconds` — wall-clock elapsed, bracketed with `date +%s` taken right before spawning that iteration's Step-1 agent and right after that iteration's Step-3 `make verify` completes
+- `tokens_used_approx` — the `TOKENS_USED` value the reviewer reported that iteration
+- `critical_found` / `nice_to_have_found` / `nitpick_found` / `total_found` — counts from Step 1
+- `issues_addressed` — fixed count from Step 3
+- `issues_ignored` — rejected count from Step 3
+
+Use a plain `cat >> ~/loop-review-outputs/coolhand-python.csv <<EOF ... EOF` append per row — no CSV quoting needed since no field contains a comma.
+
 ## Final Summary
 
-After the loop exits, output:
+After the loop exits and the CSV Run Log has been written, output:
 
 1. **Overall result**: CLEAN (N iterations) or STOPPED (issues remain)
-2. **Per-iteration breakdown**: What was found vs. what was fixed each round
+2. **Per-iteration breakdown**: What was found (by severity) vs. what was fixed/rejected each round
 3. **All files modified**: Complete list of files touched across all iterations
 4. **Interface/versioning changes**: Any breaking changes made, and the CHANGELOG/version bump applied for each
 5. **Remaining issues** (if stopped at max): Unresolved items with context on why they're hard to fix automatically
+6. **CSV log**: Number of rows appended and the path (`~/loop-review-outputs/coolhand-python.csv`)

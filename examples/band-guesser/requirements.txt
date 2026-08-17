@@ -4,7 +4,7 @@ fastapi>=0.100.0
 uvicorn[standard]>=0.29.0
 httpx>=0.28.1
 azure-ai-inference>=1.0.0b6
-azure-core>=1.30.0
+azure-core>=1.41.0
 github-copilot-sdk==1.0.0
 python-dotenv>=1.2.2
 # Client compatibility testing

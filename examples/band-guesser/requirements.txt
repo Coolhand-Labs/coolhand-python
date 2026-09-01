@@ -10,7 +10,7 @@ python-dotenv>=1.2.2
 # Client compatibility testing
 structlog>=26.1.0
 opentelemetry-sdk>=1.44.0
-opentelemetry-instrumentation-fastapi>=0.42b0
+opentelemetry-instrumentation-fastapi>=0.65b0
 opentelemetry-instrumentation-requests>=0.42b0
 opentelemetry-instrumentation-httpx>=0.65b0
 gunicorn>=26.0.0

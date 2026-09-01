@@ -15,6 +15,7 @@ Patches `httpx.Client.send` and `httpx.AsyncClient.send` at the class level. Cov
 - **Vertex AI** inference endpoints (`aiplatform.googleapis.com`)
 - **Cloudflare AI Gateway** (`gateway.ai.cloudflare.com`)
 - **OpenRouter** (`openrouter.ai`)
+- **OpenCode** (`opencode.ai`)
 - **pydantic-ai** (via its underlying provider SDK)
 - Any other library that makes HTTP requests using httpx
 
@@ -54,8 +55,9 @@ The intercept allow-list is a list of substrings matched against the full reques
 from coolhand.httpx_interceptor import DEFAULT_INTERCEPT_ADDRESSES
 # ['api.openai.com', 'api.anthropic.com', 'generativelanguage.googleapis.com',
 #  'aiplatform.googleapis.com', 'gateway.ai.cloudflare.com', 'models.github.ai',
-#  'models.inference.ai.azure.com', 'openrouter.ai', ':generateContent',
-#  ':streamGenerateContent', ':predict', ':streamRawPredict']
+#  'models.inference.ai.azure.com', 'openrouter.ai', 'opencode.ai',
+#  'api.opencode.ai', ':generateContent', ':streamGenerateContent',
+#  ':predict', ':streamRawPredict']
 ```
 
 To override: pass `intercept_addresses=[...]` to `Coolhand()`. See [Advanced Configuration](./configuration.md#custom-intercept-addresses).

@@ -4,6 +4,9 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Added
+- **OpenCode interception** — `DEFAULT_INTERCEPT_ADDRESSES` now includes `opencode.ai` (OpenCode's Zen model gateway), so OpenCode API calls are captured automatically without any configuration change. Also lists `api.opencode.ai` explicitly for documentation purposes — it's a commonly-misconfigured host observed in real client traffic, not a valid OpenCode endpoint, and matching against it is already implied by the `opencode.ai` substring match, but naming it here makes the known-misconfiguration case discoverable when reading the address list.
+
 ## [0.5.0] - 2026-07-30
 
 ### Added

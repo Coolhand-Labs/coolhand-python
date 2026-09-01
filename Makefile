@@ -1,9 +1,10 @@
-.PHONY: help install test lint format type-check verify check build publish clean
+.PHONY: help install test test-live lint format type-check verify check build publish clean
 
 help:
 	@echo "Available commands:"
 	@echo "  install      Install all dependencies (dev + test)"
 	@echo "  test         Run tests"
+	@echo "  test-live    Run the opt-in live tests against a real server (see below)"
 	@echo "  lint         Run ruff linter"
 	@echo "  format       Format code with ruff"
 	@echo "  type-check   Run mypy"
@@ -18,6 +19,12 @@ install:
 
 test:
 	uv run pytest
+
+# Real HTTP against a real Coolhand server, no mocks. Deliberately outside `verify` — CI has
+# neither a server nor a private key. Needs both of:
+#   COOLHAND_LIVE_BASE_URL=http://127.0.0.1:3111 COOLHAND_LIVE_API_KEY=<private key> make test-live
+test-live:
+	uv run pytest tests/live
 
 lint:
 	uv run ruff check src tests examples

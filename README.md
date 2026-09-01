@@ -217,6 +217,26 @@ ch.create_feedback({
 
 For the full field reference, matching strategies, and sentiment values, see [Feedback API](./docs/feedback.md).
 
+## Reading Templates
+
+`search_templates` and `get_template` read back the LLM request templates your logs are matched against. Unlike the monitoring and feedback calls, these require your **private** API key (the public key is write-only and 401s):
+
+```python
+from coolhand import Coolhand
+
+ch = Coolhand(api_key='your-private-api-key')
+
+result = ch.search_templates(search='summar', status='published')
+
+template = ch.get_template(result['templates'][0]['id'])
+```
+
+Search is a parameter on the list endpoint, not a route of its own. The `Unmatched` / `Ignored API Calls` system buckets are hidden unless you pass `include_system=True`, and prompt patterns come from `get_template` only.
+
+These are read methods, so they **raise** `CoolhandAPIError` (carrying the HTTP status on `.status`) rather than returning `None` the way `create_feedback` does — a caller needs to tell a `404` from a retryable `504`.
+
+For the full filter reference, pagination, and error handling, see [Reading Templates](./docs/templates.md).
+
 ## Troubleshooting
 
 ### Enable Debug Output
@@ -258,6 +278,7 @@ export COOLHAND_SILENT=false
 - [Feedback API](./docs/feedback.md) — full field reference, matching strategies, sentiment values
 - [Supported Libraries](./docs/supported-libraries.md) — interception mechanisms, streaming, thread/process safety
 - [Dramatiq + pydantic-ai](./docs/dramatiq.md) — task queue integration guide, known gaps, workarounds
+- [Reading Templates](./docs/templates.md) — search LLM request templates and fetch a single one, prompt patterns included, using the private API key
 
 ## Related Packages
 

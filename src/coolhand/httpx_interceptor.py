@@ -42,6 +42,8 @@ DEFAULT_INTERCEPT_ADDRESSES = [
     "models.github.ai",
     "models.inference.ai.azure.com",
     "openrouter.ai",
+    "opencode.ai",
+    "api.opencode.ai",
     ":generateContent",
     ":streamGenerateContent",
     ":predict",

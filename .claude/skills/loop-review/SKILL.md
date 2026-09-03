@@ -1,7 +1,15 @@
 ---
-description: Automated review → fix → repeat loop. Spawns a reviewer agent each round, fixes findings in this session, and repeats until the review comes back clean.
+name: loop-review
+description: |
+  Iteratively runs code review against the current diff, applies fixes, and
+  re-reviews until a round comes back clean (or a safety cap is hit). Use
+  when the user types /loop-review, asks to "loop the review", "review
+  until clean", "keep reviewing and fixing until nothing's left", or wants
+  a self-healing code review cycle instead of a single one-shot pass.
+user_invocable: true
 allowed-tools: Edit, Write, Read, Bash, Agent, Skill, Glob, Grep
 argument-hint: [low|medium|high|max]
+version: 0.1.0
 ---
 
 Run an automated code review + fix loop on the current branch. Keep iterating until the reviewer reports no issues.

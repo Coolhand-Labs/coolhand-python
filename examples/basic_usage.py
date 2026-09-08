@@ -153,13 +153,12 @@ def main():
     ch.update_config(log_level="DEBUG")
     print("✓ Updated log level to DEBUG")
 
-    # 8. Flush pending data
+    # 8. Flush pending data. shutdown() (not flush()) is the delivery barrier:
+    # it waits for the background worker to actually deliver everything queued,
+    # not just for it to be handed off.
     print("\n8. Flushing data...")
-    success = ch.flush()
-    if success:
-        print("✓ Successfully flushed all pending logs and feedback")
-    else:
-        print("⚠ Some data may not have been flushed (check network/API key)")
+    ch.shutdown()
+    print("✓ Flushed and waited for delivery of all pending logs and feedback")
 
     # 9. Context manager usage
     print("\n9. Context manager example...")

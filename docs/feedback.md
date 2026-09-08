@@ -38,6 +38,21 @@ coolhand.create_feedback({
 })
 ```
 
+## Async Usage
+
+Inside an event loop (e.g. an async web handler), use `acreate_feedback` instead of `create_feedback` so the HTTP call doesn't block the loop:
+
+```python
+result = await ch.acreate_feedback({
+    'llm_request_log_id': 'abc123def456',
+    'sentiment': 'like',
+})
+```
+
+It accepts the same fields and returns the same result as `create_feedback` — the only difference is that it `await`s instead of blocking. The global `coolhand.acreate_feedback(...)` convenience function is also available, mirroring `coolhand.create_feedback(...)`.
+
+`acreate_feedback` offloads its blocking HTTP call via `asyncio.to_thread`, which runs on the event loop's shared default thread pool — the same pool Python uses for DNS resolution and any other `to_thread` calls your own code makes. Each call can block for up to 10 seconds against a slow or unreachable backend, so a burst of concurrent `acreate_feedback` calls under a persistent outage could temporarily starve that shared pool. This is unlikely to matter at typical feedback volumes; if you're submitting feedback at high concurrency, keep that shared-pool contention in mind.
+
 ---
 
 ## Field Reference

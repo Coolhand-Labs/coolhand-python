@@ -137,7 +137,9 @@ def main() -> None:
         stats = instance.get_stats()
         count = stats["logging"].get("interaction_count", 0)
         print(f"\nCoolhand captured {count} LLM interaction(s) from worker threads")
-        instance.flush()
+        # Delivery is handled by the coolhand.shutdown() call in the
+        # __main__ `finally` block below, which actually waits for it —
+        # flush() alone only hands interactions off, it doesn't deliver them.
     else:
         print("\nCoolhand not active — set COOLHAND_API_KEY to enable submission")
 

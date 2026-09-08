@@ -8,12 +8,16 @@ Usage:
     coolhand.Coolhand(api_key="your-key", debug=True)
 """
 
-import atexit
 import logging
 
 from . import copilot_interceptor, httpx_interceptor
 from .client import CoolhandClient, get_instance, initialize, set_instance
-from .feedback_service import FeedbackService, create_feedback, get_feedback_service
+from .feedback_service import (
+    FeedbackService,
+    acreate_feedback,
+    create_feedback,
+    get_feedback_service,
+)
 from .httpx_interceptor import DEFAULT_EXCLUDE_API_PATTERNS
 from .template_service import CoolhandAPIError, TemplateService, get_template_service
 from .types import (
@@ -49,8 +53,8 @@ class Coolhand(CoolhandClient):
         # Start monitoring
         self.start_monitoring()
 
-        # Cleanup on exit
-        atexit.register(self.shutdown)
+        # Note: shutdown() is already registered with atexit by
+        # CoolhandClient.__init__ (via super().__init__() above).
 
         logger.info(f"Coolhand initialized (session: {self.session_id})")
 
@@ -79,7 +83,7 @@ class Coolhand(CoolhandClient):
         """Get the feedback service instance."""
         return self._feedback_service
 
-    def create_feedback(self, feedback: FeedbackData) -> FeedbackResponse:
+    def create_feedback(self, feedback: FeedbackData) -> FeedbackResponse | None:
         """Submit feedback for an LLM response.
 
         Args:
@@ -90,7 +94,8 @@ class Coolhand(CoolhandClient):
                 over the deprecated boolean `like`.
 
         Returns:
-            FeedbackResponse with created feedback details, or None on error.
+            FeedbackResponse with created feedback details, or None on error
+            (including the rare case of a 2xx response with no body).
 
         Example:
             >>> # llm_request_log_id: hashid from a prior response (a raw
@@ -102,6 +107,15 @@ class Coolhand(CoolhandClient):
             ... })
         """
         return self._feedback_service.create_feedback(feedback)
+
+    async def acreate_feedback(self, feedback: FeedbackData) -> FeedbackResponse | None:
+        """Async equivalent of `create_feedback`.
+
+        Runs the blocking HTTP call on a worker thread via `asyncio.to_thread`
+        so it never blocks the caller's event loop. See `create_feedback` for
+        argument and return value details.
+        """
+        return await self._feedback_service.acreate_feedback(feedback)
 
     @property
     def template_service(self) -> TemplateService:
@@ -221,6 +235,7 @@ __all__ = [
     "FeedbackService",
     "get_feedback_service",
     "create_feedback",
+    "acreate_feedback",
     "CoolhandAPIError",
     "LlmRequestTemplateDetail",
     "LlmRequestTemplateStatus",

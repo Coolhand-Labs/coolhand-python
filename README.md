@@ -215,7 +215,9 @@ ch.create_feedback({
 })
 ```
 
-For the full field reference, matching strategies, and sentiment values, see [Feedback API](./docs/feedback.md).
+Running inside an event loop (e.g. an async web handler)? Use `await ch.acreate_feedback(...)` instead — same fields, same result, non-blocking.
+
+For the full field reference, matching strategies, sentiment values, and async usage, see [Feedback API](./docs/feedback.md).
 
 ## Reading Templates
 
@@ -275,8 +277,8 @@ export COOLHAND_SILENT=false
 ## Documentation
 
 - [Advanced Configuration](./docs/configuration.md) — exclude patterns, self-hosted deployments, custom intercept addresses
-- [Feedback API](./docs/feedback.md) — full field reference, matching strategies, sentiment values
-- [Supported Libraries](./docs/supported-libraries.md) — interception mechanisms, streaming, thread/process safety
+- [Feedback API](./docs/feedback.md) — full field reference, matching strategies, sentiment values, async usage
+- [Supported Libraries](./docs/supported-libraries.md) — interception mechanisms, streaming, thread/process safety, delivery model
 - [Dramatiq + pydantic-ai](./docs/dramatiq.md) — task queue integration guide, known gaps, workarounds
 - [Reading Templates](./docs/templates.md) — search LLM request templates and fetch a single one, prompt patterns included, using the private API key
 

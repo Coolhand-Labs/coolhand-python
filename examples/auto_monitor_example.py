@@ -344,10 +344,12 @@ def main():
     print(f"Total interactions logged: {count}")
     print(f"Monitoring active: {final_stats['monitoring']['enabled']}")
 
-    # 8. Cleanup
+    # 8. Cleanup. shutdown() (not flush()) is the delivery barrier: it waits
+    # for the background worker to actually deliver everything queued, not
+    # just for it to be handed off.
     print("\nCleaning up...")
-    success = instance.flush()
-    print(f"Data flushed: {success}")
+    instance.shutdown()
+    print("Data flushed and delivery attempted")
 
     print("\n" + "=" * 55)
     print("Auto-monitor example completed!")

@@ -37,7 +37,8 @@ class Config(TypedDict, total=False):
     intercept_addresses: list[str] | None
     exclude_api_patterns: list[str] | None
     # HTTP timeout in seconds for the read methods on TemplateService. The write paths
-    # (client.flush, create_feedback) keep their own fixed 10s and ignore this.
+    # (CoolhandClient._send_one, FeedbackService._submit) keep their own fixed
+    # _config._WRITE_TIMEOUT_SECONDS and ignore this.
     timeout: float
 
 

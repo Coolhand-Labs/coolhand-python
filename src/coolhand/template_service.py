@@ -55,10 +55,11 @@ class CoolhandAPIError(Exception):
     `status` is the HTTP status code when the server answered, and `None` when there was
     no response at all (transport failure) or the response body was not JSON.
 
-    The read methods raise rather than logging and returning `None` the way the write
-    methods (`create_feedback`, `CoolhandClient.flush`) do: a caller has to be able to
-    tell a `404` from a `504`, and the latter is an expected, retryable condition on
-    these endpoints rather than a bug.
+    The read methods raise rather than failing silently the way the write paths do
+    (`create_feedback` logs and returns `None`; the auto-monitor's submission path
+    behind `CoolhandClient.flush()` logs and drops): a caller has to be able to tell a
+    `404` from a `504`, and the latter is an expected, retryable condition on these
+    endpoints rather than a bug.
     """
 
     def __init__(self, message: str, status: int | None = None) -> None:

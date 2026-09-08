@@ -279,14 +279,22 @@ class TestCoolhandClassEdgeCases:
         instance.stop_monitoring()
 
     def test_coolhand_registers_atexit(self, reset_global_instance, mock_config):
-        """Coolhand registers shutdown with atexit."""
+        """Coolhand registers shutdown with atexit (inherited from
+        CoolhandClient.__init__, not registered separately by Coolhand
+        itself)."""
         import atexit
-        from unittest.mock import patch
+        from unittest.mock import call, patch
 
+        # Counts the specific call rather than asserting the mock's *total*
+        # call count is exactly one: this patches the real, process-global
+        # atexit module, so third-party code (e.g. coverage's pure-Python
+        # tracer registering its own atexit hook when a new thread starts
+        # tracing) can call atexit.register during this same window and
+        # would otherwise make this test flaky.
         with patch("coolhand.httpx_interceptor.patch"):
             with patch.object(atexit, "register") as mock_register:
                 instance = Coolhand(config=mock_config)
-                mock_register.assert_called_once_with(instance.shutdown)
+                assert mock_register.call_args_list.count(call(instance.shutdown)) == 1
 
         instance.stop_monitoring()
 

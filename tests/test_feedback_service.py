@@ -852,6 +852,36 @@ class TestFeedbackServiceEdgeCases:
             assert result is None
             assert "Unexpected status code: 400" in caplog.text
 
+    def test_create_feedback_treats_any_2xx_status_as_success(
+        self, feedback_service, caplog
+    ):
+        """A 2xx status other than exactly 200/201 (e.g. 202 Accepted) counts
+        as a successful submission rather than logging "Unexpected status
+        code" and returning None."""
+        import logging
+
+        caplog.set_level(logging.WARNING)
+
+        with patch("coolhand.feedback_service.urlopen") as mock:
+            mock_response = MagicMock()
+            mock_response.status = 202
+            mock_response.read.return_value = json.dumps(
+                {"id": "xyz789abc123", "sentiment": "like"}
+            ).encode("utf-8")
+            mock_response.__enter__ = MagicMock(return_value=mock_response)
+            mock_response.__exit__ = MagicMock(return_value=False)
+            mock.return_value = mock_response
+
+            feedback: FeedbackData = {
+                "llm_request_log_id": 12345,
+                "sentiment": "like",
+            }
+
+            result = feedback_service.create_feedback(feedback)
+            assert result is not None
+            assert result["id"] == "xyz789abc123"
+            assert "Unexpected status code" not in caplog.text
+
     def test_create_feedback_2xx_empty_body_returns_none_not_json_error(
         self, feedback_service, caplog
     ):
@@ -879,6 +909,15 @@ class TestFeedbackServiceEdgeCases:
             result = feedback_service.create_feedback(feedback)
             assert result is None
             assert "Unexpected error" not in caplog.text
+            # The distinguishing signal: without the empty-body guard,
+            # json.loads("") raises JSONDecodeError, which the *named*
+            # except json.JSONDecodeError handler below catches and logs as
+            # an "unparsable response" — a different message from either the
+            # generic handler above or a genuine empty-body success. Without
+            # this assertion, both code paths log neither "Unexpected
+            # error" nor anything else this test checks, so it can't tell
+            # them apart.
+            assert "unparsable response" not in caplog.text
 
     def test_create_feedback_2xx_non_json_body_logs_clear_message(
         self, feedback_service, caplog

@@ -9,7 +9,12 @@ from typing import Any
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
-from ._config import _DEFAULT_BASE_URL, _normalize_base_url, _ssl_context
+from ._config import (
+    _DEFAULT_BASE_URL,
+    _WRITE_TIMEOUT_SECONDS,
+    _normalize_base_url,
+    _ssl_context,
+)
 from .types import Config, FeedbackData, FeedbackResponse
 from .version import __version__
 
@@ -222,7 +227,9 @@ class FeedbackService:
                 method="POST",
             )
 
-            with urlopen(request, context=_ssl_context, timeout=10) as resp:
+            with urlopen(
+                request, context=_ssl_context, timeout=_WRITE_TIMEOUT_SECONDS
+            ) as resp:
                 if 200 <= resp.status < 300:
                     body = resp.read()
                     # A 2xx with no body (e.g. 204) has nothing to parse —

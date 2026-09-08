@@ -476,6 +476,34 @@ class TestSendOne:
         assert client._send_one(interaction) is True
         mock_urlopen.assert_called_once()
 
+    def test_send_one_logs_success_when_not_silent(
+        self, reset_global_instance, mock_urlopen, caplog
+    ):
+        """A successful submission is logged when silent=False — the old
+        flush() logged a "Successfully submitted N/M" summary; delivery
+        moving to the background worker (one item at a time, no natural
+        batch boundary) shouldn't mean a non-silent caller loses positive
+        confirmation that anything was ever delivered."""
+        import logging
+
+        caplog.set_level(logging.INFO)
+
+        client = CoolhandClient(
+            auto_submit=False, api_key="real-api-key-12345", silent=False
+        )
+        interaction = {
+            "id": "test-id",
+            "method": "post",
+            "url": "https://api.openai.com/v1/chat",
+        }
+
+        assert client._send_one(interaction) is True
+        # Correlatable, not just the internal id: the "Captured:" log line
+        # elsewhere has no id, so method+url is what ties the two together.
+        assert "test-id" in caplog.text
+        assert "post" in caplog.text
+        assert "https://api.openai.com/v1/chat" in caplog.text
+
     def test_send_one_treats_any_2xx_status_as_success(self, reset_global_instance):
         """A 2xx status other than exactly 200/201 (e.g. 202 Accepted) still
         counts as a successful submission."""
@@ -823,6 +851,83 @@ class TestBackgroundDispatch:
         assert mock_urlopen.call_count == 3
         assert len(client._queue) == 0
 
+    def test_shutdown_drains_a_stale_sentinel_with_no_worker(
+        self, reset_global_instance, mock_urlopen
+    ):
+        """shutdown()'s narrow-race guard (start a worker if the dispatch
+        queue is non-empty but no worker exists) is load-bearing, not just
+        cheap insurance: without it, a leftover sentinel from an earlier
+        timed-out shutdown() call would sit in the dispatch queue forever
+        and pending_delivery would permanently over-report by one."""
+        from coolhand.client import _SHUTDOWN_SENTINEL
+
+        client = CoolhandClient(auto_submit=False, api_key="k")
+        assert client._worker_thread is None
+
+        # Simulate the state left behind by an earlier shutdown() call whose
+        # worker committed to exit in the Thread.is_alive() staleness window
+        # (see pending_delivery's comment in get_stats()) — a sentinel stuck
+        # in the queue with no worker left to consume it.
+        client._dispatch_queue.put(_SHUTDOWN_SENTINEL)
+
+        client.shutdown()
+
+        assert client._dispatch_queue.qsize() == 0
+        assert client.get_stats()["logging"]["pending_delivery"] == 0
+        assert client._worker_thread is None
+
+    def test_shutdown_swallows_queue_full_when_putting_sentinel(
+        self, reset_global_instance, hanging_urlopen
+    ):
+        """If the dispatch queue is completely full when shutdown() tries to
+        enqueue the sentinel, the resulting queue.Full must be swallowed
+        rather than propagating — shutdown() must not raise just because
+        the backend is badly backed up; it still waits out its budget on
+        the join instead."""
+        from unittest.mock import patch
+
+        from coolhand import client as client_module
+        from coolhand.client import _SHUTDOWN_SENTINEL
+
+        with (
+            patch.object(client_module, "_MAX_DISPATCH_QUEUE_SIZE", 1),
+            patch.object(client_module, "_SHUTDOWN_TIMEOUT", 0.1),
+        ):
+            client = CoolhandClient(auto_submit=False, api_key="k")
+
+            with patch("coolhand.client.urlopen", side_effect=hanging_urlopen):
+                client._queue.append({"id": "first", "method": "post", "url": "test"})
+                client.flush()  # worker takes "first" immediately, blocks
+
+                assert hanging_urlopen.entered.wait(timeout=2), (
+                    "worker never reached the mocked urlopen"
+                )
+
+                # Fill the now-empty (capacity 1) queue so shutdown()'s
+                # sentinel put has nowhere to go.
+                client._dispatch_queue.put_nowait(
+                    {"id": "second", "method": "post", "url": "test"}
+                )
+
+                client.shutdown()  # must not raise queue.Full
+
+                # Pin that the queue was genuinely full when the sentinel
+                # put was attempted — just "second" is queued, the sentinel
+                # never made it in — and that the atexit hook was correctly
+                # left armed since a worker is still running.
+                assert client._dispatch_queue.qsize() == 1
+                assert client._worker_thread is not None
+
+                # Clean up: release the block, then hand the worker a fresh
+                # sentinel once it's made room, so it exits — still inside
+                # the patch, so it can never fall through to the real
+                # urlopen.
+                hanging_urlopen.release.set()
+                client._dispatch_queue.put(_SHUTDOWN_SENTINEL, timeout=2)
+                worker = client._worker_thread
+                if worker is not None:
+                    worker.join(timeout=2)
+
     def test_shutdown_does_not_hang_when_backend_unreachable(
         self, reset_global_instance
     ):
@@ -899,6 +1004,51 @@ class TestBackgroundDispatch:
 
         assert not worker.is_alive()
         assert mock_urlopen.call_count == 2
+
+    def test_worker_loop_continues_when_item_lands_during_exit_check(
+        self, reset_global_instance, mock_urlopen
+    ):
+        """If something lands on the dispatch queue in the narrow window
+        between the drain loop finishing (queue.Empty raised) and the
+        locked emptiness check that follows, the worker must keep running
+        and consume it instead of exiting and stranding it — the `continue`
+        branch this pins. Deterministic: the injection happens synchronously
+        inside the worker's own drain loop, so no second thread or real
+        race is needed."""
+        import queue
+
+        from coolhand.client import _SHUTDOWN_SENTINEL
+
+        client = CoolhandClient(auto_submit=False, api_key="k")
+
+        original_get_nowait = client._dispatch_queue.get_nowait
+        injected = {"done": False}
+
+        def spying_get_nowait():
+            try:
+                return original_get_nowait()
+            except queue.Empty:
+                if not injected["done"]:
+                    injected["done"] = True
+                    # Simulate a concurrent flush() landing an item (and a
+                    # second sentinel, so the worker can still exit cleanly
+                    # afterward) right as the drain loop concludes there's
+                    # nothing left.
+                    client._dispatch_queue.put_nowait(
+                        {"id": "late", "method": "post", "url": "test"}
+                    )
+                    client._dispatch_queue.put_nowait(_SHUTDOWN_SENTINEL)
+                raise
+
+        client._dispatch_queue.get_nowait = spying_get_nowait
+        client._dispatch_queue.put(_SHUTDOWN_SENTINEL)
+
+        worker = threading.Thread(target=client._worker_loop, daemon=True)
+        worker.start()
+        worker.join(timeout=2)
+
+        assert not worker.is_alive()
+        assert mock_urlopen.call_count == 1  # "late" was delivered, not stranded
 
     def test_deliver_exception_does_not_kill_the_worker(
         self, reset_global_instance, mock_urlopen
@@ -1198,6 +1348,26 @@ class TestBackgroundDispatch:
         assert first_worker is second_worker
         assert mock_urlopen.call_count == 2
 
+    def test_ensure_worker_public_entry_starts_a_worker(
+        self, reset_global_instance, mock_urlopen
+    ):
+        """_ensure_worker() (the public entry point flush() itself doesn't
+        use, but shutdown()'s narrow-race guard does) must acquire
+        _worker_lock and start a worker when none is running yet, not just
+        report availability."""
+        from coolhand.client import _SHUTDOWN_SENTINEL
+
+        client = CoolhandClient(auto_submit=False, api_key="k")
+        assert client._worker_thread is None
+
+        assert client._ensure_worker() is True
+        assert client._worker_thread is not None
+        assert client._worker_thread.is_alive()
+
+        worker = client._worker_thread
+        client._dispatch_queue.put(_SHUTDOWN_SENTINEL)
+        worker.join(timeout=2)
+
     def test_ensure_worker_handles_thread_start_runtime_error(
         self, reset_global_instance
     ):
@@ -1228,25 +1398,33 @@ class TestClientLifecycle:
         """A bare CoolhandClient() (not just the Coolhand subclass) registers
         its shutdown with atexit, so queued interactions still get a delivery
         attempt on normal process exit."""
-        from unittest.mock import patch
+        from unittest.mock import call, patch
 
+        # Counts the specific call rather than asserting the mock's *total*
+        # call count is exactly one: coolhand.client.atexit is the real,
+        # process-global atexit module, so third-party code (e.g. coverage's
+        # pure-Python tracer registering its own atexit hook when a new
+        # thread starts tracing) can call atexit.register during this same
+        # window and would otherwise make this test flaky.
         with patch("coolhand.client.atexit.register") as mock_register:
             client = CoolhandClient(auto_submit=False, api_key="k")
 
-        mock_register.assert_called_once_with(client.shutdown)
+        assert mock_register.call_args_list.count(call(client.shutdown)) == 1
 
     def test_shutdown_unregisters_atexit(self, reset_global_instance, mock_urlopen):
         """shutdown() unregisters its own atexit hook, so an explicitly
         shut-down client isn't kept alive in the atexit registry for the
         rest of the process."""
-        from unittest.mock import patch
+        from unittest.mock import call, patch
 
         client = CoolhandClient(auto_submit=False, api_key="k")
 
+        # Counts the specific call rather than the mock's total call count —
+        # see test_constructor_registers_atexit_shutdown for why.
         with patch("coolhand.client.atexit.unregister") as mock_unregister:
             client.shutdown()
 
-        mock_unregister.assert_called_once_with(client.shutdown)
+        assert mock_unregister.call_args_list.count(call(client.shutdown)) == 1
 
     def test_flush_after_shutdown_reregisters_atexit_exactly_once(
         self, reset_global_instance, mock_urlopen
@@ -1256,16 +1434,18 @@ class TestClientLifecycle:
         (losing the final drain on real exit), and not double-registered
         (which would run shutdown() twice, and could start a second worker
         thread during interpreter shutdown)."""
-        from unittest.mock import patch
+        from unittest.mock import call, patch
 
         client = CoolhandClient(auto_submit=False, api_key="k")
         client.shutdown()  # unregisters the atexit hook __init__ registered
 
+        # Counts the specific call rather than the mock's total call count —
+        # see test_constructor_registers_atexit_shutdown for why.
         with patch("coolhand.client.atexit.register") as mock_register:
             client._queue.append({"id": "x", "method": "post", "url": "test"})
             client.shutdown()  # flush() starts a fresh worker, re-registering
 
-        mock_register.assert_called_once_with(client.shutdown)
+        assert mock_register.call_args_list.count(call(client.shutdown)) == 1
 
     def test_shutdown_keeps_atexit_armed_if_worker_still_alive(
         self, reset_global_instance, hanging_urlopen
@@ -1275,7 +1455,7 @@ class TestClientLifecycle:
         at real process exit. Regression test for a bug where shutdown()
         unconditionally unregistered even when the worker was still busy,
         permanently losing the atexit safety net for that client."""
-        from unittest.mock import patch
+        from unittest.mock import call, patch
 
         from coolhand import client as client_module
 
@@ -1309,7 +1489,9 @@ class TestClientLifecycle:
             # unregister-then-register when it started this fresh worker
             # a moment earlier. shutdown()'s own end-of-method unregister
             # must NOT fire a second time while the worker is still alive.
-            mock_unregister.assert_called_once()
+            # Counts the specific call rather than the mock's total call
+            # count — see test_constructor_registers_atexit_shutdown for why.
+            assert mock_unregister.call_args_list.count(call(client.shutdown)) == 1
 
             hanging_urlopen.release.set()
             worker.join(timeout=2)

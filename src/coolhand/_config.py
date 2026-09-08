@@ -13,6 +13,12 @@ except ImportError:
 
 _DEFAULT_BASE_URL = "https://coolhandlabs.com"
 
+# Fixed timeout (seconds) for the write paths: CoolhandClient._send_one and
+# FeedbackService._submit. Deliberately not configurable via Config.timeout,
+# which only applies to TemplateService's read methods — see the comment on
+# that field in types.py.
+_WRITE_TIMEOUT_SECONDS = 10
+
 
 def _normalize_base_url(url: str) -> str:
     """Validate and normalize a base_url value.

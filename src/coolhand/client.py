@@ -14,7 +14,12 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import parse_qs, urlencode, urlparse, urlunparse
 from urllib.request import Request, urlopen
 
-from ._config import _DEFAULT_BASE_URL, _normalize_base_url, _ssl_context
+from ._config import (
+    _DEFAULT_BASE_URL,
+    _WRITE_TIMEOUT_SECONDS,
+    _normalize_base_url,
+    _ssl_context,
+)
 from .httpx_interceptor import DEFAULT_EXCLUDE_API_PATTERNS
 from .types import Config, RequestData, ResponseData
 from .version import __version__
@@ -261,8 +266,17 @@ class CoolhandClient:
                 method="POST",
             )
 
-            with urlopen(request, context=_ssl_context, timeout=10) as resp:
+            with urlopen(
+                request, context=_ssl_context, timeout=_WRITE_TIMEOUT_SECONDS
+            ) as resp:
                 if 200 <= resp.status < 300:
+                    if not self.config.get("silent"):
+                        method = interaction.get("method", "unknown")
+                        url = interaction.get("url", "unknown")
+                        logger.info(
+                            f"Submitted interaction {interaction.get('id')} "
+                            f"({method} {url})"
+                        )
                     return True
                 logger.warning(
                     f"Unexpected status submitting interaction: {resp.status}"
@@ -287,9 +301,19 @@ class CoolhandClient:
         calls _ensure_worker_locked() directly, holding _worker_lock across
         both the availability check *and* the enqueue that follows — see
         that method's docstring for why the two must be atomic together.
+
+        No unlocked fast path here: this method's only caller, shutdown(),
+        invokes it at most once per call, so there's nothing to optimize by
+        checking self._worker_thread before acquiring the lock — and doing
+        so would race _worker_loop's own clear of that attribute (also
+        under _worker_lock): two unlocked reads could straddle the moment
+        it flips to None, raising AttributeError on the second one.
+        _ensure_worker_locked()'s own early-return check below is not an
+        unlocked fast path either — it runs after the caller (this method,
+        or flush()) has already acquired _worker_lock; it's just the
+        already-locked "a worker is already running" case, cheaper than
+        starting a new thread.
         """
-        if self._worker_thread is not None and self._worker_thread.is_alive():
-            return True
         with self._worker_lock:
             return self._ensure_worker_locked()
 
@@ -476,8 +500,22 @@ class CoolhandClient:
                 # onto the dispatch queue but whose POST failed (bad API key,
                 # non-2xx status, network error).
                 "delivery_failure_count": self._delivery_failure_count,
-                # Upper bound: briefly includes the internal shutdown
-                # sentinel while a shutdown() call is in flight.
+                # Approximate, not exact, in both directions:
+                # - Over-counts: includes the internal shutdown sentinel
+                #   while a shutdown() call is in flight. Normally consumed
+                #   within that same call, but in the narrow window where
+                #   Thread.is_alive() reports a worker as alive just after
+                #   it has already committed to exiting, the sentinel can
+                #   outlive that shutdown() call and inflate this count by
+                #   one until a later flush()/shutdown() call starts a
+                #   fresh worker to drain it — self-healing, but not
+                #   instant.
+                # - Under-counts: qsize() stops counting an item the moment
+                #   the worker dequeues it, so while that item's POST is
+                #   actually in flight (up to _WRITE_TIMEOUT_SECONDS) it's
+                #   reflected nowhere — polling for `pending_delivery == 0`
+                #   is not a reliable "everything is fully delivered"
+                #   signal on its own; shutdown() (which actually waits) is.
                 "pending_delivery": self._dispatch_queue.qsize(),
             },
         }
@@ -498,8 +536,8 @@ class CoolhandClient:
         # Guards a narrow race: something enqueued directly onto the dispatch
         # queue while the worker that would have drained it was exiting, so
         # self._worker_thread still points at a now-dead thread. Not reachable
-        # through flush() alone (which always calls _ensure_worker() itself
-        # before enqueueing), but cheap to close off here too.
+        # through flush() alone (which always calls _ensure_worker_locked()
+        # itself before enqueueing), but cheap to close off here too.
         if not self._dispatch_queue.empty():
             self._ensure_worker()
 

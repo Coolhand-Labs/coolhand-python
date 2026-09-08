@@ -277,8 +277,8 @@ export COOLHAND_SILENT=false
 ## Documentation
 
 - [Advanced Configuration](./docs/configuration.md) — exclude patterns, self-hosted deployments, custom intercept addresses
-- [Feedback API](./docs/feedback.md) — full field reference, matching strategies, sentiment values
-- [Supported Libraries](./docs/supported-libraries.md) — interception mechanisms, streaming, thread/process safety
+- [Feedback API](./docs/feedback.md) — full field reference, matching strategies, sentiment values, async usage
+- [Supported Libraries](./docs/supported-libraries.md) — interception mechanisms, streaming, thread/process safety, delivery model
 - [Dramatiq + pydantic-ai](./docs/dramatiq.md) — task queue integration guide, known gaps, workarounds
 - [Reading Templates](./docs/templates.md) — search LLM request templates and fetch a single one, prompt patterns included, using the private API key
 

@@ -215,7 +215,9 @@ ch.create_feedback({
 })
 ```
 
-For the full field reference, matching strategies, and sentiment values, see [Feedback API](./docs/feedback.md).
+Running inside an event loop (e.g. an async web handler)? Use `await ch.acreate_feedback(...)` instead — same fields, same result, non-blocking.
+
+For the full field reference, matching strategies, sentiment values, and async usage, see [Feedback API](./docs/feedback.md).
 
 ## Reading Templates
 

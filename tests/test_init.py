@@ -153,13 +153,14 @@ class TestModuleFunctions:
         stop_monitoring()
         assert httpx_interceptor.is_patched() is False
 
-    def test_shutdown_function(self, reset_global_instance):
+    def test_shutdown_function(self, reset_global_instance, mock_urlopen):
         """shutdown() calls instance shutdown."""
-        instance = Coolhand()
+        instance = Coolhand(api_key="real-api-key-12345")
         instance._queue.append({"test": "data"})
 
         shutdown()
         assert len(instance._queue) == 0
+        mock_urlopen.assert_called_once()
 
     def test_get_global_instance(self, reset_global_instance):
         """get_global_instance() returns global instance."""

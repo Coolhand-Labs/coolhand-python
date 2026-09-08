@@ -1,9 +1,11 @@
 """Feedback service for submitting user feedback on LLM responses."""
 
+import asyncio
 import json
 import logging
 import os
 import warnings
+from typing import Any
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
@@ -97,7 +99,8 @@ class FeedbackService:
                 - collector: Override the SDK-generated collector string
 
         Returns:
-            FeedbackResponse with created feedback details, or None on error.
+            FeedbackResponse with created feedback details, or None on error
+            (including the rare case of a 2xx response with no body).
 
         Example:
             >>> # Feedback with sentiment (preferred). llm_request_log_id can
@@ -116,11 +119,48 @@ class FeedbackService:
             ...     "revised_output": "The capital of France is Paris."
             ... })
         """
+        feedback_with_collector = self._prepare_feedback(feedback)
+        if feedback_with_collector is None:
+            return None
+        return self._submit(feedback_with_collector)
+
+    async def acreate_feedback(self, feedback: FeedbackData) -> FeedbackResponse | None:
+        """Async equivalent of `create_feedback`.
+
+        Runs the blocking HTTP call on a worker thread via `asyncio.to_thread`
+        so it never blocks the caller's event loop. See `create_feedback` for
+        argument and return value details.
+        """
+        feedback_with_collector = self._prepare_feedback(feedback)
+        if feedback_with_collector is None:
+            return None
+        return await asyncio.to_thread(self._submit, feedback_with_collector)
+
+    def _prepare_feedback(self, feedback: FeedbackData) -> dict[str, Any] | None:
+        """Validate and normalize feedback, logging as a side effect.
+
+        Returns the normalized dict to submit, or None if it should not be
+        submitted (no API key configured).
+        """
         if "like" in feedback and "sentiment" not in feedback:
             warnings.warn(
                 "'like' is deprecated; use 'sentiment' instead",
                 DeprecationWarning,
-                stacklevel=2,
+                # 3 frames up from here reaches the caller when
+                # create_feedback/acreate_feedback is called directly on a
+                # FeedbackService instance (this method was extracted out
+                # from under them, so the warning must skip both this frame
+                # and that method's). Known gap, verified empirically: both
+                # the module-level create_feedback()/acreate_feedback()
+                # convenience functions (in this file) AND
+                # Coolhand.create_feedback/acreate_feedback (in __init__.py,
+                # which delegate through self._feedback_service) add one more
+                # frame each, so stacklevel=3 instead attributes the warning
+                # to whichever of those two files did the delegating, rather
+                # than the actual caller. Not worth threading a dynamic
+                # stacklevel through every call path for a warning's
+                # attribution alone.
+                stacklevel=3,
             )
 
         # Check for at least one matching field
@@ -159,13 +199,17 @@ class FeedbackService:
         feedback_with_collector.pop("like", None)  # always strip deprecated field
         feedback_with_collector.setdefault("collector", self._get_collector_string())
 
-        # Build payload
-        payload = {"llm_request_log_feedback": feedback_with_collector}
-
         # Log the converted payload so the log matches what was sent
         self._log_feedback_info(feedback_with_collector)
 
-        # Send request
+        return feedback_with_collector
+
+    def _submit(
+        self, feedback_with_collector: dict[str, Any]
+    ) -> FeedbackResponse | None:
+        """POST normalized feedback to the Coolhand API. Blocking."""
+        payload = {"llm_request_log_feedback": feedback_with_collector}
+
         try:
             request = Request(
                 url=f"{self.config['base_url']}{FEEDBACK_ENDPOINT}",
@@ -179,8 +223,13 @@ class FeedbackService:
             )
 
             with urlopen(request, context=_ssl_context, timeout=10) as resp:
-                if resp.status in (200, 201):
-                    response_data = json.loads(resp.read().decode("utf-8"))
+                if 200 <= resp.status < 300:
+                    body = resp.read()
+                    # A 2xx with no body (e.g. 204) has nothing to parse —
+                    # treat it as success with no response data rather than
+                    # letting json.loads("") raise and fall into the generic
+                    # error handling below with a confusing message.
+                    response_data = json.loads(body.decode("utf-8")) if body else None
                     self._log("Successfully created feedback")
                     return response_data
                 else:
@@ -192,6 +241,14 @@ class FeedbackService:
             return None
         except URLError as e:
             logger.warning(f"Failed to submit feedback: {e.reason}")
+            return None
+        except json.JSONDecodeError as e:
+            # A 2xx response whose (non-empty) body isn't valid JSON — e.g. a
+            # proxy's HTML error page. Named explicitly so this doesn't land
+            # in the generic handler below with a confusing raw parser
+            # message; the empty-body case is handled above and never
+            # reaches here.
+            logger.warning(f"Feedback API returned an unparsable response: {e}")
             return None
         except Exception as e:
             logger.warning(f"Unexpected error submitting feedback: {e}")
@@ -272,3 +329,17 @@ def create_feedback(feedback: FeedbackData, **kwargs) -> FeedbackResponse | None
     """
     service = get_feedback_service(**kwargs)
     return service.create_feedback(feedback)
+
+
+async def acreate_feedback(feedback: FeedbackData, **kwargs) -> FeedbackResponse | None:
+    """Async convenience function to create feedback using default service.
+
+    Args:
+        feedback: Feedback data (see FeedbackService.create_feedback).
+        **kwargs: Config overrides for the service.
+
+    Returns:
+        FeedbackResponse or None on error.
+    """
+    service = get_feedback_service(**kwargs)
+    return await service.acreate_feedback(feedback)

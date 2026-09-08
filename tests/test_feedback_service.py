@@ -9,6 +9,7 @@ import pytest
 from coolhand import (
     FeedbackData,
     FeedbackService,
+    acreate_feedback,
     create_feedback,
     get_feedback_service,
 )
@@ -162,6 +163,32 @@ class TestCreateFeedback:
         fb = payload["llm_request_log_feedback"]
         assert fb["sentiment"] == "like"
         assert "like" not in fb  # deprecated field stripped from wire payload
+
+    def test_create_feedback_like_deprecation_warning_points_to_caller(
+        self, feedback_service, mock_feedback_urlopen
+    ):
+        """The deprecation warning is attributed to the caller's frame, not to
+        an SDK-internal frame (_prepare_feedback / create_feedback)."""
+        with pytest.warns(DeprecationWarning) as record:
+            feedback_service.create_feedback(
+                {"llm_request_log_id": 12345, "like": True}
+            )
+
+        assert record[0].filename == __file__
+
+    @pytest.mark.asyncio
+    async def test_acreate_feedback_like_deprecation_warning_points_to_caller(
+        self, feedback_service, mock_feedback_urlopen
+    ):
+        """The same stacklevel is correct for the async path too — both
+        create_feedback and acreate_feedback call _prepare_feedback directly,
+        adding exactly one frame each."""
+        with pytest.warns(DeprecationWarning) as record:
+            await feedback_service.acreate_feedback(
+                {"llm_request_log_id": 12345, "like": True}
+            )
+
+        assert record[0].filename == __file__
 
     def test_create_feedback_like_false_converts_to_sentiment_dislike(
         self, feedback_service, mock_feedback_urlopen
@@ -335,6 +362,104 @@ class TestCreateFeedback:
         assert "No matching field provided" in caplog.text
 
 
+class TestAsyncCreateFeedback:
+    """Test FeedbackService.acreate_feedback, the asyncio.to_thread-backed twin
+    of create_feedback for callers running inside an event loop."""
+
+    @pytest.mark.asyncio
+    async def test_acreate_feedback_returns_same_result_as_sync(
+        self, feedback_service, mock_feedback_urlopen
+    ):
+        """acreate_feedback returns the same result as the sync call."""
+        feedback: FeedbackData = {
+            "llm_request_log_id": 12345,
+            "sentiment": "like",
+            "explanation": "Great response",
+        }
+
+        result = await feedback_service.acreate_feedback(feedback)
+
+        assert result is not None
+        assert result["id"] == "xyz789abc123"
+        assert result["llm_request_log_id"] == "abc123def456"
+        mock_feedback_urlopen.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_acreate_feedback_no_api_key_returns_none(
+        self, mock_feedback_urlopen
+    ):
+        """acreate_feedback returns None without calling API when no API key is set."""
+        service = FeedbackService(api_key="", silent=True)
+        feedback: FeedbackData = {"llm_request_log_id": 12345, "sentiment": "like"}
+
+        result = await service.acreate_feedback(feedback)
+        assert result is None
+        mock_feedback_urlopen.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_acreate_feedback_http_error_returns_none(self, feedback_service):
+        """acreate_feedback returns None (not an exception) on an HTTP error,
+        matching create_feedback's error handling."""
+        from urllib.error import HTTPError
+
+        with patch("coolhand.feedback_service.urlopen") as mock:
+            mock.side_effect = HTTPError(
+                url="https://coolhandlabs.com/api/v2/llm_request_log_feedbacks",
+                code=500,
+                msg="Internal Server Error",
+                hdrs={},
+                fp=None,
+            )
+
+            feedback: FeedbackData = {
+                "llm_request_log_id": 12345,
+                "sentiment": "like",
+            }
+            result = await feedback_service.acreate_feedback(feedback)
+
+        assert result is None
+
+    @pytest.mark.asyncio
+    async def test_acreate_feedback_does_not_block_event_loop(self, feedback_service):
+        """acreate_feedback must let other coroutines run while urlopen is slow."""
+        import asyncio
+        import threading
+
+        release = threading.Event()
+
+        def hanging_urlopen(*args, **kwargs):
+            release.wait(timeout=2)
+            mock_response = MagicMock()
+            mock_response.status = 201
+            mock_response.read.return_value = b'{"id": "xyz789abc123"}'
+            mock_response.__enter__ = MagicMock(return_value=mock_response)
+            mock_response.__exit__ = MagicMock(return_value=False)
+            return mock_response
+
+        canary_ran = False
+
+        async def canary():
+            nonlocal canary_ran
+            await asyncio.sleep(0.05)
+            canary_ran = True
+
+        feedback: FeedbackData = {"llm_request_log_id": 12345, "sentiment": "like"}
+
+        with patch("coolhand.feedback_service.urlopen", side_effect=hanging_urlopen):
+            canary_task = asyncio.create_task(canary())
+            feedback_task = asyncio.create_task(
+                feedback_service.acreate_feedback(feedback)
+            )
+            await asyncio.sleep(0.15)
+            assert canary_ran  # event loop kept running while urlopen was "slow"
+            release.set()
+            result = await feedback_task
+            await canary_task
+
+        assert result is not None
+        assert result["id"] == "xyz789abc123"
+
+
 class TestFeedbackServiceHTTPErrors:
     """Test FeedbackService error handling."""
 
@@ -457,6 +582,41 @@ class TestModuleLevelFunctions:
         result = create_feedback(feedback, api_key=mock_config["api_key"])
         assert result is not None
 
+    @pytest.mark.asyncio
+    async def test_acreate_feedback_function(
+        self, mock_config, mock_feedback_urlopen, reset_default_service
+    ):
+        """Test module-level acreate_feedback function."""
+        feedback: FeedbackData = {
+            "llm_request_log_id": 12345,
+            "sentiment": "like",
+        }
+
+        result = await acreate_feedback(feedback, api_key=mock_config["api_key"])
+        assert result is not None
+        mock_feedback_urlopen.assert_called_once()
+
+    def test_create_feedback_function_deprecation_warning_known_limitation(
+        self, mock_config, mock_feedback_urlopen, reset_default_service
+    ):
+        """Known limitation, pinned so it doesn't regress silently: the
+        'like' deprecation warning's stacklevel is tuned for the direct
+        FeedbackService method call path (see the comment in
+        feedback_service.py's _prepare_feedback). Called through the
+        module-level create_feedback() convenience function instead, there's
+        one extra frame, so the warning is attributed to feedback_service.py
+        rather than this test's own call site. Coolhand.create_feedback has
+        the same gap for the same reason — see
+        TestCoolhandIntegration.test_coolhand_create_feedback_deprecation_warning_known_limitation."""
+        with pytest.warns(DeprecationWarning) as record:
+            create_feedback(
+                {"llm_request_log_id": 12345, "like": True},
+                api_key=mock_config["api_key"],
+            )
+
+        assert record[0].filename != __file__
+        assert record[0].filename.endswith("feedback_service.py")
+
 
 class TestCoolhandIntegration:
     """Test FeedbackService integration with main Coolhand class."""
@@ -486,6 +646,46 @@ class TestCoolhandIntegration:
         }
 
         result = instance.create_feedback(feedback)
+        assert result is not None
+
+    def test_coolhand_create_feedback_deprecation_warning_known_limitation(
+        self, reset_global_instance, mock_config, mock_feedback_urlopen
+    ):
+        """Known limitation, pinned so it doesn't regress silently:
+        Coolhand.create_feedback delegates through
+        self._feedback_service.create_feedback, adding one more frame than
+        _prepare_feedback's stacklevel=3 accounts for — same class of gap as
+        the module-level convenience functions (see
+        TestModuleLevelFunctions.test_create_feedback_function_deprecation_warning_known_limitation),
+        but here the extra frame is Coolhand.create_feedback itself, in
+        __init__.py rather than feedback_service.py."""
+        from coolhand import Coolhand
+
+        with patch("coolhand.httpx_interceptor.patch"):
+            instance = Coolhand(config=mock_config)
+
+        with pytest.warns(DeprecationWarning) as record:
+            instance.create_feedback({"llm_request_log_id": 12345, "like": True})
+
+        assert record[0].filename != __file__
+        assert record[0].filename.endswith("__init__.py")
+
+    @pytest.mark.asyncio
+    async def test_coolhand_acreate_feedback(
+        self, reset_global_instance, mock_config, mock_feedback_urlopen
+    ):
+        """Test Coolhand.acreate_feedback method."""
+        from coolhand import Coolhand
+
+        with patch("coolhand.httpx_interceptor.patch"):
+            instance = Coolhand(config=mock_config)
+
+        feedback: FeedbackData = {
+            "llm_request_log_id": 12345,
+            "sentiment": "like",
+        }
+
+        result = await instance.acreate_feedback(feedback)
         assert result is not None
 
 
@@ -651,6 +851,62 @@ class TestFeedbackServiceEdgeCases:
             result = feedback_service.create_feedback(feedback)
             assert result is None
             assert "Unexpected status code: 400" in caplog.text
+
+    def test_create_feedback_2xx_empty_body_returns_none_not_json_error(
+        self, feedback_service, caplog
+    ):
+        """A 2xx response with no body (e.g. 204) is treated as a success
+        with no response data, not a JSON parse failure — json.loads("")
+        would otherwise raise and fall into the generic error handler with a
+        confusing message instead of the clear status-code one."""
+        import logging
+
+        caplog.set_level(logging.WARNING)
+
+        with patch("coolhand.feedback_service.urlopen") as mock:
+            mock_response = MagicMock()
+            mock_response.status = 204
+            mock_response.read.return_value = b""
+            mock_response.__enter__ = MagicMock(return_value=mock_response)
+            mock_response.__exit__ = MagicMock(return_value=False)
+            mock.return_value = mock_response
+
+            feedback: FeedbackData = {
+                "llm_request_log_id": 12345,
+                "sentiment": "like",
+            }
+
+            result = feedback_service.create_feedback(feedback)
+            assert result is None
+            assert "Unexpected error" not in caplog.text
+
+    def test_create_feedback_2xx_non_json_body_logs_clear_message(
+        self, feedback_service, caplog
+    ):
+        """A 2xx response with a non-empty body that isn't valid JSON (e.g. a
+        proxy's HTML error page) logs a clear, named message rather than
+        falling into the generic error handler with a raw parser error."""
+        import logging
+
+        caplog.set_level(logging.WARNING)
+
+        with patch("coolhand.feedback_service.urlopen") as mock:
+            mock_response = MagicMock()
+            mock_response.status = 200
+            mock_response.read.return_value = b"<html>not json</html>"
+            mock_response.__enter__ = MagicMock(return_value=mock_response)
+            mock_response.__exit__ = MagicMock(return_value=False)
+            mock.return_value = mock_response
+
+            feedback: FeedbackData = {
+                "llm_request_log_id": 12345,
+                "sentiment": "like",
+            }
+
+            result = feedback_service.create_feedback(feedback)
+            assert result is None
+            assert "unparsable response" in caplog.text
+            assert "Unexpected error" not in caplog.text
 
     def test_get_collector_string_format(self, mock_config):
         """_get_collector_string returns expected format."""

@@ -38,6 +38,19 @@ coolhand.create_feedback({
 })
 ```
 
+## Async Usage
+
+Inside an event loop (e.g. an async web handler), use `acreate_feedback` instead of `create_feedback` so the HTTP call doesn't block the loop:
+
+```python
+result = await ch.acreate_feedback({
+    'llm_request_log_id': 'abc123def456',
+    'sentiment': 'like',
+})
+```
+
+It accepts the same fields and returns the same result as `create_feedback` — the only difference is that it `await`s instead of blocking. The global `coolhand.acreate_feedback(...)` convenience function is also available, mirroring `coolhand.create_feedback(...)`.
+
 ---
 
 ## Field Reference

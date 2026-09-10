@@ -14,10 +14,10 @@ from coolhand import (
     TemplateService,
     get_template_service,
 )
+from coolhand._config import _RefuseRedirects
 from coolhand.template_service import (
     DEFAULT_TIMEOUT_SECONDS,
     TEMPLATES_ENDPOINT,
-    _RefuseRedirects,
 )
 
 BASE_URL = "https://test.coolhandlabs.com"

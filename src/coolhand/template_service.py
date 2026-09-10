@@ -16,9 +16,9 @@ from email.message import Message
 from typing import Any, cast
 from urllib.error import HTTPError, URLError
 from urllib.parse import quote, urlencode
-from urllib.request import HTTPRedirectHandler, HTTPSHandler, Request, build_opener
+from urllib.request import Request
 
-from ._config import _DEFAULT_BASE_URL, _normalize_base_url, _ssl_context
+from ._config import _DEFAULT_BASE_URL, _build_opener, _normalize_base_url
 from .types import (
     Config,
     LlmRequestTemplateDetail,
@@ -65,26 +65,6 @@ class CoolhandAPIError(Exception):
     def __init__(self, message: str, status: int | None = None) -> None:
         super().__init__(message)
         self.status = status
-
-
-class _RefuseRedirects(HTTPRedirectHandler):
-    """Turns a 3xx into an error instead of following it.
-
-    `base_url` is validated, but a redirect would carry the `X-API-Key` header to
-    whatever host the response names. Returning `None` makes urllib surface the 3xx as
-    an `HTTPError`.
-    """
-
-    def redirect_request(
-        self,
-        req: Request,
-        fp: Any,
-        code: int,
-        msg: str,
-        headers: Message,
-        newurl: str,
-    ) -> None:
-        return None
 
 
 def _parse_header_int(value: str | None, fallback: int) -> int:
@@ -196,9 +176,7 @@ class TemplateService:
         self.config["base_url"] = _normalize_base_url(
             self.config.get("base_url", _DEFAULT_BASE_URL)
         )
-        self._opener = build_opener(
-            HTTPSHandler(context=_ssl_context), _RefuseRedirects()
-        )
+        self._opener = _build_opener()
 
     @property
     def api_key(self) -> str:

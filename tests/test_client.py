@@ -515,7 +515,7 @@ class TestSendOne:
         mock_resp.__enter__ = MagicMock(return_value=mock_resp)
         mock_resp.__exit__ = MagicMock(return_value=False)
 
-        with patch("coolhand.client.urlopen", return_value=mock_resp):
+        with patch("coolhand.client._opener.open", return_value=mock_resp):
             result = client._send_one({"id": "x", "method": "post", "url": "test"})
 
         assert result is True
@@ -536,7 +536,7 @@ class TestSendOne:
         client = CoolhandClient(auto_submit=False, api_key="real-api-key-12345")
         interaction = {"id": "test-id", "method": "post", "url": "test"}
 
-        with patch("coolhand.client.urlopen") as mock:
+        with patch("coolhand.client._opener.open") as mock:
             mock.side_effect = HTTPError(
                 url="https://coolhandlabs.com/api/v2/llm_request_logs",
                 code=500,
@@ -560,7 +560,7 @@ class TestSendOne:
         client = CoolhandClient(auto_submit=False, api_key="real-api-key-12345")
         interaction = {"id": "test-id", "method": "post", "url": "test"}
 
-        with patch("coolhand.client.urlopen") as mock:
+        with patch("coolhand.client._opener.open") as mock:
             mock.side_effect = URLError("Connection refused")
             result = client._send_one(interaction)
 
@@ -577,66 +577,45 @@ class TestSendOne:
         client = CoolhandClient(auto_submit=False, api_key="real-api-key-12345")
         interaction = {"id": "test-id", "method": "post", "url": "test"}
 
-        with patch("coolhand.client.urlopen") as mock:
+        with patch("coolhand.client._opener.open") as mock:
             mock.side_effect = RuntimeError("Unexpected error")
             result = client._send_one(interaction)
 
         assert result is False
         assert "Unexpected error submitting interaction" in caplog.text
 
-    def test_send_one_passes_ssl_context_to_urlopen(self, reset_global_instance):
-        """_send_one passes _ssl_context as context= argument to urlopen."""
-        import ssl
-        from unittest.mock import MagicMock, patch
+    def test_opener_uses_the_shared_tls_context(self):
+        """_send_one's opener is built via _config._build_opener, which layers the
+        shared certifi-backed _ssl_context onto its HTTPSHandler — not a per-call
+        context= kwarg, since urlopen() itself is no longer called directly."""
+        from urllib.request import HTTPSHandler
 
-        sentinel_ctx = ssl.create_default_context()
-        client = CoolhandClient(auto_submit=False, api_key="real-api-key-12345")
-        interaction = {
-            "id": "test-id",
-            "method": "post",
-            "url": "https://api.openai.com/v1/chat",
-            "timestamp": "2024-01-01T00:00:00Z",
-        }
+        from coolhand import _config
+        from coolhand import client as client_module
 
-        mock_resp = MagicMock()
-        mock_resp.__enter__ = lambda s: s
-        mock_resp.__exit__ = MagicMock(return_value=False)
-        mock_resp.status = 200
+        https_handlers = [
+            handler
+            for handler in client_module._opener.handlers
+            if isinstance(handler, HTTPSHandler)
+        ]
+        assert len(https_handlers) == 1
+        assert https_handlers[0]._context is _config._ssl_context
 
-        with (
-            patch("coolhand.client._ssl_context", sentinel_ctx),
-            patch("coolhand.client.urlopen", return_value=mock_resp) as mock_open,
-        ):
-            client._send_one(interaction)
-            _, kwargs = mock_open.call_args
-            assert kwargs.get("context") is sentinel_ctx
+    def test_opener_refuses_to_follow_a_redirect(self):
+        """The module-level opener used by _send_one refuses redirects, so a
+        compromised/misconfigured base_url can't be used to replay X-API-Key (and the
+        captured request/response body, which may contain end-user PII) to another
+        host."""
+        from urllib.request import HTTPRedirectHandler
 
-    def test_send_one_ssl_context_none_when_certifi_missing(
-        self, reset_global_instance
-    ):
-        """_send_one passes context=None to urlopen when certifi is unavailable."""
-        from unittest.mock import MagicMock, patch
+        from coolhand import client as client_module
+        from coolhand._config import _RefuseRedirects
 
-        client = CoolhandClient(auto_submit=False, api_key="real-api-key-12345")
-        interaction = {
-            "id": "test-id",
-            "method": "post",
-            "url": "https://api.openai.com/v1/chat",
-            "timestamp": "2024-01-01T00:00:00Z",
-        }
-
-        mock_resp = MagicMock()
-        mock_resp.__enter__ = lambda s: s
-        mock_resp.__exit__ = MagicMock(return_value=False)
-        mock_resp.status = 200
-
-        with (
-            patch("coolhand.client._ssl_context", None),
-            patch("coolhand.client.urlopen", return_value=mock_resp) as mock_open,
-        ):
-            client._send_one(interaction)
-            _, kwargs = mock_open.call_args
-            assert kwargs.get("context") is None
+        handlers = [type(handler) for handler in client_module._opener.handlers]
+        assert _RefuseRedirects in handlers
+        # The stock handler must be displaced, not merely accompanied — if urllib
+        # still held one it would follow the 3xx and carry X-API-Key to the new host.
+        assert HTTPRedirectHandler not in handlers
 
     def test_log_interaction_with_auto_submit(
         self, mock_request_data, mock_response_data, reset_global_instance
@@ -703,7 +682,7 @@ class TestBackgroundDispatch:
         client = CoolhandClient(auto_submit=False, api_key="real-api-key-12345")
         client.log_interaction(mock_request_data, mock_response_data)
 
-        with patch("coolhand.client.urlopen", side_effect=hanging_urlopen):
+        with patch("coolhand.client._opener.open", side_effect=hanging_urlopen):
             start = time.monotonic()
             client.flush()
             elapsed = time.monotonic() - start
@@ -739,7 +718,7 @@ class TestBackgroundDispatch:
 
         client = CoolhandClient(auto_submit=True, api_key="real-api-key-12345")
 
-        with patch("coolhand.client.urlopen", side_effect=hanging_urlopen):
+        with patch("coolhand.client._opener.open", side_effect=hanging_urlopen):
             start = time.monotonic()
             client.log_interaction(mock_request_data, mock_response_data)
             elapsed = time.monotonic() - start
@@ -787,7 +766,7 @@ class TestBackgroundDispatch:
 
         client = CoolhandClient(auto_submit=True, api_key="real-api-key-12345")
 
-        with patch("coolhand.client.urlopen", side_effect=hanging_urlopen):
+        with patch("coolhand.client._opener.open", side_effect=hanging_urlopen):
             canary_task = asyncio.create_task(canary())
             # Synchronous call, exactly like httpx_interceptor's
             # patched_async_send invoking the handler — never awaited.
@@ -895,7 +874,7 @@ class TestBackgroundDispatch:
         ):
             client = CoolhandClient(auto_submit=False, api_key="k")
 
-            with patch("coolhand.client.urlopen", side_effect=hanging_urlopen):
+            with patch("coolhand.client._opener.open", side_effect=hanging_urlopen):
                 client._queue.append({"id": "first", "method": "post", "url": "test"})
                 client.flush()  # worker takes "first" immediately, blocks
 
@@ -951,7 +930,7 @@ class TestBackgroundDispatch:
 
         with (
             patch.object(client_module, "_SHUTDOWN_TIMEOUT", 0.2),
-            patch("coolhand.client.urlopen", side_effect=hanging_urlopen),
+            patch("coolhand.client._opener.open", side_effect=hanging_urlopen),
         ):
             start = time.monotonic()
             client.shutdown()
@@ -1097,7 +1076,7 @@ class TestBackgroundDispatch:
         mock_resp.__enter__ = MagicMock(return_value=mock_resp)
         mock_resp.__exit__ = MagicMock(return_value=False)
 
-        with patch("coolhand.client.urlopen", return_value=mock_resp):
+        with patch("coolhand.client._opener.open", return_value=mock_resp):
             client._queue.append({"id": "x", "method": "post", "url": "test"})
             client.shutdown()
 
@@ -1166,7 +1145,7 @@ class TestBackgroundDispatch:
         mock_resp.__enter__ = MagicMock(return_value=mock_resp)
         mock_resp.__exit__ = MagicMock(return_value=False)
 
-        with patch("coolhand.client.urlopen", return_value=mock_resp):
+        with patch("coolhand.client._opener.open", return_value=mock_resp):
             result = client._send_one({"id": "x", "method": "post", "url": "test"})
 
         assert result is False
@@ -1463,7 +1442,7 @@ class TestClientLifecycle:
 
         with (
             patch.object(client_module, "_SHUTDOWN_TIMEOUT", 0.1),
-            patch("coolhand.client.urlopen", side_effect=hanging_urlopen),
+            patch("coolhand.client._opener.open", side_effect=hanging_urlopen),
             patch("coolhand.client.atexit.unregister") as mock_unregister,
         ):
             client._queue.append({"id": "x", "method": "post", "url": "test"})
@@ -1731,7 +1710,7 @@ class TestBaseUrlConfig:
             auto_submit=False,
         )
 
-        with patch("coolhand.client.urlopen") as mock_open:
+        with patch("coolhand.client._opener.open") as mock_open:
             mock_resp = MagicMock()
             mock_resp.status = 201
             mock_resp.__enter__ = MagicMock(return_value=mock_resp)

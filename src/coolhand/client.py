@@ -12,19 +12,23 @@ from datetime import datetime, timezone
 from typing import Any
 from urllib.error import HTTPError, URLError
 from urllib.parse import parse_qs, urlencode, urlparse, urlunparse
-from urllib.request import Request, urlopen
+from urllib.request import Request
 
 from ._config import (
     _DEFAULT_BASE_URL,
     _WRITE_TIMEOUT_SECONDS,
+    _build_opener,
     _normalize_base_url,
-    _ssl_context,
 )
 from .httpx_interceptor import DEFAULT_EXCLUDE_API_PATTERNS
 from .types import Config, RequestData, ResponseData
 from .version import __version__
 
 logger = logging.getLogger(__name__)
+
+# Refuses redirects so the X-API-Key header can never be replayed to a
+# redirect target.
+_opener = _build_opener()
 
 # Bound on how many interactions may be waiting for delivery at once. Once full,
 # flush() drops new items rather than blocking the caller (which may be an
@@ -266,9 +270,7 @@ class CoolhandClient:
                 method="POST",
             )
 
-            with urlopen(
-                request, context=_ssl_context, timeout=_WRITE_TIMEOUT_SECONDS
-            ) as resp:
+            with _opener.open(request, timeout=_WRITE_TIMEOUT_SECONDS) as resp:
                 if 200 <= resp.status < 300:
                     if not self.config.get("silent"):
                         method = interaction.get("method", "unknown")

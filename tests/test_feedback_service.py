@@ -18,7 +18,7 @@ from coolhand import (
 @pytest.fixture
 def mock_feedback_urlopen():
     """Mock urllib urlopen for feedback API tests."""
-    with patch("coolhand.feedback_service.urlopen") as mock:
+    with patch("coolhand.feedback_service._opener.open") as mock:
         mock_response = MagicMock()
         mock_response.status = 201
         mock_response.read.return_value = json.dumps(
@@ -402,7 +402,7 @@ class TestAsyncCreateFeedback:
         matching create_feedback's error handling."""
         from urllib.error import HTTPError
 
-        with patch("coolhand.feedback_service.urlopen") as mock:
+        with patch("coolhand.feedback_service._opener.open") as mock:
             mock.side_effect = HTTPError(
                 url="https://coolhandlabs.com/api/v2/llm_request_log_feedbacks",
                 code=500,
@@ -445,7 +445,9 @@ class TestAsyncCreateFeedback:
 
         feedback: FeedbackData = {"llm_request_log_id": 12345, "sentiment": "like"}
 
-        with patch("coolhand.feedback_service.urlopen", side_effect=hanging_urlopen):
+        with patch(
+            "coolhand.feedback_service._opener.open", side_effect=hanging_urlopen
+        ):
             canary_task = asyncio.create_task(canary())
             feedback_task = asyncio.create_task(
                 feedback_service.acreate_feedback(feedback)
@@ -467,7 +469,7 @@ class TestFeedbackServiceHTTPErrors:
         """Test that HTTP errors return None."""
         from urllib.error import HTTPError
 
-        with patch("coolhand.feedback_service.urlopen") as mock:
+        with patch("coolhand.feedback_service._opener.open") as mock:
             mock.side_effect = HTTPError(
                 url="https://coolhandlabs.com/api/v2/llm_request_log_feedbacks",
                 code=500,
@@ -488,7 +490,7 @@ class TestFeedbackServiceHTTPErrors:
         """Test that URL errors return None."""
         from urllib.error import URLError
 
-        with patch("coolhand.feedback_service.urlopen") as mock:
+        with patch("coolhand.feedback_service._opener.open") as mock:
             mock.side_effect = URLError("Connection refused")
 
             feedback: FeedbackData = {
@@ -499,53 +501,39 @@ class TestFeedbackServiceHTTPErrors:
             result = feedback_service.create_feedback(feedback)
             assert result is None
 
-    def test_create_feedback_passes_ssl_context_to_urlopen(self, feedback_service):
-        """create_feedback passes _ssl_context as context= argument to urlopen."""
-        import ssl
-        from unittest.mock import MagicMock
+    def test_opener_uses_the_shared_tls_context(self):
+        """_submit's opener is built via _config._build_opener, which layers the
+        shared certifi-backed _ssl_context onto its HTTPSHandler — not a per-call
+        context= kwarg, since urlopen() itself is no longer called directly."""
+        from urllib.request import HTTPSHandler
 
-        sentinel_ctx = ssl.create_default_context()
-        mock_resp = MagicMock()
-        mock_resp.__enter__ = lambda s: s
-        mock_resp.__exit__ = MagicMock(return_value=False)
-        mock_resp.status = 201
-        mock_resp.read.return_value = b'{"id": 1}'
+        from coolhand import _config
+        from coolhand import feedback_service as feedback_service_module
 
-        feedback: FeedbackData = {"llm_request_log_id": 12345, "sentiment": "like"}
+        https_handlers = [
+            handler
+            for handler in feedback_service_module._opener.handlers
+            if isinstance(handler, HTTPSHandler)
+        ]
+        assert len(https_handlers) == 1
+        assert https_handlers[0]._context is _config._ssl_context
 
-        with (
-            patch("coolhand.feedback_service._ssl_context", sentinel_ctx),
-            patch(
-                "coolhand.feedback_service.urlopen", return_value=mock_resp
-            ) as mock_open,
-        ):
-            feedback_service.create_feedback(feedback)
-            _, kwargs = mock_open.call_args
-            assert kwargs.get("context") is sentinel_ctx
+    def test_opener_refuses_to_follow_a_redirect(self):
+        """The module-level opener used by _submit refuses redirects, so a
+        compromised/misconfigured base_url can't be used to replay X-API-Key (and the
+        feedback payload) to another host."""
+        from urllib.request import HTTPRedirectHandler
 
-    def test_create_feedback_ssl_context_none_when_certifi_missing(
-        self, feedback_service
-    ):
-        """create_feedback passes context=None to urlopen when certifi unavailable."""
-        from unittest.mock import MagicMock
+        from coolhand import feedback_service as feedback_service_module
+        from coolhand._config import _RefuseRedirects
 
-        mock_resp = MagicMock()
-        mock_resp.__enter__ = lambda s: s
-        mock_resp.__exit__ = MagicMock(return_value=False)
-        mock_resp.status = 201
-        mock_resp.read.return_value = b'{"id": 1}'
-
-        feedback: FeedbackData = {"llm_request_log_id": 12345, "sentiment": "like"}
-
-        with (
-            patch("coolhand.feedback_service._ssl_context", None),
-            patch(
-                "coolhand.feedback_service.urlopen", return_value=mock_resp
-            ) as mock_open,
-        ):
-            feedback_service.create_feedback(feedback)
-            _, kwargs = mock_open.call_args
-            assert kwargs.get("context") is None
+        handlers = [
+            type(handler) for handler in feedback_service_module._opener.handlers
+        ]
+        assert _RefuseRedirects in handlers
+        # The stock handler must be displaced, not merely accompanied — if urllib
+        # still held one it would follow the 3xx and carry X-API-Key to the new host.
+        assert HTTPRedirectHandler not in handlers
 
 
 class TestModuleLevelFunctions:
@@ -818,7 +806,7 @@ class TestFeedbackServiceEdgeCases:
 
         caplog.set_level(logging.WARNING)
 
-        with patch("coolhand.feedback_service.urlopen") as mock:
+        with patch("coolhand.feedback_service._opener.open") as mock:
             mock.side_effect = RuntimeError("Unexpected error")
 
             feedback: FeedbackData = {
@@ -836,7 +824,7 @@ class TestFeedbackServiceEdgeCases:
 
         caplog.set_level(logging.WARNING)
 
-        with patch("coolhand.feedback_service.urlopen") as mock:
+        with patch("coolhand.feedback_service._opener.open") as mock:
             mock_response = MagicMock()
             mock_response.status = 400
             mock_response.__enter__ = MagicMock(return_value=mock_response)
@@ -862,7 +850,7 @@ class TestFeedbackServiceEdgeCases:
 
         caplog.set_level(logging.WARNING)
 
-        with patch("coolhand.feedback_service.urlopen") as mock:
+        with patch("coolhand.feedback_service._opener.open") as mock:
             mock_response = MagicMock()
             mock_response.status = 202
             mock_response.read.return_value = json.dumps(
@@ -893,7 +881,7 @@ class TestFeedbackServiceEdgeCases:
 
         caplog.set_level(logging.WARNING)
 
-        with patch("coolhand.feedback_service.urlopen") as mock:
+        with patch("coolhand.feedback_service._opener.open") as mock:
             mock_response = MagicMock()
             mock_response.status = 204
             mock_response.read.return_value = b""
@@ -929,7 +917,7 @@ class TestFeedbackServiceEdgeCases:
 
         caplog.set_level(logging.WARNING)
 
-        with patch("coolhand.feedback_service.urlopen") as mock:
+        with patch("coolhand.feedback_service._opener.open") as mock:
             mock_response = MagicMock()
             mock_response.status = 200
             mock_response.read.return_value = b"<html>not json</html>"

@@ -184,7 +184,7 @@ def _no_real_atexit_registration():
 @pytest.fixture
 def mock_urlopen():
     """Mock urllib urlopen for API submission tests."""
-    with patch("coolhand.client.urlopen") as mock:
+    with patch("coolhand.client._opener.open") as mock:
         mock_response = MagicMock()
         mock_response.status = 201
         mock_response.__enter__ = MagicMock(return_value=mock_response)

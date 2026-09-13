@@ -217,10 +217,74 @@ the same "hand it to a human" rule `/loop-review` uses for stuck findings.
    environment, also run `make test-live` against the real server.
    Record pass/fail per script (and whether it ran live or simulated).
 
-   `examples/band-guesser/` is a standalone FastAPI demo that needs a live
-   GitHub token and manual browser interaction — it is out of scope for
-   this automated phase. Note it in the Phase 5 summary as a
-   manual-verification item rather than silently skipping it.
+3. **`examples/band-guesser/` is explicitly in scope — run it, don't just
+   note it.** It's a plain FastAPI JSON API (`POST /api/guess-bands`,
+   `POST /api/submit-feedback`); the `templates/index.html` form is a
+   convenience for humans, not a requirement for exercising it.
+
+   - Set it up per its own README's "Testing locally" section: a
+     dedicated `.venv`, deps installed with the `coolhand` line stripped
+     from `requirements.txt`, then `uv pip install -e ../../` so it
+     exercises the release branch, not a pinned PyPI version.
+   - Source the GitHub token via `gh auth token` — this is already
+     `main.py`'s own non-interactive fallback (`_resolve_github_token`)
+     when no token is posted in the request body, so no new env var or
+     hardcoded reference is needed. Confirm it works first (`gh auth
+     token` exits 0) before starting the server.
+   - The Copilot mode additionally needs the `copilot` CLI on `PATH`
+     (`github-copilot-sdk` shells out to it over JSON-RPC/stdio). If
+     missing, install it with `npm install -g @github/copilot` — this
+     installs a global tool on the machine, not just a repo dependency,
+     so it's a one-time setup cost worth calling out in the Phase 5
+     report the first time it happens.
+   - Start the server in the background on a scratch port (e.g.
+     `uvicorn main:app --port 8188`), poll `GET /` until it responds,
+     then `POST /api/guess-bands` once per `mode` (`copilot`, `azure`,
+     `azure-sdk`) with a fixed test sentence and empty `github_token`
+     (so it falls through to the `gh auth token` path), and
+     `POST /api/submit-feedback` with the returned `raw_response` to
+     exercise the feedback path too. A 429 (rate limit) on any mode is a
+     transient condition, not a failure — retry once before giving up on
+     that mode.
+   - **Always terminate the server process afterward**, success or
+     failure — per the standing instruction to clean up anything you
+     start.
+   - Record pass/fail per mode, and fold real failures (non-2xx other
+     than a retried 429, a hung request, a malformed response) into
+     Phase 4 step 1's "must be green before continuing" bar — don't let
+     a red band-guesser run slide through to Phase 5 unremarked.
+
+4. **Explicitly test for added latency — don't assume a small diff is
+   latency-neutral.** Two complementary checks, both against the *diff
+   since the last tag* (Phase 3 step 2's `git diff <last-tag>..HEAD --
+   src/`), not just this run's merged PRs:
+
+   - **Synthetic interceptor microbenchmark (primary signal).** Live LLM
+     call latency is dominated by network and model inference time —
+     hundreds of milliseconds to seconds — which drowns out anything a
+     few extra string comparisons or an added content-type check could
+     plausibly cost. Isolate Coolhand's *own* overhead instead: write a
+     throwaway benchmark script (not committed) that calls the patched
+     `httpx.Client.send`/`AsyncClient.send`/`requests.Session.send`
+     wrappers against a mocked response many times (e.g. 1000 iterations
+     each), for both a JSON body and a body shaped like whatever this
+     release's diff added/changed handling for (e.g. a binary
+     `audio/`/`video`/`image` content type), and compare median
+     per-call overhead against the same wrapper checked out at the last
+     tag. Flag anything that grows by more than roughly 20% or crosses a
+     low-single-digit-millisecond absolute budget — either signals the
+     diff added real per-request cost, not measurement noise.
+   - **End-to-end wall-clock on the live band-guesser calls (sanity
+     check, not precision measurement).** Record total latency for each
+     of the three `guess-bands` modes run in step 3. These numbers are
+     too network-noisy to prove Coolhand added zero overhead, but they
+     do catch the failure mode a microbenchmark can miss: a hang, a
+     timeout, or unbounded growth (e.g. an accidental O(n²) path over a
+     large captured body) that only shows up against a real response.
+
+   Report both sets of numbers in Phase 5 rather than a bare pass/fail —
+   the actual figures are what let the user judge "substantive" for
+   themselves.
 
 ## Phase 5: Open the release-prep PR, report everything
 
@@ -238,7 +302,9 @@ the same "hand it to a human" rule `/loop-review` uses for stuck findings.
    - Red-team findings split into fixed vs. flagged-for-decision.
    - Phase 4's `make verify` result, the example-script results
      (pass/fail, simulated/live per script), the `make test-live` result
-     if it ran, and the `band-guesser` manual-check reminder.
+     if it ran, the `band-guesser` per-mode pass/fail, and both latency
+     checks' numbers (microbenchmark deltas and end-to-end wall-clock
+     per mode) with a call on whether either looks substantive.
 
 ## Safety
 

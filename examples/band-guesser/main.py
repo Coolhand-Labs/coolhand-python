@@ -51,7 +51,7 @@ import coolhand
 
 _ch = coolhand.Coolhand(
     api_key=os.getenv("COOLHAND_API_KEY"),
-    intercept_addresses=["models.inference.ai.azure.com"],
+    intercept_addresses=["models.github.ai"],
     silent=True,
 )
 
@@ -140,11 +140,11 @@ async def _guess_via_azure_sdk(github_token: str, sentence: str) -> str:
 
     def _sync():
         client = ChatCompletionsClient(
-            endpoint="https://models.inference.ai.azure.com",
+            endpoint="https://models.github.ai/inference",
             credential=AzureKeyCredential(github_token),
         )
         resp = client.complete(
-            model="gpt-4o-mini",
+            model="openai/gpt-4o-mini",
             messages=[
                 SystemMessage(content=SYSTEM_PROMPT),
                 UserMessage(
@@ -175,7 +175,7 @@ async def _guess_via_azure_sdk(github_token: str, sentence: str) -> str:
 
 async def _guess_via_azure(github_token: str, sentence: str) -> str:
     """Call GitHub Models via azure-core credential + httpx transport (intercepted by coolhand)."""
-    print("[AZURE HTTPX] Making inference call via models.inference.ai.azure.com")
+    print("[AZURE HTTPX] Making inference call via models.github.ai")
     cred = AzureKeyCredential(github_token)
     messages = [
         SystemMessage(content=SYSTEM_PROMPT),
@@ -186,10 +186,10 @@ async def _guess_via_azure(github_token: str, sentence: str) -> str:
     async with httpx.AsyncClient() as client:
         try:
             resp = await client.post(
-                "https://models.inference.ai.azure.com/chat/completions",
+                "https://models.github.ai/inference/chat/completions",
                 headers={"Authorization": f"Bearer {cred.key}"},
                 json={
-                    "model": "gpt-4o-mini",
+                    "model": "openai/gpt-4o-mini",
                     "messages": [m.as_dict() for m in messages],
                     "temperature": 0.9,
                     "max_tokens": 200,
@@ -244,6 +244,7 @@ async def _guess_via_copilot(github_token: str, sentence: str) -> str:
         ) as client:
             async with await client.create_session(
                 on_permission_request=PermissionHandler.approve_all,
+                model="auto",
                 system_message=SystemMessageReplaceConfig(
                     mode="replace",
                     content=SYSTEM_PROMPT,

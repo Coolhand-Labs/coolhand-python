@@ -81,6 +81,8 @@ python -m dramatiq tasks
 
 > **Note:** Coolhand reads `COOLHAND_API_KEY` from the environment at import time. Make sure this variable is set in your worker process environment (e.g. via your process manager, Kubernetes secret, or `.env` file).
 
+> **Note:** In a worker process that has no prior instance, `CoolhandDramatiqMiddleware` constructs a bare `Coolhand()` with no arguments — it only picks up `COOLHAND_*` environment variables, not config passed as constructor kwargs (`api_key=`, `intercept_addresses=`, `exclude_api_patterns=`, `base_url=`) in your main process. If you rely on kwarg-based config, configure it via the matching environment variables for Dramatiq deployments, or the worker process will silently fall back to defaults.
+
 ---
 
 ### Gap 2 — Per-task Session Correlation

@@ -42,6 +42,21 @@ Never invoke `pytest`, `ruff`, or `mypy` directly — they may resolve to a diff
 
 Pinned to 3.12 via `.python-version`. uv picks this up automatically.
 
+## Changelog and versioning
+
+Do not add `CHANGELOG.md` entries or bump the version in `pyproject.toml`
+or `src/coolhand/version.py` on feature/fix branches or in PRs. The
+`/prep-release` skill is the sole owner of all three — it writes
+changelog entries for the PRs actually shipping in a release and bumps
+the version once, at release time, keeping `pyproject.toml`,
+`src/coolhand/version.py`, and `uv.lock`'s self-entry in sync.
+
+Per-PR changelog edits create merge conflicts across concurrent branches
+for no benefit, since the entries get rewritten from the final,
+user-approved set of merged PRs anyway. Leave `CHANGELOG.md`,
+`pyproject.toml`'s `version`, and `src/coolhand/version.py` alone in your
+PR.
+
 ## README and docs philosophy
 
 The README is a landing page — install, quick start, what it supports, where to go next. Keep it scannable. When in doubt, link rather than expand.

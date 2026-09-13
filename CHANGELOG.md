@@ -4,6 +4,15 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-09-13
+
+### Added
+- **ElevenLabs interception** — `DEFAULT_INTERCEPT_ADDRESSES` now includes `api.elevenlabs.io`, so ElevenLabs API calls (e.g. text-to-speech) are captured automatically without any configuration change. Brings the Python SDK to parity with coolhand-ruby, which has included this address for some time. (#38)
+- **`coolhand.integrations.dramatiq.CoolhandDramatiqMiddleware`** — a Dramatiq middleware that activates Coolhand monitoring in every worker process via the `after_process_boot` lifecycle hook, closing the "process-based workers" gap documented in [docs/dramatiq.md](./docs/dramatiq.md): workers started with a fresh interpreter (`python -m dramatiq myapp`) previously began without the httpx patch applied. `dramatiq` remains a soft dependency — importing the middleware without it installed raises `ImportError` with an install hint. (#60)
+
+### Fixed
+- **Binary response bodies (audio/video/image) are no longer captured as raw bytes.** Responses with an `audio/*`, `video/*`, `image/*`, or `application/octet-stream` content type — now reachable via the new ElevenLabs interception above, among others — are logged with the body replaced by the placeholder string `"[binary]"` instead of the raw content, avoiding large non-text payloads being sent to Coolhand. (#38)
+
 ## [0.6.0] - 2026-09-08
 
 ### Added

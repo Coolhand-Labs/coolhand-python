@@ -16,6 +16,7 @@ Patches `httpx.Client.send` and `httpx.AsyncClient.send` at the class level. Cov
 - **Cloudflare AI Gateway** (`gateway.ai.cloudflare.com`)
 - **OpenRouter** (`openrouter.ai`)
 - **OpenCode** (`opencode.ai`)
+- **ElevenLabs** (`api.elevenlabs.io`)
 - **pydantic-ai** (via its underlying provider SDK)
 - Any other library that makes HTTP requests using httpx
 
@@ -53,8 +54,9 @@ The intercept allow-list is a list of substrings matched against the full reques
 
 ```python
 from coolhand.httpx_interceptor import DEFAULT_INTERCEPT_ADDRESSES
-# ['api.openai.com', 'api.anthropic.com', 'generativelanguage.googleapis.com',
-#  'aiplatform.googleapis.com', 'gateway.ai.cloudflare.com', 'models.github.ai',
+# ['api.openai.com', 'api.anthropic.com', 'api.elevenlabs.io',
+#  'generativelanguage.googleapis.com', 'aiplatform.googleapis.com',
+#  'gateway.ai.cloudflare.com', 'models.github.ai',
 #  'models.inference.ai.azure.com', 'openrouter.ai', 'opencode.ai',
 #  'api.opencode.ai', ':generateContent', ':streamGenerateContent',
 #  ':predict', ':streamRawPredict']
@@ -71,6 +73,12 @@ Streaming responses (SSE / `text/event-stream` and NDJSON) are captured differen
 - The patched async send wraps the response's async iterator methods (`aiter_bytes`, `aiter_lines`, `aiter_text`, `aiter_raw`) to accumulate chunks as they stream past.
 - Capture and submission happen when the iterator is exhausted — after your code has consumed the full stream.
 - The captured body is the complete concatenated stream content, with `is_streaming: true` in the logged metadata.
+
+---
+
+## Binary Content
+
+Responses with an `audio/*`, `video/*`, `image/*`, or `application/octet-stream` content type (e.g. ElevenLabs text-to-speech, image generation endpoints) are captured with the body replaced by the placeholder string `"[binary]"` rather than the raw bytes — avoiding sending large, non-text payloads to Coolhand. `is_streaming`-style metadata is unaffected; only the body content differs.
 
 ---
 

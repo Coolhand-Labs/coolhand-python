@@ -13,8 +13,9 @@ pydantic-ai (AnthropicProvider): WORKS — pydantic-ai uses httpx internally;
   the class-level patch intercepts its calls just like any other httpx usage.
 
 Process workers (Redis/RabbitMQ with fork model): Fixed via
-  CoolhandDramatiqMiddleware (coolhand.integrations.dramatiq), which calls
-  coolhand.start_monitoring() in the after_process_boot hook.
+  CoolhandDramatiqMiddleware (coolhand.integrations.dramatiq), which creates,
+  replaces, or re-patches the Coolhand instance as needed in the
+  after_process_boot hook.
 
 No task-to-LLM correlation: Coolhand has no mechanism to link a Dramatiq
   message ID to the LLM interactions it triggers. Session IDs are global,
@@ -346,7 +347,8 @@ class TestKnownLimitations:
         forking is out of scope here.
 
         Fix: use CoolhandDramatiqMiddleware (coolhand.integrations.dramatiq),
-        which calls coolhand.start_monitoring() in after_process_boot.
+        which creates, replaces, or re-patches the instance as needed in
+        after_process_boot.
         """
         # The patch lives in the parent process's memory. After fork(), the
         # child has a copy of that memory, but httpx.AsyncClient.send in the
@@ -373,10 +375,346 @@ class TestCoolhandDramatiqMiddleware:
         with unittest.mock.patch("coolhand.get_instance", return_value=None):
             with unittest.mock.patch("coolhand.Coolhand") as mock_coolhand_cls:
                 middleware.after_process_boot(broker)
-                mock_coolhand_cls.assert_called_once()
+                mock_coolhand_cls.assert_called_once_with(None)
 
         # suppress unused import warning
         _ = coolhand
+
+    def test_after_process_boot_with_no_instance_propagates_kwargs(self) -> None:
+        """Config passed to the middleware constructor propagates to the
+        Coolhand instance created in a fresh spawn worker (issue #118)."""
+        import unittest.mock
+
+        import coolhand
+        from coolhand.integrations.dramatiq import CoolhandDramatiqMiddleware
+
+        middleware = CoolhandDramatiqMiddleware(
+            api_key="test-key",
+            intercept_addresses=["custom-llm-gateway.internal"],
+        )
+        broker = unittest.mock.MagicMock()
+
+        with unittest.mock.patch("coolhand.get_instance", return_value=None):
+            with unittest.mock.patch("coolhand.Coolhand") as mock_coolhand_cls:
+                middleware.after_process_boot(broker)
+                mock_coolhand_cls.assert_called_once_with(
+                    None,
+                    api_key="test-key",
+                    intercept_addresses=["custom-llm-gateway.internal"],
+                )
+
+        _ = coolhand
+
+    def test_after_process_boot_with_no_instance_propagates_positional_config(
+        self,
+    ) -> None:
+        """The positional `config` dict form propagates like `Coolhand(config)`
+        does, and kwargs take precedence over overlapping config keys."""
+        import unittest.mock
+
+        import coolhand
+        from coolhand.integrations.dramatiq import CoolhandDramatiqMiddleware
+
+        middleware = CoolhandDramatiqMiddleware(
+            {"api_key": "config-key", "base_url": "https://example.test"},
+            api_key="kwarg-key",
+        )
+        broker = unittest.mock.MagicMock()
+
+        with unittest.mock.patch("coolhand.get_instance", return_value=None):
+            with unittest.mock.patch("coolhand.Coolhand") as mock_coolhand_cls:
+                middleware.after_process_boot(broker)
+                mock_coolhand_cls.assert_called_once_with(
+                    {"api_key": "config-key", "base_url": "https://example.test"},
+                    api_key="kwarg-key",
+                )
+
+        _ = coolhand
+
+    def test_config_mutated_after_construction_does_not_affect_middleware(
+        self,
+    ) -> None:
+        """The middleware snapshots `config` at construction time. Mutating
+        the caller's dict afterward must not change what gets applied to
+        `Coolhand(...)` or what `_matches_requested_config` compares
+        against — otherwise the two could silently disagree, and a value
+        that becomes invalid after construction (e.g. a bad `base_url`)
+        would bypass the eager validation in `__init__` entirely."""
+        import unittest.mock
+
+        import coolhand
+        from coolhand.integrations.dramatiq import CoolhandDramatiqMiddleware
+
+        original_config = {"api_key": "original-key"}
+        middleware = CoolhandDramatiqMiddleware(original_config)
+        original_config["api_key"] = "mutated-key"
+        original_config["base_url"] = "ftp://not-a-valid-scheme"
+
+        broker = unittest.mock.MagicMock()
+
+        with unittest.mock.patch("coolhand.get_instance", return_value=None):
+            with unittest.mock.patch("coolhand.Coolhand") as mock_coolhand_cls:
+                middleware.after_process_boot(broker)
+                mock_coolhand_cls.assert_called_once_with({"api_key": "original-key"})
+
+        _ = coolhand
+
+    def test_after_process_boot_replaces_mismatched_auto_initialized_instance(
+        self,
+    ) -> None:
+        """`coolhand` auto-initializes an instance from environment variables
+        only on import, which happens before this middleware's config is
+        applied in a freshly spawned worker. When that auto-initialized
+        instance's config doesn't match what this middleware was constructed
+        with, booting must construct a replacement — built before the stale
+        instance's atexit shutdown hook is unregistered, so a construction
+        failure leaves the existing instance intact — otherwise the
+        requested config silently never takes effect (issue #118)."""
+        import unittest.mock
+
+        import coolhand
+        from coolhand.integrations.dramatiq import CoolhandDramatiqMiddleware
+
+        middleware = CoolhandDramatiqMiddleware(
+            api_key="test-key",
+            intercept_addresses=["custom-llm-gateway.internal"],
+        )
+        broker = unittest.mock.MagicMock()
+        stale_instance = unittest.mock.MagicMock()
+        stale_instance.config = {"api_key": None, "intercept_addresses": None}
+
+        manager = unittest.mock.Mock()
+        with unittest.mock.patch("coolhand.get_instance", return_value=stale_instance):
+            with unittest.mock.patch("coolhand.Coolhand") as mock_coolhand_cls:
+                with unittest.mock.patch("atexit.unregister") as mock_unregister:
+                    manager.attach_mock(mock_coolhand_cls, "Coolhand")
+                    manager.attach_mock(mock_unregister, "unregister")
+
+                    middleware.after_process_boot(broker)
+
+                    stale_instance.shutdown.assert_not_called()
+                    mock_coolhand_cls.assert_called_once_with(
+                        None,
+                        api_key="test-key",
+                        intercept_addresses=["custom-llm-gateway.internal"],
+                    )
+                    mock_unregister.assert_called_once_with(stale_instance.shutdown)
+                    # Construction must precede retiring the stale instance.
+                    assert manager.mock_calls == [
+                        unittest.mock.call.Coolhand(
+                            None,
+                            api_key="test-key",
+                            intercept_addresses=["custom-llm-gateway.internal"],
+                        ),
+                        unittest.mock.call.unregister(stale_instance.shutdown),
+                    ]
+
+        _ = coolhand
+
+    def test_middleware_construction_rejects_invalid_base_url(self) -> None:
+        """`base_url` is validated at middleware-construction time (e.g. when
+        the broker is set up), not only later inside after_process_boot —
+        so a typo fails loudly right away instead of only once a worker
+        boots."""
+        from coolhand.integrations.dramatiq import CoolhandDramatiqMiddleware
+
+        with pytest.raises(ValueError):
+            CoolhandDramatiqMiddleware(base_url="ftp://not-a-valid-scheme")
+
+    def test_after_process_boot_construction_failure_leaves_existing_instance_intact(
+        self,
+    ) -> None:
+        """If constructing the replacement instance fails for any reason, the
+        existing (stale) instance must be left running rather than retired
+        first and lost — a worker should never end up with no Coolhand
+        instance at all just because a replacement attempt failed. The
+        failure is logged and swallowed rather than propagated, consistent
+        with `coolhand`'s own auto-init: a monitoring integration must not
+        be able to crash the worker process it's observing."""
+        import unittest.mock
+
+        import coolhand
+        from coolhand.integrations.dramatiq import CoolhandDramatiqMiddleware
+
+        middleware = CoolhandDramatiqMiddleware(api_key="test-key")
+        broker = unittest.mock.MagicMock()
+        stale_instance = unittest.mock.MagicMock()
+        stale_instance.config = {"api_key": None}
+
+        with unittest.mock.patch("coolhand.get_instance", return_value=stale_instance):
+            with unittest.mock.patch(
+                "coolhand.Coolhand", side_effect=RuntimeError("boom")
+            ):
+                with unittest.mock.patch("atexit.unregister") as mock_unregister:
+                    middleware.after_process_boot(broker)  # must not raise
+                    stale_instance.shutdown.assert_not_called()
+                    mock_unregister.assert_not_called()
+
+        _ = coolhand
+
+    def test_after_process_boot_matches_on_kwarg_not_config_value(self) -> None:
+        """kwargs take precedence over overlapping `config` dict keys when
+        deciding whether the existing instance already matches — not just
+        when constructing the replacement (see
+        test_after_process_boot_with_no_instance_propagates_positional_config).
+        An instance whose config reflects the `config` dict's value, but not
+        the overriding kwarg's, must still be treated as a mismatch and
+        replaced."""
+        import unittest.mock
+
+        import coolhand
+        from coolhand.integrations.dramatiq import CoolhandDramatiqMiddleware
+
+        middleware = CoolhandDramatiqMiddleware(
+            {"api_key": "config-key"}, api_key="kwarg-key"
+        )
+        broker = unittest.mock.MagicMock()
+        stale_instance = unittest.mock.MagicMock()
+        stale_instance.config = {"api_key": "config-key"}  # matches config, not kwarg
+
+        with unittest.mock.patch("coolhand.get_instance", return_value=stale_instance):
+            with unittest.mock.patch("coolhand.Coolhand") as mock_coolhand_cls:
+                with unittest.mock.patch("atexit.unregister"):
+                    middleware.after_process_boot(broker)
+                    mock_coolhand_cls.assert_called_once_with(
+                        {"api_key": "config-key"}, api_key="kwarg-key"
+                    )
+
+        _ = coolhand
+
+    def test_after_process_boot_keeps_matching_inherited_instance(self) -> None:
+        """When the existing instance already reflects this middleware's
+        config (fork-based worker that inherited a correctly configured
+        instance from the parent process), booting must not replace it —
+        just re-apply the httpx patch, preserving the inherited session."""
+        import unittest.mock
+
+        import coolhand
+        from coolhand.integrations.dramatiq import CoolhandDramatiqMiddleware
+
+        middleware = CoolhandDramatiqMiddleware(
+            api_key="test-key",
+            intercept_addresses=["custom-llm-gateway.internal"],
+        )
+        broker = unittest.mock.MagicMock()
+        matching_instance = unittest.mock.MagicMock()
+        matching_instance.config = {
+            "api_key": "test-key",
+            "intercept_addresses": ["custom-llm-gateway.internal"],
+        }
+
+        with unittest.mock.patch(
+            "coolhand.get_instance", return_value=matching_instance
+        ):
+            with unittest.mock.patch("coolhand.Coolhand") as mock_coolhand_cls:
+                with unittest.mock.patch("coolhand.start_monitoring") as mock_start:
+                    middleware.after_process_boot(broker)
+                    matching_instance.shutdown.assert_not_called()
+                    mock_coolhand_cls.assert_not_called()
+                    mock_start.assert_called_once()
+
+        _ = coolhand
+
+    def test_after_process_boot_keeps_instance_matching_normalized_base_url(
+        self,
+    ) -> None:
+        """A `base_url` with a trailing slash must still match an instance
+        whose stored `base_url` was normalized (slash stripped) on
+        construction — otherwise every boot would needlessly replace an
+        already-correctly-configured instance."""
+        import unittest.mock
+
+        import coolhand
+        from coolhand.integrations.dramatiq import CoolhandDramatiqMiddleware
+
+        middleware = CoolhandDramatiqMiddleware(base_url="https://my.host/")
+        broker = unittest.mock.MagicMock()
+        matching_instance = unittest.mock.MagicMock()
+        matching_instance.config = {"base_url": "https://my.host"}
+
+        with unittest.mock.patch(
+            "coolhand.get_instance", return_value=matching_instance
+        ):
+            with unittest.mock.patch("coolhand.Coolhand") as mock_coolhand_cls:
+                with unittest.mock.patch("coolhand.start_monitoring") as mock_start:
+                    middleware.after_process_boot(broker)
+                    matching_instance.shutdown.assert_not_called()
+                    mock_coolhand_cls.assert_not_called()
+                    mock_start.assert_called_once()
+
+        _ = coolhand
+
+    def test_after_process_boot_replaces_on_partial_mismatch(self) -> None:
+        """If even one requested config key doesn't match, the instance is
+        replaced — matching on some keys isn't enough."""
+        import unittest.mock
+
+        import coolhand
+        from coolhand.integrations.dramatiq import CoolhandDramatiqMiddleware
+
+        middleware = CoolhandDramatiqMiddleware(
+            api_key="test-key",
+            intercept_addresses=["custom-llm-gateway.internal"],
+        )
+        broker = unittest.mock.MagicMock()
+        stale_instance = unittest.mock.MagicMock()
+        stale_instance.config = {
+            "api_key": "test-key",
+            "intercept_addresses": None,  # only this one is stale
+        }
+
+        with unittest.mock.patch("coolhand.get_instance", return_value=stale_instance):
+            with unittest.mock.patch("coolhand.Coolhand") as mock_coolhand_cls:
+                with unittest.mock.patch("atexit.unregister") as mock_unregister:
+                    middleware.after_process_boot(broker)
+                    stale_instance.shutdown.assert_not_called()
+                    mock_unregister.assert_called_once_with(stale_instance.shutdown)
+                mock_coolhand_cls.assert_called_once_with(
+                    None,
+                    api_key="test-key",
+                    intercept_addresses=["custom-llm-gateway.internal"],
+                )
+
+        _ = coolhand
+
+    def test_after_process_boot_end_to_end_applies_config(
+        self, reset_global_instance
+    ) -> None:
+        """End-to-end: a real auto-initialized instance (standing in for what
+        a freshly spawned worker gets from `import coolhand`) is replaced,
+        and the middleware's config actually takes effect on the resulting
+        global state and httpx interceptor — not just on a mocked
+        `coolhand.Coolhand` call (issue #118)."""
+        import unittest.mock
+
+        import coolhand
+        from coolhand import httpx_interceptor
+        from coolhand.integrations.dramatiq import CoolhandDramatiqMiddleware
+
+        with (
+            unittest.mock.patch("coolhand.httpx_interceptor.patch"),
+            unittest.mock.patch("coolhand.copilot_interceptor.patch"),
+        ):
+            coolhand.Coolhand()  # stand-in for the spawn-worker auto-init
+
+            middleware = CoolhandDramatiqMiddleware(
+                api_key="test-key",
+                intercept_addresses=["custom-llm-gateway.internal"],
+            )
+            broker = unittest.mock.MagicMock()
+            middleware.after_process_boot(broker)
+
+            instance = coolhand.get_instance()
+            assert instance is not None
+            assert instance.config["api_key"] == "test-key"
+            assert instance.config["intercept_addresses"] == [
+                "custom-llm-gateway.internal"
+            ]
+            assert httpx_interceptor._intercept_addresses == [
+                "custom-llm-gateway.internal"
+            ]
+
+            instance.shutdown()
 
     def test_after_process_boot_with_existing_instance(self) -> None:
         """When an instance already exists (fork worker), booting re-applies

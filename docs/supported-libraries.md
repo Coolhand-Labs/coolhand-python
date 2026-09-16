@@ -24,9 +24,12 @@ Patches `httpx.Client.send` and `httpx.AsyncClient.send` at the class level. Cov
 
 Patches `requests.Session.send`. Only applied if the `requests` package is installed — skipped silently if not. Covers libraries that use `requests` rather than httpx:
 
-- **Azure AI Inference** (`azure-ai-inference`)
-- **Azure OpenAI** via `azure-core`
+- **Azure AI Inference** (`azure-ai-inference`) — Azure AI Foundry Models on `services.ai.azure.com/models` and serverless deployments
+- **Azure OpenAI** via `azure-core` — both the `/openai/deployments/...` and the newer `/openai/v1/...` API paths, on `openai.azure.com` and on Foundry/AI Services resources
+- **Azure Machine Learning** managed online endpoints (`inference.ml.azure.com` / `.us`)
 - Any other library using the `requests` library
+
+> **Sync transport only.** `azure-core`'s *async* pipeline defaults to `AioHttpTransport`, and Coolhand does not patch aiohttp, so calls made through `azure.ai.inference.aio` (or any other async `azure-core` pipeline) are not captured. The `openai` SDK's own `AzureOpenAI` / `AsyncAzureOpenAI` clients are httpx-based and are captured on both the sync and async paths.
 
 ### JSON-RPC patching
 
@@ -50,17 +53,44 @@ Directly patches `JsonRpcClient.request` in the GitHub Copilot SDK. Used because
 
 The intercept allow-list is a list of substrings matched against the full request URL. A request is captured if the URL contains any entry in the list **and** does not contain any entry in the exclude deny-list.
 
-**Default allow-list** (domains and path fragments):
+**Default allow-list** (domains and path fragments). The list in the source is authoritative — print it rather than relying on a copy:
 
 ```python
-from coolhand.httpx_interceptor import DEFAULT_INTERCEPT_ADDRESSES
-# ['api.openai.com', 'api.anthropic.com', 'api.elevenlabs.io',
-#  'generativelanguage.googleapis.com', 'aiplatform.googleapis.com',
-#  'gateway.ai.cloudflare.com', 'models.github.ai',
-#  'models.inference.ai.azure.com', 'openrouter.ai', 'opencode.ai',
-#  'api.opencode.ai', ':generateContent', ':streamGenerateContent',
-#  ':predict', ':streamRawPredict']
+from coolhand import DEFAULT_INTERCEPT_ADDRESSES
+print("\n".join(DEFAULT_INTERCEPT_ADDRESSES))
 ```
+
+It covers:
+
+- **OpenAI** — `api.openai.com`
+- **Anthropic** — `api.anthropic.com`
+- **Google Gemini** — `generativelanguage.googleapis.com`, plus the `:generateContent` / `:streamGenerateContent` method fragments
+- **Vertex AI** — `aiplatform.googleapis.com`, plus the `:predict` / `:streamRawPredict` method fragments
+- **Azure** — Azure OpenAI (`openai.azure.com` / `.us` / `.cn`), Azure AI Foundry and AI Services (`services.ai.azure.com` / `.us`, `cognitiveservices.azure.com` / `.us` / `.cn`), serverless deployments (`inference.ai.azure.com`, `models.ai.azure.com`) and Azure Machine Learning managed online endpoints (`inference.ml.azure.com` / `.us`)
+- **GitHub Models** — `models.github.ai` and the legacy `models.inference.ai.azure.com`
+- **Cloudflare AI Gateway** — `gateway.ai.cloudflare.com`
+- **OpenRouter** — `openrouter.ai`
+- **OpenCode** — `opencode.ai`, `api.opencode.ai`
+- **ElevenLabs** — `api.elevenlabs.io`
+
+The Azure AI Services and Foundry hosts are multi-service: the same hostname serves Speech, Vision, Language and Content Safety alongside model inference. Those entries are therefore anchored to the inference paths (`/openai/`, `/models/`) so non-LLM traffic on the same host is not captured. The Foundry portal domain `ai.azure.com` is deliberately not in the list.
+
+Two Azure hosts serve non-LLM workloads and still could not be path-anchored: `inference.ml.azure.com` and its Azure Government twin `inference.ml.azure.us` (Azure Machine Learning managed online endpoints). Those endpoints all score at `/score` regardless of what model is deployed behind them, so no path distinguishes an LLM deployment from a tabular or vision one. Dedicated hosts such as `openai.azure.com` need no anchor because they only ever serve model inference. If you run non-LLM models on managed online endpoints and don't want them captured, extend the deny-list (setting `exclude_api_patterns` *replaces* the defaults, so add to them rather than overwriting):
+
+```python
+from coolhand import Coolhand, DEFAULT_EXCLUDE_API_PATTERNS
+
+Coolhand(
+    exclude_api_patterns=DEFAULT_EXCLUDE_API_PATTERNS
+    + ['inference.ml.azure.com', 'inference.ml.azure.us']
+)
+```
+
+See [Excluding API Patterns](./configuration.md#excluding-api-patterns).
+
+Azure OpenAI's [On Your Data](https://learn.microsoft.com/azure/ai-foundry/openai/concepts/use-your-data) feature carries datastore credentials in the request body (`data_sources[*].parameters.authentication.key`) rather than in a header. Those are redacted before capture, scoped to the `data_sources` config subtree so message content is logged verbatim.
+
+Non-inference management traffic is filtered by the deny-list rather than the allow-list. Azure OpenAI's `/openai/files`, `/openai/batches`, `/openai/fine_tuning` and `/openai/models` paths are excluded by default, as are their v1 API twins (`/openai/v1/...`) and the equivalent Vertex AI training, dataset and pipeline paths. Fine-tuning file uploads and `client.models.list()` calls therefore aren't captured.
 
 To override: pass `intercept_addresses=[...]` to `Coolhand()`. See [Advanced Configuration](./configuration.md#custom-intercept-addresses).
 

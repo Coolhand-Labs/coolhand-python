@@ -1,5 +1,6 @@
 """Tests for coolhand.client module."""
 
+import json
 import threading
 
 import pytest
@@ -10,6 +11,7 @@ from coolhand.client import (
     _get_default_config,
     _mask_value,
     _parse_body,
+    _sanitize_body,
     _sanitize_headers,
     _sanitize_url,
     _to_iso8601,
@@ -49,6 +51,18 @@ class TestSanitizeHeaders:
         result = _sanitize_headers(headers)
         assert result["Authorization"] != "Bearer sk-secret-key-12345678"
         assert "****" in result["Authorization"]
+
+    def test_masks_azure_subscription_key_header(self):
+        """Azure AI Services' Ocp-Apim-Subscription-Key is masked.
+
+        "api-key" is not a substring of "ocp-apim-subscription-key", so this
+        needs its own entry rather than riding on the generic one.
+        """
+        secret = "abcd1234567890secret"
+        for header in ("Ocp-Apim-Subscription-Key", "subscription-key"):
+            result = _sanitize_headers({header: secret})
+            assert result[header] != secret
+            assert "****" in result[header]
 
     def test_masks_api_key_header(self):
         """API key headers are masked."""
@@ -149,6 +163,142 @@ class TestSanitizeUrl:
             result = _sanitize_url(url)
         assert "secret123" not in result
         assert result == "https://api.example.com/v1"
+
+
+class TestSanitizeBody:
+    """Tests for _sanitize_body — Azure OpenAI "On Your Data" credentials."""
+
+    def test_redacts_data_source_authentication_key(self):
+        """The Azure AI Search key in data_sources is redacted."""
+        body = {
+            "messages": [{"role": "user", "content": "hi"}],
+            "data_sources": [
+                {
+                    "type": "azure_search",
+                    "parameters": {
+                        "endpoint": "https://x.search.windows.net",
+                        "index_name": "idx",
+                        "authentication": {
+                            "type": "api_key",
+                            "key": "super-secret-search-key",
+                        },
+                    },
+                }
+            ],
+        }
+        result = _sanitize_body(body)
+
+        auth = result["data_sources"][0]["parameters"]["authentication"]
+        assert auth["key"] == "[REDACTED]"
+        assert "super-secret-search-key" not in json.dumps(result)
+        # Non-secret config and message content survive intact.
+        assert result["data_sources"][0]["parameters"]["index_name"] == "idx"
+        assert result["messages"] == [{"role": "user", "content": "hi"}]
+
+    def test_redacts_legacy_data_sources_and_embedding_key(self):
+        """The legacy camelCase /extensions shape is redacted too."""
+        body = {
+            "dataSources": [
+                {
+                    "type": "AzureCognitiveSearch",
+                    "parameters": {
+                        "endpoint": "https://x.search.windows.net",
+                        "key": "legacy-admin-key",
+                        "embeddingKey": "legacy-embedding-key",
+                    },
+                }
+            ]
+        }
+        result = _sanitize_body(body)
+
+        params = result["dataSources"][0]["parameters"]
+        assert params["key"] == "[REDACTED]"
+        assert params["embeddingKey"] == "[REDACTED]"
+        assert params["endpoint"] == "https://x.search.windows.net"
+
+    def test_redacts_embedding_dependency_credentials(self):
+        """Nested embedding_dependency credentials are reached by the recursion."""
+        body = {
+            "data_sources": [
+                {
+                    "parameters": {
+                        "embedding_dependency": {
+                            "type": "endpoint",
+                            "authentication": {"key": "embedding-secret"},
+                        },
+                        "authentication": {"connection_string": "conn-secret"},
+                    }
+                }
+            ]
+        }
+        result = _sanitize_body(body)
+
+        assert "embedding-secret" not in json.dumps(result)
+        assert "conn-secret" not in json.dumps(result)
+
+    def test_leaves_ordinary_bodies_untouched(self):
+        """A body with no data-source config is returned unchanged."""
+        body = {
+            "model": "gpt-4o",
+            "messages": [{"role": "user", "content": "what is my api key?"}],
+            "tools": [{"function": {"parameters": {"properties": {"key": {}}}}}],
+        }
+        assert _sanitize_body(body) is body
+
+    def test_non_dict_bodies_pass_through(self):
+        """Strings and None are not dicts and pass through unchanged."""
+        assert _sanitize_body("plain text") == "plain text"
+        assert _sanitize_body(None) is None
+
+    def test_redacts_elasticsearch_encoded_api_key(self):
+        """Key names are matched as substrings, so new auth shapes are covered."""
+        body = {
+            "data_sources": [
+                {
+                    "type": "elasticsearch",
+                    "parameters": {
+                        "authentication": {
+                            "type": "encoded_api_key",
+                            "encoded_api_key": "super-secret-es-key",
+                        }
+                    },
+                }
+            ]
+        }
+        result = _sanitize_body(body)
+
+        assert "super-secret-es-key" not in json.dumps(result)
+
+    def test_redacts_camelcase_connection_string(self):
+        """Separator-insensitive matching covers the legacy camelCase spelling."""
+        body = {
+            "dataSources": [
+                {
+                    "type": "AzureCosmosDB",
+                    "parameters": {
+                        "connectionString": (
+                            "AccountEndpoint=https://x;AccountKey=super-secret;"
+                        ),
+                        "databaseName": "db",
+                    },
+                }
+            ]
+        }
+        result = _sanitize_body(body)
+
+        params = result["dataSources"][0]["parameters"]
+        assert params["connectionString"] == "[REDACTED]"
+        assert "super-secret" not in json.dumps(result)
+        assert params["databaseName"] == "db"
+
+    def test_fails_closed_when_redaction_raises(self):
+        """If redaction breaks, drop the config rather than forward a secret."""
+        # A non-string key makes the recursive walk raise on ``k.lower()``.
+        body = {"data_sources": {1: "super-secret"}}
+        result = _sanitize_body(body)
+
+        assert result["data_sources"] == "[REDACTED]"
+        assert "super-secret" not in json.dumps(result)
 
 
 class TestParseBody:
@@ -286,6 +436,38 @@ class TestCoolhandClient:
         assert "duration_ms" in interaction
         assert "completed_at" in interaction
         assert "is_streaming" in interaction
+
+    def test_log_interaction_redacts_data_source_credentials(
+        self, mock_response_data, reset_global_instance
+    ):
+        """log_interaction routes bodies through _sanitize_body, not just parsing."""
+        client = CoolhandClient(auto_submit=False)
+        request = {
+            "method": "POST",
+            "url": "https://my-resource.openai.azure.com/openai/v1/chat/completions",
+            "headers": {},
+            "body": json.dumps(
+                {
+                    "messages": [{"role": "user", "content": "hi"}],
+                    "data_sources": [
+                        {
+                            "parameters": {
+                                "authentication": {"key": "super-secret-search-key"}
+                            }
+                        }
+                    ],
+                }
+            ),
+            "timestamp": 1700000000.0,
+        }
+        client.log_interaction(request, mock_response_data)
+
+        interaction = client._queue[0]
+        assert "super-secret-search-key" not in json.dumps(interaction)
+        auth = interaction["request_body"]["data_sources"][0]["parameters"][
+            "authentication"
+        ]
+        assert auth["key"] == "[REDACTED]"
 
     def test_log_interaction_generates_uuid(
         self, mock_request_data, mock_response_data, reset_global_instance

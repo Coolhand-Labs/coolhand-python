@@ -17,7 +17,7 @@ coolhand_client = Coolhand(
 )
 ```
 
-Any request whose URL contains one of the listed substrings is passed through without logging. The default list (`DEFAULT_EXCLUDE_API_PATTERNS`) excludes non-inference Vertex AI endpoints such as `/batchPredictionJobs/`; setting `exclude_api_patterns` **replaces** the default entirely.
+Any request whose URL contains one of the listed substrings is passed through without logging. The default list (`DEFAULT_EXCLUDE_API_PATTERNS`) excludes non-inference management endpoints for Vertex AI and Azure OpenAI, such as `/batchPredictionJobs/` and `/openai/fine_tuning`; setting `exclude_api_patterns` **replaces** the default entirely.
 
 To extend the defaults rather than replace them:
 
@@ -30,7 +30,7 @@ coolhand_client = Coolhand(
 )
 ```
 
-### Default excluded patterns (Vertex AI non-inference endpoints)
+### Default excluded patterns (Vertex AI and Azure OpenAI non-inference endpoints)
 
 ```python
 from coolhand import DEFAULT_EXCLUDE_API_PATTERNS
@@ -38,7 +38,7 @@ print(DEFAULT_EXCLUDE_API_PATTERNS)
 # ['/batchPredictionJobs/', '/datasets/', '/trainingPipelines/', ...]
 ```
 
-These are excluded because they're Vertex AI management operations, not LLM inference calls.
+These are excluded because they're management operations — Vertex AI training, dataset and pipeline endpoints, and Azure OpenAI file, batch, fine-tuning and model-listing endpoints — not LLM inference calls.
 
 ---
 
@@ -82,12 +82,25 @@ from coolhand import Coolhand
 
 coolhand_client = Coolhand(
     api_key='your-api-key',
-    intercept_addresses=[
-        'my-llm-proxy.internal',
-        'api.openai.com',           # include the defaults you still want
-        'api.anthropic.com',
-    ],
+    intercept_addresses=['my-llm-proxy.internal'],
 )
 ```
 
-Setting `intercept_addresses` **replaces** the default list entirely, so include any default hosts you still need.
+Setting `intercept_addresses` **replaces** the default list entirely. To keep the built-in hosts and add to them:
+
+```python
+from coolhand import Coolhand, DEFAULT_INTERCEPT_ADDRESSES
+
+coolhand_client = Coolhand(
+    api_key='your-api-key',
+    intercept_addresses=DEFAULT_INTERCEPT_ADDRESSES + ['my-llm-proxy.internal'],
+)
+```
+
+Passing an empty list disables capture entirely — it does **not** fall back to the defaults:
+
+```python
+Coolhand(api_key='your-api-key', intercept_addresses=[])  # captures nothing
+```
+
+Omit `intercept_addresses` altogether to get the built-in list. Entries are matched as plain substrings against the full request URL, so a path fragment such as `'my-host.example.com/v1/chat'` works as well as a bare hostname.

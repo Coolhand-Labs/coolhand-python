@@ -157,7 +157,7 @@ The monitor captures:
 - **Timing**: Request timestamp, response timestamp, duration
 - **LLM-Specific**: Model used, token counts, streaming status
 
-Headers containing API keys are automatically sanitized for security.
+Headers containing API keys, sensitive URL query parameters, and datastore credentials embedded in request bodies (such as Azure OpenAI On Your Data) are automatically redacted. See [Supported Libraries](./docs/supported-libraries.md) for the exact scope.
 
 ## Supported Libraries
 
@@ -166,7 +166,9 @@ Coolhand works with any library that uses httpx, requests, or the GitHub Copilot
 - OpenAI Python SDK
 - Anthropic Python SDK
 - Google Gemini (`google-generativeai` / `google-genai`)
-- Azure AI Inference (`azure-ai-inference`)
+- Azure OpenAI (including Azure Government and Azure China endpoints)
+- Azure AI Foundry / Azure AI Inference (`azure-ai-inference`)
+- Azure Machine Learning managed online endpoints
 - GitHub Models
 - GitHub Copilot SDK
 - Vertex AI

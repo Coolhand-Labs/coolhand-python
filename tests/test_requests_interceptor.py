@@ -166,6 +166,24 @@ class TestRequestsCapture:
         assert isinstance(res_data["body"], str)
         assert error is None
 
+    def test_azure_foundry_url_captured(self):
+        """azure-ai-inference/azure-core ride the requests transport, not httpx."""
+        import requests
+
+        captured = []
+        set_handler(lambda req, res, err: captured.append((req, res, err)))
+        _patch_and_mock_original(_make_response(status_code=200, content=b'{"id":"1"}'))
+
+        url = (
+            "https://my-resource.services.ai.azure.com/models/chat/completions"
+            "?api-version=2024-05-01-preview"
+        )
+        session = requests.Session()
+        session.send(_make_prepared_request(url, body=b'{"messages":[]}'))
+
+        assert len(captured) == 1
+        assert captured[0][0]["url"] == url
+
     def test_openai_url_captured(self):
         import requests
 

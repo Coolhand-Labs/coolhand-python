@@ -18,7 +18,7 @@ from .feedback_service import (
     create_feedback,
     get_feedback_service,
 )
-from .httpx_interceptor import DEFAULT_EXCLUDE_API_PATTERNS
+from .httpx_interceptor import DEFAULT_EXCLUDE_API_PATTERNS, DEFAULT_INTERCEPT_ADDRESSES
 from .template_service import CoolhandAPIError, TemplateService, get_template_service
 from .types import (
     Config,
@@ -60,12 +60,17 @@ class Coolhand(CoolhandClient):
 
     def start_monitoring(self):
         """Start HTTP monitoring."""
-        addresses = self.config.get("intercept_addresses")
-        if addresses:
-            httpx_interceptor.set_intercept_addresses(addresses)
-        exclude_patterns = self.config.get("exclude_api_patterns")
-        if exclude_patterns is not None:
-            httpx_interceptor.set_exclude_api_patterns(exclude_patterns)
+        # Set unconditionally. These are module-level globals shared by every
+        # instance in the process, so an omitted intercept_addresses key must
+        # actively restore the defaults (None) rather than inherit a previous
+        # instance's override. exclude_api_patterns is always present in the
+        # default config, so it is passed through for symmetry.
+        httpx_interceptor.set_intercept_addresses(
+            self.config.get("intercept_addresses")
+        )
+        httpx_interceptor.set_exclude_api_patterns(
+            self.config.get("exclude_api_patterns")
+        )
         httpx_interceptor.set_handler(self.log_interaction)
         httpx_interceptor.patch()
         copilot_interceptor.set_handler(self.log_interaction)
@@ -228,6 +233,7 @@ __all__ = [
     "Coolhand",
     "Config",
     "DEFAULT_EXCLUDE_API_PATTERNS",
+    "DEFAULT_INTERCEPT_ADDRESSES",
     "RequestData",
     "ResponseData",
     "FeedbackData",

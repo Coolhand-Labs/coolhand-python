@@ -71,6 +71,104 @@ class TestIsLlmApi:
             is True
         )
 
+    def test_azure_openai_openai_azure_com(self):
+        """Detects Azure OpenAI resource on openai.azure.com."""
+        url = (
+            "https://my-resource.openai.azure.com/openai/deployments/gpt-4"
+            "/chat/completions?api-version=2024-02-15-preview"
+        )
+        assert _is_llm_api(url) is True
+
+    def test_azure_openai_cognitiveservices_azure_com(self):
+        """Detects Azure OpenAI resource on cognitiveservices.azure.com."""
+        url = (
+            "https://my-resource.cognitiveservices.azure.com/openai/deployments/gpt-4"
+            "/chat/completions?api-version=2024-02-15-preview"
+        )
+        assert _is_llm_api(url) is True
+
+    def test_azure_cognitiveservices_non_openai_not_matched(self):
+        """Non-OpenAI Cognitive Services traffic on the same host is not captured."""
+        url = "https://my-resource.cognitiveservices.azure.com/speechtotext/v3.1/transcriptions"
+        assert _is_llm_api(url) is False
+
+    def test_azure_openai_v1_api_path(self):
+        """Detects the Azure OpenAI v1 API path, not just /openai/deployments."""
+        url = (
+            "https://my-resource.cognitiveservices.azure.com/openai/v1/responses"
+            "?api-version=preview"
+        )
+        assert _is_llm_api(url) is True
+
+    def test_azure_foundry_model_inference(self):
+        """Detects the Foundry model inference API on services.ai.azure.com."""
+        url = (
+            "https://my-resource.services.ai.azure.com/models/chat/completions"
+            "?api-version=2024-05-01-preview"
+        )
+        assert _is_llm_api(url) is True
+
+    def test_azure_model_inference_on_cognitiveservices_host(self):
+        """An AI Services resource is reachable on its cognitiveservices FQDN too."""
+        url = (
+            "https://my-resource.cognitiveservices.azure.com/models/chat/completions"
+            "?api-version=2024-05-01-preview"
+        )
+        assert _is_llm_api(url) is True
+
+    def test_azure_foundry_openai_deployment(self):
+        """Detects Azure OpenAI deployments hosted on a Foundry resource."""
+        url = (
+            "https://my-resource.services.ai.azure.com/openai/deployments/gpt-4o"
+            "/chat/completions?api-version=2024-02-15-preview"
+        )
+        assert _is_llm_api(url) is True
+
+    def test_azure_serverless_inference_endpoint(self):
+        """Detects serverless (MaaS) deployments on inference.ai.azure.com."""
+        url = (
+            "https://mistral-large-abcde.eastus2.inference.ai.azure.com"
+            "/v1/chat/completions"
+        )
+        assert _is_llm_api(url) is True
+
+    def test_azure_serverless_models_endpoint(self):
+        """Detects serverless API deployments on models.ai.azure.com."""
+        url = "https://my-deployment.eastus2.models.ai.azure.com/chat/completions"
+        assert _is_llm_api(url) is True
+
+    def test_azure_ml_managed_online_endpoint(self):
+        """Detects Azure ML managed online endpoints on inference.ml.azure.com."""
+        url = "https://my-endpoint.eastus2.inference.ml.azure.com/score"
+        assert _is_llm_api(url) is True
+
+    def test_azure_openai_us_government_cloud(self):
+        """Detects Azure OpenAI in the US Government cloud (.azure.us)."""
+        url = "https://my-resource.openai.azure.us/openai/v1/chat/completions"
+        assert _is_llm_api(url) is True
+
+    def test_azure_openai_china_cloud(self):
+        """Detects Azure OpenAI in the China / 21Vianet cloud (.azure.cn)."""
+        url = "https://my-resource.openai.azure.cn/openai/v1/chat/completions"
+        assert _is_llm_api(url) is True
+
+    def test_azure_foundry_non_inference_not_matched(self):
+        """Non-inference Foundry traffic on the shared host is not captured."""
+        assert (
+            _is_llm_api("https://my-resource.services.ai.azure.com/speech/recognize")
+            is False
+        )
+        assert (
+            _is_llm_api(
+                "https://my-resource.services.ai.azure.com/contentsafety/text:analyze"
+            )
+            is False
+        )
+
+    def test_azure_foundry_portal_not_matched(self):
+        """The Foundry portal domain itself is not captured."""
+        assert _is_llm_api("https://ai.azure.com/build/overview") is False
+
     def test_non_llm_api(self):
         """Rejects non-LLM API URLs."""
         assert _is_llm_api("https://api.github.com/repos") is False
@@ -207,14 +305,34 @@ class TestCustomInterceptAddresses:
         assert _is_llm_api("https://api.anthropic.com/v1/messages") is False
 
     def test_default_restored_after_reset(self, reset_global_instance):
-        """Resetting _intercept_addresses to None restores defaults."""
-        from coolhand import httpx_interceptor
-
+        """Passing None back to the setter restores the defaults."""
         set_intercept_addresses(["api.custom-llm.com"])
         assert _is_llm_api("https://api.openai.com/v1/chat/completions") is False
 
-        httpx_interceptor._intercept_addresses = None
+        set_intercept_addresses(None)
         assert _is_llm_api("https://api.openai.com/v1/chat/completions") is True
+
+    def test_malformed_list_matches_nothing_and_logs(
+        self, caplog, reset_global_instance
+    ):
+        """A non-str entry can't silently disable matching without a trace.
+
+        ``any()`` short-circuits, so a malformed entry only bites once matching
+        reaches it — put it first to exercise the failure path.
+        """
+        import logging
+
+        set_intercept_addresses([None, "api.openai.com"])  # type: ignore[list-item]
+        with caplog.at_level(logging.DEBUG, logger="coolhand.httpx_interceptor"):
+            assert _is_llm_api("https://api.openai.com/v1/chat/completions") is False
+
+        assert "Failed to match URL against pattern list" in caplog.text
+
+    def test_empty_list_matches_nothing(self, reset_global_instance):
+        """Explicit empty list means capture nothing, not defaults."""
+        set_intercept_addresses([])
+        assert _is_llm_api("https://api.openai.com/v1/chat/completions") is False
+        assert _is_llm_api("https://api.anthropic.com/v1/messages") is False
 
 
 class TestIsStreamingContentType:
@@ -737,10 +855,9 @@ class TestIsExcluded:
         assert _is_excluded(url) is False
 
     def test_uses_default_when_none(self, reset_global_instance):
-        """When _exclude_api_patterns is None, DEFAULT_EXCLUDE_API_PATTERNS is used."""
-        from coolhand import httpx_interceptor
-
-        httpx_interceptor._exclude_api_patterns = None
+        """Passing None back to the setter restores DEFAULT_EXCLUDE_API_PATTERNS."""
+        set_exclude_api_patterns(["/somethingElse/"])
+        set_exclude_api_patterns(None)
         url = (
             "https://aiplatform.googleapis.com/v1/projects/my-project"
             "/locations/us-central1/batchPredictionJobs/123"
@@ -767,6 +884,34 @@ class TestIsExcluded:
         for path in non_llm_paths:
             url = base + path + "123"
             assert _is_excluded(url) is True, f"Expected {path!r} to be excluded"
+
+    def test_default_patterns_exclude_non_inference_azure_openai_paths(
+        self, reset_global_instance
+    ):
+        """Azure OpenAI management paths are excluded, mirroring the Vertex list."""
+        base = "https://my-resource.openai.azure.com"
+        for url in [
+            # Legacy deployments-era paths...
+            f"{base}/openai/files?api-version=2024-10-21",
+            f"{base}/openai/fine_tuning/jobs?api-version=2024-10-21",
+            f"{base}/openai/batches?api-version=2024-10-21",
+            # ...and their v1 API twins, which the legacy patterns do not match.
+            f"{base}/openai/v1/files",
+            f"{base}/openai/v1/fine_tuning/jobs",
+            f"{base}/openai/v1/batches",
+            # Model listing is control plane, not inference.
+            f"{base}/openai/models?api-version=2024-10-21",
+            f"{base}/openai/v1/models",
+        ]:
+            assert _is_excluded(url) is True, f"Expected {url!r} to be excluded"
+
+        # Inference is still captured, on both the dedicated and Foundry hosts.
+        for inference in [
+            f"{base}/openai/v1/chat/completions",
+            "https://my-resource.services.ai.azure.com/models/chat/completions",
+        ]:
+            assert _is_llm_api(inference) is True
+            assert _is_excluded(inference) is False
 
 
 class TestExcludeIntegration:

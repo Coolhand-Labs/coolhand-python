@@ -40,8 +40,33 @@ DEFAULT_INTERCEPT_ADDRESSES = [
     "generativelanguage.googleapis.com",
     "aiplatform.googleapis.com",
     "gateway.ai.cloudflare.com",
+    # GitHub Models
     "models.github.ai",
     "models.inference.ai.azure.com",
+    # Azure OpenAI dedicated hosts (commercial, US Gov, China/21Vianet)
+    "openai.azure.com",
+    "openai.azure.us",
+    "openai.azure.cn",
+    # Azure AI Services / Foundry multi-service hosts. Path-anchored so Speech,
+    # Vision, Language and Content Safety traffic on the same host is not captured.
+    # Bare "ai.azure.com" is deliberately absent — that is the Foundry portal domain.
+    "cognitiveservices.azure.com/openai/",
+    "cognitiveservices.azure.com/models/",
+    "cognitiveservices.azure.us/openai/",
+    "cognitiveservices.azure.us/models/",
+    "cognitiveservices.azure.cn/openai/",
+    "cognitiveservices.azure.cn/models/",
+    "services.ai.azure.com/openai/",
+    "services.ai.azure.com/models/",
+    "services.ai.azure.us/openai/",
+    "services.ai.azure.us/models/",
+    # No services.ai.azure.cn equivalent — Foundry is not offered in the China cloud.
+    # Azure serverless / MaaS deployments and Azure ML managed online endpoints.
+    # The MaaS hosts have no sovereign-cloud variants; Azure ML does.
+    "inference.ai.azure.com",
+    "models.ai.azure.com",
+    "inference.ml.azure.com",
+    "inference.ml.azure.us",
     "openrouter.ai",
     "opencode.ai",
     "api.opencode.ai",
@@ -56,16 +81,42 @@ DEFAULT_EXCLUDE_API_PATTERNS: list[str] = json.loads(
 )
 
 
-def set_intercept_addresses(addresses: list[str]) -> None:
-    """Set custom intercept addresses (domains and/or path substrings)."""
+def set_intercept_addresses(addresses: list[str] | None) -> None:
+    """Set custom intercept addresses (domains and/or path substrings).
+
+    An empty list disables capture entirely; ``None`` restores
+    ``DEFAULT_INTERCEPT_ADDRESSES``.
+    """
     global _intercept_addresses
     _intercept_addresses = addresses
 
 
-def set_exclude_api_patterns(patterns: list[str]) -> None:
-    """Set URL substring patterns to exclude from capture (deny-list)."""
+def set_exclude_api_patterns(patterns: list[str] | None) -> None:
+    """Set URL substring patterns to exclude from capture (deny-list).
+
+    An empty list disables exclusion entirely; ``None`` restores
+    ``DEFAULT_EXCLUDE_API_PATTERNS``.
+    """
     global _exclude_api_patterns
     _exclude_api_patterns = patterns
+
+
+def _matches_any(url: str, override: list[str] | None, defaults: list[str]) -> bool:
+    """Substring-match a URL against an override list, falling back to defaults.
+
+    ``None`` means "no override, use defaults"; an empty list means "match
+    nothing" and is deliberately distinct from ``None``.
+    """
+    try:
+        return any(
+            entry in url for entry in (defaults if override is None else override)
+        )
+    except Exception:
+        # Fail closed for the allow-list, open for the deny-list. Either way a
+        # malformed list (e.g. a non-str entry) changes capture behaviour, so
+        # leave a trace rather than swallowing it entirely.
+        logger.debug("Failed to match URL against pattern list", exc_info=True)
+        return False
 
 
 def _is_localhost(url: str) -> bool:
@@ -79,24 +130,12 @@ def _is_localhost(url: str) -> bool:
 
 def _is_llm_api(url: str) -> bool:
     """Check if URL matches any intercept address (substring match)."""
-    try:
-        addresses = _intercept_addresses or DEFAULT_INTERCEPT_ADDRESSES
-        return any(addr in url for addr in addresses)
-    except Exception:
-        return False
+    return _matches_any(url, _intercept_addresses, DEFAULT_INTERCEPT_ADDRESSES)
 
 
 def _is_excluded(url: str) -> bool:
     """Check if URL matches any exclude pattern (deny-list after allow-list)."""
-    try:
-        patterns = (
-            _exclude_api_patterns
-            if _exclude_api_patterns is not None
-            else DEFAULT_EXCLUDE_API_PATTERNS
-        )
-        return any(p in url for p in patterns)
-    except Exception:
-        return False
+    return _matches_any(url, _exclude_api_patterns, DEFAULT_EXCLUDE_API_PATTERNS)
 
 
 def _is_streaming_content_type(content_type: str) -> bool:

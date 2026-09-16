@@ -50,6 +50,9 @@ SENSITIVE_HEADERS = [
     "openai-api-key",
     "anthropic-api-key",
     "x-goog-api-key",
+    # Azure AI Services / APIM. Deliberately the bare suffix: "api-key" does not
+    # match "ocp-apim-subscription-key", and APIM also accepts "subscription-key".
+    "subscription-key",
     "cookie",
     "set-cookie",
     "proxy-authorization",
@@ -57,7 +60,37 @@ SENSITIVE_HEADERS = [
     "x-amz-signature",
 ]
 
-SENSITIVE_QUERY_PARAMS = {"key", "api_key", "apikey", "token", "access_token", "secret"}
+SENSITIVE_QUERY_PARAMS = {
+    "key",
+    "api_key",
+    "apikey",
+    "token",
+    "access_token",
+    "secret",
+    "subscription-key",
+}
+
+# Azure OpenAI "On Your Data" carries datastore credentials in the *request body*
+# (data_sources[*].parameters.authentication.key, and the legacy dataSources[*]
+# .parameters.key / .embeddingKey), where header and query-param redaction never
+# sees them. Redaction is scoped to that config subtree so message content, tool
+# schemas and other legitimate payload fields are logged verbatim.
+# Matched as separator-insensitive substrings, not exact names: Azure keeps
+# adding auth shapes (api_key, encoded_api_key, key_and_key_id, sas_token, ...)
+# and spells them snake_case in the modern `data_sources` shape but camelCase in
+# the legacy `dataSources` one. A miss here forwards a live credential, and
+# over-redacting inside this subtree is harmless — so tokens are written without
+# separators and compared against a key with its separators stripped.
+SENSITIVE_BODY_KEY_TOKENS = (
+    "key",
+    "token",
+    "secret",
+    "password",
+    "connectionstring",
+    "sas",
+)
+
+DATA_SOURCE_FIELDS = ("data_sources", "dataSources")
 
 
 def _get_default_config() -> Config:
@@ -109,6 +142,49 @@ def _sanitize_url(url: str) -> str:
         # Fail closed: if redaction itself breaks, drop the query string rather
         # than risk forwarding an unredacted secret in it.
         return url.split("?", 1)[0]
+
+
+def _is_sensitive_body_key(key: str) -> bool:
+    """Whether a body field name looks like it holds a credential.
+
+    Separators are stripped before matching so ``connection_string``,
+    ``connectionString`` and ``connection-string`` all resolve alike.
+    """
+    normalized = key.lower().replace("-", "").replace("_", "")
+    return any(token in normalized for token in SENSITIVE_BODY_KEY_TOKENS)
+
+
+def _redact_secret_keys(value: Any) -> Any:
+    """Recursively redact secret-bearing keys inside a config subtree."""
+    if isinstance(value, dict):
+        return {
+            k: ("[REDACTED]" if _is_sensitive_body_key(k) else _redact_secret_keys(v))
+            for k, v in value.items()
+        }
+    if isinstance(value, list):
+        return [_redact_secret_keys(v) for v in value]
+    return value
+
+
+def _sanitize_body(body: str | dict | None) -> str | dict | None:
+    """Redact credentials embedded in a parsed JSON body."""
+    if not isinstance(body, dict):
+        return body
+    present = [f for f in DATA_SOURCE_FIELDS if f in body]
+    if not present:
+        return body
+    try:
+        sanitized = dict(body)
+        for field in present:
+            sanitized[field] = _redact_secret_keys(body[field])
+        return sanitized
+    except Exception:
+        # Fail closed: if redaction itself breaks, drop the whole data-source
+        # config rather than risk forwarding an unredacted datastore key.
+        sanitized = dict(body)
+        for field in present:
+            sanitized[field] = "[REDACTED]"
+        return sanitized
 
 
 def _parse_body(body: str | bytes | dict | None) -> str | dict | None:
@@ -211,11 +287,13 @@ class CoolhandClient:
             "method": request.get("method", "").lower(),
             "url": _sanitize_url(request.get("url", "")),
             "headers": _sanitize_headers(request.get("headers", {})),
-            "request_body": _parse_body(request.get("body")),
+            "request_body": _sanitize_body(_parse_body(request.get("body"))),
             "response_headers": (
                 _sanitize_headers(response.get("headers", {})) if response else {}
             ),
-            "response_body": _parse_body(response.get("body")) if response else None,
+            "response_body": (
+                _sanitize_body(_parse_body(response.get("body"))) if response else None
+            ),
             "status_code": response.get("status_code", 0) if response else 0,
             "duration_ms": round(duration_seconds * 1000, 2),
             "completed_at": _to_iso8601(res_timestamp),

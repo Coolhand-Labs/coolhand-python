@@ -25,6 +25,7 @@ No task-to-LLM correlation: Coolhand has no mechanism to link a Dramatiq
 import asyncio
 import json
 import threading
+import time
 from collections.abc import Generator
 from typing import Any
 
@@ -32,6 +33,7 @@ import dramatiq
 import httpx
 import pytest
 from dramatiq.brokers.stub import StubBroker
+from dramatiq.errors import QueueJoinTimeout
 from pydantic_ai import Agent
 from pydantic_ai.models.anthropic import AnthropicModel
 from pydantic_ai.providers.anthropic import AnthropicProvider
@@ -108,13 +110,27 @@ def stub_broker() -> Generator[StubBroker, None, None]:
     broker.close()
 
 
-def _run_actors(broker: StubBroker, *queue_names: str, worker_threads: int = 1) -> None:
-    """Start a Worker, drain the given queues, then stop cleanly."""
+def _run_actors(
+    broker: StubBroker,
+    *queue_names: str,
+    worker_threads: int = 1,
+    timeout: int = 10_000,
+) -> None:
+    """Start a Worker, drain the given queues, then stop cleanly.
+
+    `timeout` bounds broker.join() so a permanently-failing actor fails the
+    test in seconds instead of running through dramatiq's default 20-retry
+    backoff (min 15s/retry, up to 7 days) — see issue #134, where the lack
+    of a join timeout let a fast actor-level TypeError balloon into a
+    6-hour CI hang.
+    """
     worker = dramatiq.Worker(broker, worker_threads=worker_threads)
     worker.start()
-    for q in queue_names:
-        broker.join(q, fail_fast=True)
-    worker.stop()
+    try:
+        for q in queue_names:
+            broker.join(q, fail_fast=True, timeout=timeout)
+    finally:
+        worker.stop()
 
 
 # ---------------------------------------------------------------------------
@@ -295,6 +311,29 @@ class TestPydanticAiFromDramatiqThread:
         assert len(captured) >= 2, (
             f"Expected ≥2 captured interactions, got {len(captured)}"
         )
+
+
+class TestActorFailureFailsFast:
+    """Regression test for issue #134.
+
+    An actor that raises (e.g. the TypeError from an incompatible
+    pydantic-ai/anthropic pairing seen in issue #134) used to hang CI for
+    hours: dramatiq's default Retries middleware retries up to 20 times
+    with exponential backoff (15s minimum, up to 7 days), and
+    `_run_actors()` had no `timeout` on `broker.join()`, so it blocked for
+    the full retry/backoff duration instead of surfacing the failure.
+    """
+
+    def test_actor_failure_fails_fast(self, stub_broker: StubBroker) -> None:
+        @dramatiq.actor(broker=stub_broker)
+        def always_fails() -> None:
+            raise RuntimeError("boom")
+
+        always_fails.send()
+        start = time.monotonic()
+        with pytest.raises(QueueJoinTimeout):
+            _run_actors(stub_broker, always_fails.queue_name, timeout=200)
+        assert time.monotonic() - start < 5
 
 
 class TestKnownLimitations:

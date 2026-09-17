@@ -4,6 +4,21 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [0.7.1] - 2026-09-17
+
+### Added
+- **Complete Azure inference URI coverage.** `DEFAULT_INTERCEPT_ADDRESSES` previously recognized only two Azure hosts, so most Azure inference traffic was silently never captured. Now includes Azure OpenAI's GA `/openai/v1/` paths, Azure AI Foundry (`services.ai.azure.com`), Azure AI Services (`cognitiveservices.azure.com`), serverless/MaaS deployments (`inference.ai.azure.com`, `models.ai.azure.com`), Azure Machine Learning managed online endpoints (`inference.ml.azure.com`), and the US Gov / China sovereign-cloud variants of each. The multi-service AI Services and Foundry hosts are path-anchored to `/openai/` and `/models/` so Speech, Vision, Language and Content Safety traffic on the same hostname is not captured; the Foundry portal domain `ai.azure.com` is deliberately excluded. `DEFAULT_INTERCEPT_ADDRESSES` is now re-exported from the package root, matching `DEFAULT_EXCLUDE_API_PATTERNS`. The deny-list gains `/openai/{files,batches,fine_tuning,models}` and their `/openai/v1/` twins, so fine-tuning uploads and `models.list()` calls stay out of the logs. (#129)
+
+### Security
+- **Azure OpenAI "On Your Data" datastore credentials in request bodies are now redacted.** Header and query-param sanitization never saw these — On Your Data carries datastore credentials in the request body itself (`data_sources[*].parameters.authentication.key`, legacy `dataSources[*].parameters.connectionString`/`embeddingKey`, Elasticsearch `encoded_api_key`, and similar auth shapes). New `_sanitize_body` redacts them, scoped to the `data_sources`/`dataSources` config subtree so message content and tool schemas are still logged verbatim. (#129)
+- **`Ocp-Apim-Subscription-Key` (Azure AI Services' canonical key header) is now redacted.** It was previously forwarded in cleartext — `"api-key"` is not a substring of it, so the existing header redaction missed it entirely. Added to both `SENSITIVE_HEADERS` and `SENSITIVE_QUERY_PARAMS`. (#129)
+
+### Breaking changes
+- **`intercept_addresses=[]` now means "capture nothing"** instead of silently falling back to the default address list. If you were passing an empty list expecting the defaults, omit the argument instead. `start_monitoring` also now resets the interceptor's module globals on every instance, so a prior instance's `intercept_addresses`/`exclude_api_patterns` override no longer leaks into a later default instance. (#129)
+
+### Internal
+- Dependency bumps: ruff 0.16.3 → 0.16.7 (#127), dramatiq 2.2.0 → 2.2.1 (#126), pytest-asyncio 1.3.0 → 1.4.0 (#125), build 0.10.0 → 1.6.1 (#124), astral-sh/setup-uv GitHub Action 10.0.1 → 10.1.0 (#122).
+
 ## [0.7.0] - 2026-09-13
 
 ### Added

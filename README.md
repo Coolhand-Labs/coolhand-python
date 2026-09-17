@@ -274,6 +274,7 @@ export COOLHAND_SILENT=false
 
 - API keys in request headers are automatically redacted
 - Sensitive URL query parameters (`key`, `api_key`, `token`, etc.) are automatically redacted
+- Datastore credentials embedded in request bodies (e.g. Azure OpenAI On Your Data) are automatically redacted
 - No sensitive data is exposed in logs
 - All data is sent via HTTPS to Coolhand servers
 

@@ -124,16 +124,25 @@ def _sanitize_headers(headers: dict[str, str]) -> dict[str, str]:
 
 
 def _sanitize_url(url: str) -> str:
-    """Redact sensitive query parameters from URLs."""
+    """Redact sensitive query parameters from URLs.
+
+    Matched case-insensitively, like header redaction: a query param's *name*
+    has no fixed casing convention the way HTTP header names do, and a caller
+    sending ``?API_KEY=...`` instead of ``?api_key=...`` should not bypass
+    redaction — over-redacting a coincidentally-named benign param is
+    harmless, missing a differently-cased credential is not.
+    """
     try:
         parsed = urlparse(url)
         if not parsed.query:
             return url
         params = parse_qs(parsed.query, keep_blank_values=True)
+        lowered_keys = {k.lower(): k for k in params}
         redacted = False
         for param in SENSITIVE_QUERY_PARAMS:
-            if param in params:
-                params[param] = ["[REDACTED]"]
+            actual_key = lowered_keys.get(param)
+            if actual_key is not None:
+                params[actual_key] = ["[REDACTED]"]
                 redacted = True
         if not redacted:
             return url

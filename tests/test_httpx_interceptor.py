@@ -720,7 +720,7 @@ class TestAsyncStreamingCapture:
             mock_response.aiter_raw = None
 
             # Mock the original async send
-            original_original = httpx_interceptor._original_async_send
+            saved_original_async_send = httpx_interceptor._original_async_send
             httpx_interceptor._original_async_send = AsyncMock(
                 return_value=mock_response
             )
@@ -737,12 +737,147 @@ class TestAsyncStreamingCapture:
                 async for _ in response.aiter_lines():
                     pass
 
-            httpx_interceptor._original_async_send = original_original
+            httpx_interceptor._original_async_send = saved_original_async_send
 
             # Should have captured the streaming response
             assert len(captured_requests) == 1
             req, res, err = captured_requests[0]
             assert res["is_streaming"] is True
+            assert res["body"] == 'data: {"chunk": 1}\ndata: {"chunk": 2}\n'
+
+        finally:
+            unpatch()
+
+    @pytest.mark.parametrize(
+        ("attr_name", "takes_chunk_size", "chunks"),
+        [
+            ("aiter_bytes", True, [b"chunk1", b"chunk2"]),
+            ("aiter_text", False, ["chunk1", "chunk2"]),
+            ("aiter_raw", True, [b"chunk1", b"chunk2"]),
+        ],
+    )
+    @pytest.mark.asyncio
+    async def test_async_streaming_captures_via_aiter_variant(
+        self, reset_global_instance, attr_name, takes_chunk_size, chunks
+    ):
+        """Async streaming is captured regardless of which aiter_* method is drained."""
+        captured_requests = []
+
+        def capture_handler(req, res, err):
+            captured_requests.append((req, res, err))
+
+        set_handler(capture_handler)
+        patch_httpx()
+
+        try:
+            import httpx
+
+            from coolhand import httpx_interceptor
+
+            # Create mock streaming response
+            mock_response = MagicMock()
+            mock_response.status_code = 200
+            mock_response.headers = {"content-type": "text/event-stream"}
+
+            if takes_chunk_size:
+
+                async def mock_aiter(chunk_size=1024):
+                    for chunk in chunks:
+                        yield chunk
+            else:
+
+                async def mock_aiter():
+                    for chunk in chunks:
+                        yield chunk
+
+            for name in ("aiter_bytes", "aiter_lines", "aiter_text", "aiter_raw"):
+                setattr(mock_response, name, mock_aiter if name == attr_name else None)
+
+            # Mock the original async send
+            saved_original_async_send = httpx_interceptor._original_async_send
+            httpx_interceptor._original_async_send = AsyncMock(
+                return_value=mock_response
+            )
+
+            mock_request = MagicMock()
+            mock_request.method = "POST"
+            mock_request.url = "https://api.openai.com/v1/chat/completions"
+            mock_request.headers = {"Content-Type": "application/json"}
+            mock_request.content = b'{"stream": true}'
+
+            async with httpx.AsyncClient() as client:
+                response = await httpx.AsyncClient.send(client, mock_request)
+                # Consume the stream via the variant under test
+                async for _ in getattr(response, attr_name)():
+                    pass
+
+            httpx_interceptor._original_async_send = saved_original_async_send
+
+            # Should have captured the streaming response
+            assert len(captured_requests) == 1
+            req, res, err = captured_requests[0]
+            assert res["is_streaming"] is True
+            assert res["body"] == "chunk1chunk2"
+
+        finally:
+            unpatch()
+
+    @pytest.mark.asyncio
+    async def test_async_streaming_empty_chunks_not_captured(
+        self, reset_global_instance
+    ):
+        """An immediately-exhausted stream never fires the handler.
+
+        Documents existing behavior in httpx_interceptor.send_captured(), which
+        only invokes the handler `if not content_sent[0] and captured_chunks`
+        — an empty stream leaves captured_chunks empty, so the request/response
+        pair is silently dropped rather than reported with an empty body.
+        """
+        captured_requests = []
+
+        def capture_handler(req, res, err):
+            captured_requests.append((req, res, err))
+
+        set_handler(capture_handler)
+        patch_httpx()
+
+        try:
+            import httpx
+
+            from coolhand import httpx_interceptor
+
+            mock_response = MagicMock()
+            mock_response.status_code = 200
+            mock_response.headers = {"content-type": "text/event-stream"}
+
+            async def mock_aiter_bytes(chunk_size=1024):
+                for chunk in ():
+                    yield chunk
+
+            mock_response.aiter_bytes = mock_aiter_bytes
+            mock_response.aiter_lines = None
+            mock_response.aiter_text = None
+            mock_response.aiter_raw = None
+
+            saved_original_async_send = httpx_interceptor._original_async_send
+            httpx_interceptor._original_async_send = AsyncMock(
+                return_value=mock_response
+            )
+
+            mock_request = MagicMock()
+            mock_request.method = "POST"
+            mock_request.url = "https://api.openai.com/v1/chat/completions"
+            mock_request.headers = {"Content-Type": "application/json"}
+            mock_request.content = b'{"stream": true}'
+
+            async with httpx.AsyncClient() as client:
+                response = await httpx.AsyncClient.send(client, mock_request)
+                async for _ in response.aiter_bytes():
+                    pass
+
+            httpx_interceptor._original_async_send = saved_original_async_send
+
+            assert captured_requests == []
 
         finally:
             unpatch()

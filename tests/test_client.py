@@ -147,12 +147,24 @@ class TestSanitizeUrl:
         """Empty string returns empty string."""
         assert _sanitize_url("") == ""
 
-    def test_params_are_case_sensitive(self):
-        """Query params are case-sensitive per URL spec."""
+    def test_redacts_differently_cased_param(self):
+        """Query param matching is case-insensitive, like header matching.
+
+        Query param names have no fixed casing convention the way HTTP
+        header names do, so a caller sending ?API_KEY=... instead of
+        ?api_key=... must not bypass redaction.
+        """
         url = "https://api.example.com/v1?KEY=value123"
         result = _sanitize_url(url)
-        # "KEY" != "key", so it should NOT be redacted
-        assert "value123" in result
+        assert "value123" not in result
+        assert "KEY=%5BREDACTED%5D" in result
+
+    def test_redacts_mixed_case_param_preserving_original_key(self):
+        """The original mixed-case param name is preserved, only the value redacted."""
+        url = "https://api.example.com/v1?Api_Key=value123"
+        result = _sanitize_url(url)
+        assert "value123" not in result
+        assert "Api_Key=%5BREDACTED%5D" in result
 
     def test_fails_closed_on_internal_error(self):
         """If redaction breaks internally, the query string is dropped, not leaked."""

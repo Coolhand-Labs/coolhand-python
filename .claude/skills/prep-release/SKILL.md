@@ -237,11 +237,21 @@ the same "hand it to a human" rule `/loop-review` uses for stuck findings.
      installs a global tool on the machine, not just a repo dependency,
      so it's a one-time setup cost worth calling out in the Phase 5
      report the first time it happens.
+   - The `azure` and `azure-sdk` modes no longer use GitHub Models
+     (retired 2026-07-30); they call a Microsoft Foundry / Azure OpenAI
+     deployment configured by `AZURE_INFERENCE_ENDPOINT`,
+     `AZURE_INFERENCE_KEY` and (optionally) `AZURE_INFERENCE_MODEL` in
+     the example's `.env` or the process environment (`load_dotenv()` reads
+     both). `.env` is gitignored, so a fresh release worktree won't have it:
+     copy it from the primary checkout or export the vars. If those
+     aren't set, the modes return `501` — report them as "skipped — no Azure creds" in Phase 5 (loss of
+     `azure-core`/`requests` pathway coverage), never as passing, and
+     don't count the 501 as a Phase 4 failure.
    - Start the server in the background on a scratch port (e.g.
      `uvicorn main:app --port 8188`), poll `GET /` until it responds,
      then `POST /api/guess-bands` once per `mode` (`copilot`, `azure`,
      `azure-sdk`) with a fixed test sentence and empty `github_token`
-     (so it falls through to the `gh auth token` path), and
+     (so `copilot` falls through to the `gh auth token` path), and
      `POST /api/submit-feedback` with the returned `raw_response` to
      exercise the feedback path too. A 429 (rate limit) on any mode is a
      transient condition, not a failure — retry once before giving up on

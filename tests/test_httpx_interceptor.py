@@ -13,6 +13,7 @@ from coolhand.httpx_interceptor import (
     _is_localhost,
     _is_streaming_content_type,
     _read_response_body,
+    _should_capture_url,
     is_patched,
     set_exclude_api_patterns,
     set_handler,
@@ -280,11 +281,119 @@ class TestIsLlmApi:
         url = "https://opencode.ai/zen/v1/chat/completions"
         assert _is_llm_api(url) is True
 
+    @pytest.mark.parametrize(
+        "url",
+        [
+            "https://api.deepseek.com/chat/completions",
+            "https://api.mistral.ai/v1/chat/completions",
+            "https://api.perplexity.ai/chat/completions",
+            "https://api.x.ai/v1/chat/completions",
+        ],
+    )
+    def test_openai_compatible_providers(self, url):
+        """Detects DeepSeek, Mistral, Perplexity and xAI."""
+        assert _should_capture_url(url) is True
+
+    @pytest.mark.parametrize(
+        "url",
+        [
+            "https://api.cohere.com/v2/chat",
+            "https://api.cohere.ai/v2/chat",
+            "https://api.cohere.com/v1/embed",
+            "https://api.cohere.ai/v1/embed",
+            "https://api.cohere.com/v2/embed",
+            "https://api.cohere.ai/v2/embed",
+        ],
+    )
+    def test_cohere_supported_paths(self, url):
+        """Detects the Cohere endpoints the server ingests."""
+        assert _should_capture_url(url) is True
+
+    @pytest.mark.parametrize(
+        "url",
+        [
+            "https://api.cohere.com/v1/chat",
+            "https://api.cohere.ai/v1/chat",
+            "https://api.cohere.com/v2/rerank",
+            "https://api.cohere.com/v1/tokenize",
+            "https://api.cohere.com/v1/classify",
+            "https://api.cohere.com/v1/embed-jobs",
+            "https://api.cohere.ai/v1/embed-jobs",
+            "https://api.cohere.com/",
+        ],
+    )
+    def test_cohere_unsupported_paths_not_captured(self, url):
+        """Cohere is path-scoped, not host-wide."""
+        assert _should_capture_url(url) is False
+
+    def test_typesafe_jev(self):
+        """Detects TypeSafe Jev (System One)."""
+        assert _should_capture_url("https://api.typesafe.ai/v1/systemone") is True
+
+    def test_typesafe_other_paths_not_captured(self):
+        """TypeSafe is path-scoped to /v1/systemone."""
+        assert _should_capture_url("https://api.typesafe.ai/v1/models") is False
+        assert _should_capture_url("https://api.typesafe.ai/") is False
+
+    @pytest.mark.parametrize(
+        "url",
+        [
+            "https://bedrock-runtime.us-east-1.amazonaws.com/model/foo/converse",
+            "https://bedrock-runtime.eu-west-2.amazonaws.com/model/foo/invoke",
+            "https://bedrock-runtime-fips.us-gov-west-1.amazonaws.com/model/foo/converse",
+        ],
+    )
+    def test_bedrock_runtime(self, url):
+        """Detects Bedrock runtime hosts in any region."""
+        assert _should_capture_url(url) is True
+
+    def test_bedrock_other_services_not_captured(self):
+        """Bedrock control-plane and agent hosts are not the runtime host."""
+        assert (
+            _should_capture_url(
+                "https://bedrock.us-east-1.amazonaws.com/foundation-models"
+            )
+            is False
+        )
+        assert (
+            _should_capture_url(
+                "https://bedrock-agent-runtime.us-east-1.amazonaws.com/agents"
+            )
+            is False
+        )
+
+    @pytest.mark.parametrize(
+        "path", ["/api/chat", "/api/generate", "/api/embed", "/api/embeddings"]
+    )
+    def test_ollama_on_default_port(self, path):
+        """Detects Ollama paths on its default port for non-localhost hosts."""
+        assert _should_capture_url("http://ollama:11434" + path) is True
+        assert _should_capture_url("http://gpu-box.lan:11434" + path) is True
+
+    def test_ollama_path_without_port_not_captured(self):
+        """A bare /api/chat on an unrelated host is never captured."""
+        assert _should_capture_url("https://example.com/api/chat") is False
+        assert _should_capture_url("https://app.internal:8080/api/generate") is False
+        assert _should_capture_url("https://example.com/api/embed") is False
+
+    def test_ollama_other_paths_on_default_port_not_captured(self):
+        """Only the four inference paths match, not the rest of Ollama's API."""
+        assert _should_capture_url("http://ollama:11434/api/tags") is False
+        assert _should_capture_url("http://ollama:11434/api/pull") is False
+
+    def test_ollama_localhost_still_skipped(self):
+        """Bare localhost stays uncaptured; the localhost guard is unchanged."""
+        assert _should_capture_url("http://localhost:11434/api/chat") is False
+
     def test_all_default_addresses(self):
         """All default intercept addresses are detected."""
         for addr in DEFAULT_INTERCEPT_ADDRESSES:
-            if addr.startswith(":"):
+            if addr.startswith(":1"):
+                url = "http://ollama" + addr
+            elif addr.startswith(":"):
                 url = "https://example.googleapis.com/v1/models/gemini" + addr
+            elif addr.startswith("//"):
+                url = "https:" + addr + "us-east-1.amazonaws.com/v1/test"
             else:
                 url = "https://" + addr + "/v1/test"
             assert _is_llm_api(url) is True, f"Failed for {addr}"
@@ -373,6 +482,10 @@ class TestIsBinaryContentType:
     def test_octet_stream(self):
         """Detects application/octet-stream."""
         assert _is_binary_content_type("application/octet-stream") is True
+
+    def test_bedrock_eventstream(self):
+        """Bedrock binary event-stream frames are not decodable as text."""
+        assert _is_binary_content_type("application/vnd.amazon.eventstream") is True
 
     def test_case_insensitive(self):
         """Content-Type matching is case-insensitive."""
@@ -1280,3 +1393,56 @@ class TestReentrancyGuard:
             assert result is mock_response
         finally:
             unpatch()
+
+
+class TestNewProviderSenderBehavior:
+    """Sender-level behaviour for the DeepSeek/Cohere/Bedrock/Ollama additions."""
+
+    def test_bedrock_eventstream_recorded_as_binary_sync(self, reset_global_instance):
+        """A Bedrock eventstream response reaches the handler as "[binary]"."""
+        captured = []
+        set_handler(lambda req, res, err: captured.append(res))
+        patch_httpx()
+
+        try:
+            import httpx
+
+            from coolhand import httpx_interceptor
+
+            mock_response = MagicMock()
+            mock_response.status_code = 200
+            mock_response.headers = {
+                "content-type": "application/vnd.amazon.eventstream"
+            }
+            mock_response._content = b"\x00\x00\x00\x2a\x00\x00\x00\x1dframed"
+            mock_response.content = mock_response._content
+
+            original_send = httpx_interceptor._original_send
+            httpx_interceptor._original_send = MagicMock(return_value=mock_response)
+            try:
+                mock_request = MagicMock()
+                mock_request.method = "POST"
+                mock_request.url = (
+                    "https://bedrock-runtime.us-east-1.amazonaws.com"
+                    "/model/anthropic.claude/converse-stream"
+                )
+                mock_request.headers = {}
+                mock_request.content = b"{}"
+                httpx.Client.send(httpx.Client(), mock_request)
+            finally:
+                httpx_interceptor._original_send = original_send
+
+            assert len(captured) == 1
+            assert captured[0]["body"] == "[binary]"
+        finally:
+            unpatch()
+
+    def test_overriding_exclude_patterns_recaptures_cohere_embed_jobs(
+        self, reset_global_instance
+    ):
+        """Replacing the deny-list drops the default Cohere embed-jobs guard."""
+        url = "https://api.cohere.com/v1/embed-jobs"
+        assert _should_capture_url(url) is False
+
+        set_exclude_api_patterns([])
+        assert _should_capture_url(url) is True

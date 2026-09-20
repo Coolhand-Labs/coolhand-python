@@ -18,5 +18,7 @@
   "/openai/v1/batches",
   "/openai/v1/fine_tuning",
   "/openai/models",
-  "/openai/v1/models"
+  "/openai/v1/models",
+  "api.cohere.com/v1/embed-jobs",
+  "api.cohere.ai/v1/embed-jobs"
 ]

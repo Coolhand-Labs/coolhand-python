@@ -70,6 +70,36 @@ DEFAULT_INTERCEPT_ADDRESSES = [
     "openrouter.ai",
     "opencode.ai",
     "api.opencode.ai",
+    # OpenAI-compatible providers the Coolhand server ingests and prices
+    "api.deepseek.com",
+    "api.mistral.ai",
+    "api.perplexity.ai",
+    "api.x.ai",
+    # Cohere is path-anchored, never host-wide: the server ingests only v2 chat
+    # and v1/v2 embed. Its other endpoints (v1 chat, rerank, tokenize, classify)
+    # have different envelopes and would be recorded as empty successes.
+    # /v1/embed-jobs also contains "/v1/embed", so it is in the deny-list.
+    "api.cohere.com/v2/chat",
+    "api.cohere.com/v1/embed",
+    "api.cohere.com/v2/embed",
+    "api.cohere.ai/v2/chat",
+    "api.cohere.ai/v1/embed",
+    "api.cohere.ai/v2/embed",
+    # TypeSafe Jev (System One). Path-anchored: the server routes only this path.
+    "api.typesafe.ai/v1/systemone",
+    # Amazon Bedrock. Plain substring matching has no wildcard for the region
+    # label, so match the "//bedrock-runtime." host prefix (and its FIPS variant).
+    "//bedrock-runtime.",
+    "//bedrock-runtime-fips.",
+    # Self-hosted Ollama has no fixed host, so only path identifies it, and a
+    # bare "/api/chat" would capture any app's own unrelated route. Anchor to
+    # Ollama's default port as well. Bare localhost is skipped by
+    # _is_localhost, so these cover remote, LAN and Docker Compose hosts
+    # (e.g. http://ollama:11434) on the default port.
+    ":11434/api/chat",
+    ":11434/api/generate",
+    ":11434/api/embed",
+    ":11434/api/embeddings",
     ":generateContent",
     ":streamGenerateContent",
     ":predict",
@@ -138,6 +168,11 @@ def _is_excluded(url: str) -> bool:
     return _matches_any(url, _exclude_api_patterns, DEFAULT_EXCLUDE_API_PATTERNS)
 
 
+def _should_capture_url(url: str) -> bool:
+    """Allow-listed, not localhost, and not deny-listed."""
+    return _is_llm_api(url) and not _is_localhost(url) and not _is_excluded(url)
+
+
 def _is_streaming_content_type(content_type: str) -> bool:
     """Check if content type indicates streaming."""
     return "text/event-stream" in content_type or "application/x-ndjson" in content_type
@@ -145,7 +180,14 @@ def _is_streaming_content_type(content_type: str) -> bool:
 
 def _is_binary_content_type(content_type: str) -> bool:
     """Check if content type indicates binary data (audio, video, image, etc.)."""
-    binary_prefixes = ("audio/", "video/", "image/", "application/octet-stream")
+    # Bedrock streams use AWS binary event-stream framing, not text.
+    binary_prefixes = (
+        "audio/",
+        "video/",
+        "image/",
+        "application/octet-stream",
+        "application/vnd.amazon.eventstream",
+    )
     content_type = content_type.lower()
     return any(content_type.startswith(p) for p in binary_prefixes)
 
@@ -200,13 +242,7 @@ def patch() -> bool:
         # Only capture LLM API requests; skip if already intercepting (reentrancy
         # guard prevents double-logging when the same intercepted call re-enters
         # the public send(), e.g. via a requests→httpx adapter chain).
-        if (
-            not _is_llm_api(url)
-            or _is_localhost(url)
-            or _is_excluded(url)
-            or not _handler
-            or _intercepting.get()
-        ):
+        if not _should_capture_url(url) or not _handler or _intercepting.get():
             return _original_send(self, request, **kwargs)
 
         token = _intercepting.set(True)
@@ -259,13 +295,7 @@ def patch() -> bool:
         # Only capture LLM API requests; skip if already intercepting (reentrancy
         # guard prevents double-logging when the same intercepted call re-enters
         # the public send(), e.g. via a requests→httpx adapter chain).
-        if (
-            not _is_llm_api(url)
-            or _is_localhost(url)
-            or _is_excluded(url)
-            or not _handler
-            or _intercepting.get()
-        ):
+        if not _should_capture_url(url) or not _handler or _intercepting.get():
             return await _original_async_send(self, request, **kwargs)
 
         token = _intercepting.set(True)
@@ -411,13 +441,7 @@ def patch() -> bool:
             # Skip if already intercepting — prevents double-logging when the
             # same call re-enters the public send(), e.g. via a requests→httpx
             # adapter chain triggering both this handler and patched_send.
-            if (
-                not _is_llm_api(url)
-                or _is_localhost(url)
-                or _is_excluded(url)
-                or not _handler
-                or _intercepting.get()
-            ):
+            if not _should_capture_url(url) or not _handler or _intercepting.get():
                 return _original_requests_send(self, request, **kwargs)
 
             token = _intercepting.set(True)

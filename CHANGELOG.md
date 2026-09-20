@@ -4,6 +4,23 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [0.7.2] - 2026-09-20
+
+### Fixed
+- **`CoolhandDramatiqMiddleware` now applies constructor-kwarg Coolhand config in every worker process.** Previously a freshly spawned worker's `after_process_boot` built a bare `Coolhand()`, so config passed to the parent's `Coolhand(api_key=..., intercept_addresses=..., ...)` silently never reached workers — only `COOLHAND_*` environment variables did. The middleware now accepts the same `config`/keyword arguments as `Coolhand(...)` and, in each worker, keeps the existing instance if it already matches that config or otherwise replaces it. A replaced instance is only unregistered from `atexit`, not shut down: in a forked worker it is a copy of the parent's instance, and flushing it would re-deliver the parent's in-flight interactions once per worker. A failure constructing the replacement is logged and swallowed rather than crashing the worker. `CoolhandDramatiqMiddleware()` with no arguments behaves as before. See [docs/dramatiq.md](./docs/dramatiq.md). (#130)
+- **Copilot requests that never receive an `assistant.message` are no longer silently dropped.** If the model errors out or rejects a request without emitting the notification (for example, context window exceeded), the interaction was evicted from the interceptor's pending table without ever being logged. It is now reported to Coolhand as an error (`"no assistant.message event received"`) 60 seconds after the `session.send` acknowledgement (`COPILOT_INTERCEPTOR_FALLBACK_TIMEOUT`), and the stale-entry sweep reports any entry the fallback didn't already report. (#131)
+
+### Security
+- **anyio 4.13.0 → 4.14.2**, fixing CVE-2026-63374 and CVE-2026-64847 in the development/test dependency lock (`uv.lock`); `pip-audit` in CI had been failing on both. anyio is a transitive dependency of the optional integrations, not a runtime dependency of `coolhand` itself. (#138)
+
+### Notes
+- **A Copilot response slower than 60 seconds is now logged twice.** The fallback error is reported at 60 seconds without evicting the pending entry, so a legitimately slow `assistant.message` that arrives afterwards is still delivered and logged as a success. Consumers will see an error record followed by a success record for the same request in that case. (#131)
+
+### Internal
+- Dramatiq-based tests and `examples/dramatiq_pydantic_ai.py` now bound `broker.join()` with an explicit timeout and always stop the worker in a `finally`, so a permanently failing actor fails in seconds rather than hanging through Dramatiq's default retry backoff; CI jobs also gained `timeout-minutes`. (#136)
+- Added test coverage for the async httpx SSE wrappers (`aiter_bytes`, `aiter_text`, `aiter_raw`), empty async streams, and the `requests` interceptor's binary-content-type handling. (#135)
+- `examples/band-guesser`'s `azure` and `azure-sdk` modes now call a Microsoft Foundry / Azure OpenAI deployment configured via `AZURE_INFERENCE_ENDPOINT`, `AZURE_INFERENCE_KEY` and optional `AZURE_INFERENCE_MODEL`, since GitHub Models (`models.github.ai`) was retired on 2026-07-30. The `prep-release` skill's band-guesser step was updated to match. (#139)
+
 ## [0.7.1] - 2026-09-17
 
 ### Added

@@ -11,7 +11,7 @@ Patches `httpx.Client.send` and `httpx.AsyncClient.send` at the class level. Cov
 - **OpenAI Python SDK** (`openai`)
 - **Anthropic Python SDK** (`anthropic`)
 - **Google Gemini** (`google-generativeai` / `google-genai`)
-- **GitHub Models** via `models.github.ai` or the legacy `models.inference.ai.azure.com`
+- **GitHub Models** via `models.github.ai` or the legacy `models.inference.ai.azure.com` (GitHub retired the hosted service on 2026-07-30; the addresses remain intercepted)
 - **Vertex AI** inference endpoints (`aiplatform.googleapis.com`)
 - **Cloudflare AI Gateway** (`gateway.ai.cloudflare.com`)
 - **OpenRouter** (`openrouter.ai`)
@@ -67,7 +67,7 @@ It covers:
 - **Google Gemini** — `generativelanguage.googleapis.com`, plus the `:generateContent` / `:streamGenerateContent` method fragments
 - **Vertex AI** — `aiplatform.googleapis.com`, plus the `:predict` / `:streamRawPredict` method fragments
 - **Azure** — Azure OpenAI (`openai.azure.com` / `.us` / `.cn`), Azure AI Foundry and AI Services (`services.ai.azure.com` / `.us`, `cognitiveservices.azure.com` / `.us` / `.cn`), serverless deployments (`inference.ai.azure.com`, `models.ai.azure.com`) and Azure Machine Learning managed online endpoints (`inference.ml.azure.com` / `.us`)
-- **GitHub Models** — `models.github.ai` and the legacy `models.inference.ai.azure.com`
+- **GitHub Models** — `models.github.ai` and the legacy `models.inference.ai.azure.com` (the hosted service was retired on 2026-07-30; these addresses remain intercepted)
 - **Cloudflare AI Gateway** — `gateway.ai.cloudflare.com`
 - **OpenRouter** — `openrouter.ai`
 - **OpenCode** — `opencode.ai`, `api.opencode.ai`

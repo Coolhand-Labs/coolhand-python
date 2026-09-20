@@ -180,7 +180,7 @@ Coolhand works with any library that uses httpx, requests, or the GitHub Copilot
 - Mistral
 - Perplexity
 - xAI
-- Cohere (v2 chat and embed endpoints)
+- Cohere (v2 chat, v1/v2 embed)
 - Amazon Bedrock
 - TypeSafe Jev (System One)
 - Ollama (non-localhost hosts on the default port, e.g. `http://ollama:11434`)

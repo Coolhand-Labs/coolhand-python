@@ -129,9 +129,13 @@ def main() -> None:
     print("Processing tasks (2 worker threads)...")
     worker = dramatiq.Worker(broker, worker_threads=2)
     worker.start()
-    broker.join(summarize.queue_name, fail_fast=True)
-    broker.join(classify.queue_name, fail_fast=True)
-    worker.stop()
+    try:
+        # timeout bounds join() so a failing actor fails fast instead of
+        # hanging through dramatiq's default retry/backoff — see issue #134
+        broker.join(summarize.queue_name, fail_fast=True, timeout=10_000)
+        broker.join(classify.queue_name, fail_fast=True, timeout=10_000)
+    finally:
+        worker.stop()
 
     if instance:
         stats = instance.get_stats()

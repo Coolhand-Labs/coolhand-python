@@ -58,6 +58,16 @@ SENSITIVE_HEADERS = [
     "proxy-authorization",
     "x-amz-security-token",
     "x-amz-signature",
+    "x-amz-credential",
+    # Common credential header spellings the substrings above miss ("apikey" is
+    # not a substring of "api-key"). Deliberately not bare "token"/"secret", which
+    # would also mask benign headers such as "x-ratelimit-remaining-tokens".
+    "apikey",
+    "api_key",
+    "x-auth-token",
+    "x-api-token",
+    "x-access-token",
+    "x-functions-key",
 ]
 
 SENSITIVE_QUERY_PARAMS = {
@@ -68,6 +78,19 @@ SENSITIVE_QUERY_PARAMS = {
     "access_token",
     "secret",
     "subscription-key",
+    "api-key",
+    "password",
+    "client_secret",
+    "refresh_token",
+    "id_token",
+    # Pre-signed URL credentials (AWS SigV4 / Azure SAS / GCS signed URLs)
+    "sig",
+    "signature",
+    "x-amz-signature",
+    "x-amz-credential",
+    "x-amz-security-token",
+    "x-goog-api-key",
+    "x-goog-signature",
 }
 
 # Azure OpenAI "On Your Data" carries datastore credentials in the *request body*
@@ -134,19 +157,24 @@ def _sanitize_url(url: str) -> str:
     """
     try:
         parsed = urlparse(url)
-        if not parsed.query:
-            return url
-        params = parse_qs(parsed.query, keep_blank_values=True)
-        lowered_keys = {k.lower(): k for k in params}
-        redacted = False
-        for param in SENSITIVE_QUERY_PARAMS:
-            actual_key = lowered_keys.get(param)
-            if actual_key is not None:
-                params[actual_key] = ["[REDACTED]"]
+        # Credentials embedded as ``https://user:pass@host/`` are dropped too.
+        host = parsed.netloc.rpartition("@")[2]
+        redacted = host != parsed.netloc
+        if redacted:
+            parsed = parsed._replace(netloc=host)
+        if parsed.query:
+            params = parse_qs(parsed.query, keep_blank_values=True)
+            lowered_keys = {k.lower(): k for k in params}
+            query_redacted = False
+            for param in SENSITIVE_QUERY_PARAMS:
+                actual_key = lowered_keys.get(param)
+                if actual_key is not None:
+                    params[actual_key] = ["[REDACTED]"]
+                    query_redacted = True
+            if query_redacted:
+                parsed = parsed._replace(query=urlencode(params, doseq=True))
                 redacted = True
-        if not redacted:
-            return url
-        return urlunparse(parsed._replace(query=urlencode(params, doseq=True)))
+        return urlunparse(parsed) if redacted else url
     except Exception:
         # Fail closed: if redaction itself breaks, drop the query string rather
         # than risk forwarding an unredacted secret in it.
@@ -334,7 +362,10 @@ class CoolhandClient:
     def _send_one(self, interaction: dict[str, Any]) -> bool:
         """POST a single interaction to the Coolhand API. Blocking; runs on the
         worker thread (or, in tests, is called directly)."""
-        api_key = self.config.get("api_key")
+        # Stripped: a trailing newline (common in env files / k8s secrets) makes
+        # http.client reject the header, and the resulting ValueError message
+        # contains the full key.
+        api_key = (self.config.get("api_key") or "").strip()
         if not api_key:
             return False
 

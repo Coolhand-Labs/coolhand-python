@@ -177,6 +177,68 @@ class TestSanitizeUrl:
         assert result == "https://api.example.com/v1"
 
 
+class TestSanitizeRedTeamGaps:
+    """Redaction gaps found in the v0.7.2 whole-package review."""
+
+    @pytest.mark.parametrize(
+        "header",
+        [
+            "apikey",
+            "api_key",
+            "X-Auth-Token",
+            "X-Api-Token",
+            "X-Access-Token",
+            "x-functions-key",
+            "X-Amz-Credential",
+        ],
+    )
+    def test_masks_additional_credential_headers(self, header):
+        secret = "abcd1234567890secret"
+        assert _sanitize_headers({header: secret})[header] != secret
+
+    def test_does_not_mask_ratelimit_token_headers(self):
+        """Bare "token" is not a header marker: rate-limit telemetry stays readable."""
+        headers = {"x-ratelimit-remaining-tokens": "39999"}
+        assert _sanitize_headers(headers) == headers
+
+    @pytest.mark.parametrize(
+        "param",
+        [
+            "sig",
+            "Signature",
+            "X-Amz-Signature",
+            "X-Amz-Credential",
+            "api-key",
+            "client_secret",
+            "refresh_token",
+            "id_token",
+            "password",
+        ],
+    )
+    def test_redacts_additional_query_params(self, param):
+        result = _sanitize_url(
+            f"https://api.openai.com/v1/x?{param}=SECRETVALUE&keep=1"
+        )
+        assert "SECRETVALUE" not in result
+        assert "keep=1" in result
+
+    def test_strips_userinfo_with_query(self):
+        result = _sanitize_url("https://user:hunter2@api.openai.com/v1/x?a=1")
+        assert "hunter2" not in result
+        assert "user" not in result
+        assert result == "https://api.openai.com/v1/x?a=1"
+
+    def test_strips_userinfo_without_query(self):
+        assert (
+            _sanitize_url("https://user:hunter2@api.openai.com:443/v1/x")
+            == "https://api.openai.com:443/v1/x"
+        )
+
+    def test_url_without_userinfo_or_secrets_unchanged(self):
+        url = "https://api.openai.com/v1/x?a=1"
+        assert _sanitize_url(url) == url
+
+
 class TestSanitizeBody:
     """Tests for _sanitize_body — Azure OpenAI "On Your Data" credentials."""
 
@@ -1915,3 +1977,23 @@ class TestBaseUrlConfig:
         call_args = mock_open.call_args
         request = call_args[0][0]
         assert "self-hosted.example.com" in request.full_url
+
+
+class TestApiKeyWhitespace:
+    def test_send_one_strips_trailing_newline_from_key(
+        self, reset_global_instance, mock_urlopen
+    ):
+        """A key loaded with a trailing newline must not reach the header raw:
+        http.client would reject it and the error message would contain the key."""
+        client = CoolhandClient(auto_submit=False, api_key="real-api-key-12345\n")
+        interaction = {
+            "id": "test-id",
+            "method": "post",
+            "url": "https://api.openai.com/v1/chat",
+            "timestamp": "2024-01-01T00:00:00Z",
+        }
+
+        assert client._send_one(interaction) is True
+        request = mock_urlopen.call_args[0][0]
+        headers = {k.lower(): v for k, v in request.header_items()}
+        assert headers["x-api-key"] == "real-api-key-12345"

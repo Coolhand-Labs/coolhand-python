@@ -67,7 +67,7 @@ class FeedbackService:
     @property
     def api_key(self) -> str:
         """Get the configured API key."""
-        return self.config.get("api_key", "")
+        return (self.config.get("api_key") or "").strip()
 
     @property
     def silent(self) -> bool:

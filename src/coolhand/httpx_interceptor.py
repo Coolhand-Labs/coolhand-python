@@ -168,6 +168,19 @@ def _is_excluded(url: str) -> bool:
     return _matches_any(url, _exclude_api_patterns, DEFAULT_EXCLUDE_API_PATTERNS)
 
 
+def _read_request_body(request: Any) -> str | None:
+    """Best-effort request body for logging; never raises.
+
+    ``request.content`` raises ``httpx.RequestNotRead`` for streamed bodies
+    (multipart uploads, generator bodies). Capturing must not break the call.
+    """
+    try:
+        content = request.content
+        return content.decode("utf-8", errors="replace") if content else None
+    except Exception:
+        return "[unreadable body]"
+
+
 def _should_capture_url(url: str) -> bool:
     """Allow-listed, not localhost, and not deny-listed."""
     return _is_llm_api(url) and not _is_localhost(url) and not _is_excluded(url)
@@ -254,11 +267,7 @@ def patch() -> bool:
                 "method": request.method,
                 "url": url,
                 "headers": dict(request.headers),
-                "body": (
-                    request.content.decode("utf-8", errors="replace")
-                    if request.content
-                    else None
-                ),
+                "body": _read_request_body(request),
                 "timestamp": start,
             }
             response = _original_send(self, request, **kwargs)
@@ -307,11 +316,7 @@ def patch() -> bool:
                 "method": request.method,
                 "url": url,
                 "headers": dict(request.headers),
-                "body": (
-                    request.content.decode("utf-8", errors="replace")
-                    if request.content
-                    else None
-                ),
+                "body": _read_request_body(request),
                 "timestamp": start,
             }
             response = await _original_async_send(self, request, **kwargs)

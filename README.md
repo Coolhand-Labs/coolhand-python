@@ -2,7 +2,7 @@
 
 [![PyPI version](https://badge.fury.io/py/coolhand.svg)](https://badge.fury.io/py/coolhand)
 
-Monitor and log LLM API calls from OpenAI, Anthropic, Google Gemini, GitHub Copilot, Vertex AI, OpenRouter, OpenCode, Cloudflare AI Gateway, ElevenLabs, and more — including pydantic-ai and Dramatiq — to the Coolhand analytics platform.
+Monitor and log LLM API calls from OpenAI, Anthropic, Google Gemini, GitHub Copilot, Vertex AI, OpenRouter, OpenCode, Cloudflare AI Gateway, ElevenLabs, DeepSeek, Mistral, Perplexity, xAI, Cohere, Amazon Bedrock, Ollama, and more — including pydantic-ai and Dramatiq — to the Coolhand analytics platform.
 
 > **Python 3.8 and 3.9 support deprecated**: As of v0.4.0, coolhand requires Python 3.10 or later. Python 3.8 reached end-of-life in October 2024 and 3.9 in October 2025. If you are on an older Python version, pin to `coolhand<0.4.0`.
 
@@ -176,6 +176,14 @@ Coolhand works with any library that uses httpx, requests, or the GitHub Copilot
 - OpenRouter
 - OpenCode
 - ElevenLabs
+- DeepSeek
+- Mistral
+- Perplexity
+- xAI
+- Cohere (v2 chat, v1/v2 embed)
+- Amazon Bedrock
+- TypeSafe Jev (System One)
+- Ollama (non-localhost hosts on the default port, e.g. `http://ollama:11434`)
 - pydantic-ai
 - Any other library using httpx or requests
 

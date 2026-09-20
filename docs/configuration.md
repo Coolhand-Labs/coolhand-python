@@ -17,7 +17,7 @@ coolhand_client = Coolhand(
 )
 ```
 
-Any request whose URL contains one of the listed substrings is passed through without logging. The default list (`DEFAULT_EXCLUDE_API_PATTERNS`) excludes non-inference management endpoints for Vertex AI and Azure OpenAI, such as `/batchPredictionJobs/` and `/openai/fine_tuning`; setting `exclude_api_patterns` **replaces** the default entirely.
+Any request whose URL contains one of the listed substrings is passed through without logging. The default list (`DEFAULT_EXCLUDE_API_PATTERNS`) excludes non-inference management endpoints for Vertex AI, Azure OpenAI and Cohere, such as `/batchPredictionJobs/`, `/openai/fine_tuning` and `api.cohere.com/v1/embed-jobs` (which would otherwise match the Cohere `/v1/embed` allow-list entry); setting `exclude_api_patterns` **replaces** the default entirely.
 
 To extend the defaults rather than replace them:
 
@@ -30,7 +30,7 @@ coolhand_client = Coolhand(
 )
 ```
 
-### Default excluded patterns (Vertex AI and Azure OpenAI non-inference endpoints)
+### Default excluded patterns (Vertex AI, Azure OpenAI and Cohere non-inference endpoints)
 
 ```python
 from coolhand import DEFAULT_EXCLUDE_API_PATTERNS

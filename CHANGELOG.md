@@ -4,7 +4,10 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
-## [0.7.2] - 2026-09-20
+## [0.8.0] - 2026-09-20
+
+### Added
+- **Interception for DeepSeek, Mistral, Perplexity, xAI, Cohere, TypeSafe Jev, Amazon Bedrock and Ollama.** `DEFAULT_INTERCEPT_ADDRESSES` now captures these automatically with no configuration change: `api.deepseek.com`, `api.mistral.ai`, `api.perplexity.ai`, `api.x.ai`; Cohere on `api.cohere.com` and `api.cohere.ai`, path-scoped to `/v2/chat`, `/v1/embed` and `/v2/embed` only (its other endpoints have different envelopes the server would record as empty successes); TypeSafe Jev at `api.typesafe.ai/v1/systemone`; and Amazon Bedrock runtime in any region via the `//bedrock-runtime.` / `//bedrock-runtime-fips.` host prefixes, for clients built on httpx or requests (for example the Anthropic Bedrock SDK or LiteLLM — plain boto3 uses urllib3 and is not captured). Bedrock's binary `application/vnd.amazon.eventstream` responses are recorded as `"[binary]"` instead of being decoded as text. `/v1/embed-jobs` is added to the default deny-list because it contains `/v1/embed`. See [docs/supported-libraries.md](./docs/supported-libraries.md). (#141)
 
 ### Fixed
 - **`CoolhandDramatiqMiddleware` now applies constructor-kwarg Coolhand config in every worker process.** Previously a freshly spawned worker's `after_process_boot` built a bare `Coolhand()`, so config passed to the parent's `Coolhand(api_key=..., intercept_addresses=..., ...)` silently never reached workers — only `COOLHAND_*` environment variables did. The middleware now accepts the same `config`/keyword arguments as `Coolhand(...)` and, in each worker, keeps the existing instance if it already matches that config or otherwise replaces it. A replaced instance is only unregistered from `atexit`, not shut down: in a forked worker it is a copy of the parent's instance, and flushing it would re-deliver the parent's in-flight interactions once per worker. A failure constructing the replacement is logged and swallowed rather than crashing the worker. `CoolhandDramatiqMiddleware()` with no arguments behaves as before. See [docs/dramatiq.md](./docs/dramatiq.md). (#130)
@@ -20,6 +23,8 @@ All notable changes to this project will be documented in this file.
 - **anyio 4.13.0 → 4.14.2**, fixing CVE-2026-63374 and CVE-2026-64847 in the development/test dependency lock (`uv.lock`); `pip-audit` in CI had been failing on both. anyio is a transitive dependency of the optional integrations, not a runtime dependency of `coolhand` itself. (#138)
 
 ### Notes
+- **Ollama is only partly covered.** Ollama has no fixed host, so `:11434/api/chat`, `/api/generate`, `/api/embed` and `/api/embeddings` are anchored to its default port; this captures remote, LAN and Docker Compose hosts (for example `http://ollama:11434`). Bare `localhost:11434` — the most common setup — is still skipped by the existing localhost guard, which is unchanged. (#141)
+- **If you replace the default deny-list, you also drop the Cohere `/v1/embed-jobs` guard.** `exclude_api_patterns=[...]` replaces `DEFAULT_EXCLUDE_API_PATTERNS` rather than extending it; extend it instead (see [docs/configuration.md](./docs/configuration.md)) to keep the defaults. (#141)
 - **A Copilot response slower than 60 seconds is now logged twice.** The fallback error is reported at 60 seconds without evicting the pending entry, so a legitimately slow `assistant.message` that arrives afterwards is still delivered and logged as a success. Consumers will see an error record followed by a success record for the same request in that case. (#131)
 
 ### Internal

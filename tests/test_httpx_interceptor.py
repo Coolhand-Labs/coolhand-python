@@ -280,6 +280,113 @@ class TestIsLlmApi:
         url = "https://opencode.ai/zen/v1/chat/completions"
         assert _is_llm_api(url) is True
 
+    @staticmethod
+    def _captured(url):
+        """Mirror the send() gate: allow-listed, not localhost, not excluded."""
+        return _is_llm_api(url) and not _is_localhost(url) and not _is_excluded(url)
+
+    @pytest.mark.parametrize(
+        "url",
+        [
+            "https://api.deepseek.com/chat/completions",
+            "https://api.mistral.ai/v1/chat/completions",
+            "https://api.perplexity.ai/chat/completions",
+            "https://api.x.ai/v1/chat/completions",
+        ],
+    )
+    def test_openai_compatible_providers(self, url):
+        """Detects DeepSeek, Mistral, Perplexity and xAI."""
+        assert self._captured(url) is True
+
+    @pytest.mark.parametrize(
+        "url",
+        [
+            "https://api.cohere.com/v2/chat",
+            "https://api.cohere.ai/v2/chat",
+            "https://api.cohere.com/v1/embed",
+            "https://api.cohere.ai/v1/embed",
+            "https://api.cohere.com/v2/embed",
+            "https://api.cohere.ai/v2/embed",
+        ],
+    )
+    def test_cohere_supported_paths(self, url):
+        """Detects the Cohere endpoints the server ingests."""
+        assert self._captured(url) is True
+
+    @pytest.mark.parametrize(
+        "url",
+        [
+            "https://api.cohere.com/v1/chat",
+            "https://api.cohere.ai/v1/chat",
+            "https://api.cohere.com/v2/rerank",
+            "https://api.cohere.com/v1/tokenize",
+            "https://api.cohere.com/v1/classify",
+            "https://api.cohere.com/v1/embed-jobs",
+            "https://api.cohere.ai/v1/embed-jobs",
+            "https://api.cohere.com/",
+        ],
+    )
+    def test_cohere_unsupported_paths_not_captured(self, url):
+        """Cohere is path-scoped, not host-wide."""
+        assert self._captured(url) is False
+
+    def test_typesafe_jev(self):
+        """Detects TypeSafe Jev (System One)."""
+        assert self._captured("https://api.typesafe.ai/v1/systemone") is True
+
+    def test_typesafe_other_paths_not_captured(self):
+        """TypeSafe is path-scoped to /v1/systemone."""
+        assert self._captured("https://api.typesafe.ai/v1/models") is False
+        assert self._captured("https://api.typesafe.ai/") is False
+
+    @pytest.mark.parametrize(
+        "url",
+        [
+            "https://bedrock-runtime.us-east-1.amazonaws.com/model/foo/converse",
+            "https://bedrock-runtime.eu-west-2.amazonaws.com/model/foo/invoke",
+            "https://bedrock-runtime-fips.us-gov-west-1.amazonaws.com/model/foo/converse",
+        ],
+    )
+    def test_bedrock_runtime(self, url):
+        """Detects Bedrock runtime hosts in any region."""
+        assert self._captured(url) is True
+
+    def test_bedrock_other_services_not_captured(self):
+        """Bedrock control-plane and agent hosts are not the runtime host."""
+        assert (
+            self._captured("https://bedrock.us-east-1.amazonaws.com/foundation-models")
+            is False
+        )
+        assert (
+            self._captured(
+                "https://bedrock-agent-runtime.us-east-1.amazonaws.com/agents"
+            )
+            is False
+        )
+
+    @pytest.mark.parametrize(
+        "path", ["/api/chat", "/api/generate", "/api/embed", "/api/embeddings"]
+    )
+    def test_ollama_on_default_port(self, path):
+        """Detects Ollama paths on its default port for non-localhost hosts."""
+        assert self._captured("http://ollama:11434" + path) is True
+        assert self._captured("http://gpu-box.lan:11434" + path) is True
+
+    def test_ollama_path_without_port_not_captured(self):
+        """A bare /api/chat on an unrelated host is never captured."""
+        assert self._captured("https://example.com/api/chat") is False
+        assert self._captured("https://app.internal:8080/api/generate") is False
+        assert self._captured("https://example.com/api/embed") is False
+
+    def test_ollama_other_paths_on_default_port_not_captured(self):
+        """Only the four inference paths match, not the rest of Ollama's API."""
+        assert self._captured("http://ollama:11434/api/tags") is False
+        assert self._captured("http://ollama:11434/api/pull") is False
+
+    def test_ollama_localhost_still_skipped(self):
+        """Bare localhost stays uncaptured; the localhost guard is unchanged."""
+        assert self._captured("http://localhost:11434/api/chat") is False
+
     def test_all_default_addresses(self):
         """All default intercept addresses are detected."""
         for addr in DEFAULT_INTERCEPT_ADDRESSES:

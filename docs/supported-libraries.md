@@ -72,6 +72,11 @@ It covers:
 - **OpenRouter** — `openrouter.ai`
 - **OpenCode** — `opencode.ai`, `api.opencode.ai`
 - **ElevenLabs** — `api.elevenlabs.io`
+- **DeepSeek, Mistral, Perplexity, xAI** — `api.deepseek.com`, `api.mistral.ai`, `api.perplexity.ai`, `api.x.ai`
+- **Cohere** — `/v2/chat`, `/v1/embed` and `/v2/embed` on `api.cohere.com` and `api.cohere.ai`. Path-anchored, not host-wide: other Cohere endpoints (v1 chat, rerank, tokenize, classify) are not supported, and `/v1/embed-jobs` is in the default deny-list.
+- **TypeSafe Jev (System One)** — `api.typesafe.ai/v1/systemone`
+- **Amazon Bedrock** — `bedrock-runtime.` and `bedrock-runtime-fips.` (any region)
+- **Ollama** — `:11434/api/chat`, `:11434/api/generate`, `:11434/api/embed`, `:11434/api/embeddings`. Ollama has no fixed host, so these are anchored to its default port; a bare `/api/chat` would capture unrelated apps. Requests to `localhost`, `127.0.0.1`, `0.0.0.0` and `::1` are never captured, whatever the allow-list says, so this covers remote, LAN and Docker Compose hosts such as `http://ollama:11434`. For an Ollama on another port, add its address via `intercept_addresses`.
 
 The Azure AI Services and Foundry hosts are multi-service: the same hostname serves Speech, Vision, Language and Content Safety alongside model inference. Those entries are therefore anchored to the inference paths (`/openai/`, `/models/`) so non-LLM traffic on the same host is not captured. The Foundry portal domain `ai.azure.com` is deliberately not in the list.
 

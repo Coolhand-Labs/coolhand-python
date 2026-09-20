@@ -70,6 +70,36 @@ DEFAULT_INTERCEPT_ADDRESSES = [
     "openrouter.ai",
     "opencode.ai",
     "api.opencode.ai",
+    # OpenAI-compatible providers the Coolhand server ingests and prices
+    "api.deepseek.com",
+    "api.mistral.ai",
+    "api.perplexity.ai",
+    "api.x.ai",
+    # Cohere is path-anchored, never host-wide: the server ingests only v2 chat
+    # and v1/v2 embed. Its other endpoints (v1 chat, rerank, tokenize, classify)
+    # have different envelopes and would be recorded as empty successes.
+    # /v1/embed-jobs also contains "/v1/embed", so it is in the deny-list.
+    "api.cohere.com/v2/chat",
+    "api.cohere.com/v1/embed",
+    "api.cohere.com/v2/embed",
+    "api.cohere.ai/v2/chat",
+    "api.cohere.ai/v1/embed",
+    "api.cohere.ai/v2/embed",
+    # TypeSafe Jev (System One). Path-anchored: the server routes only this path.
+    "api.typesafe.ai/v1/systemone",
+    # Amazon Bedrock. Plain substring matching has no wildcard for the region
+    # label, so match the "bedrock-runtime." host prefix (and its FIPS variant).
+    "bedrock-runtime.",
+    "bedrock-runtime-fips.",
+    # Self-hosted Ollama has no fixed host, so only path identifies it, and a
+    # bare "/api/chat" would capture any app's own unrelated route. Anchor to
+    # Ollama's default port as well. Bare localhost is skipped by
+    # _is_localhost, so these cover remote, LAN and Docker Compose hosts
+    # (e.g. http://ollama:11434) on the default port.
+    ":11434/api/chat",
+    ":11434/api/generate",
+    ":11434/api/embed",
+    ":11434/api/embeddings",
     ":generateContent",
     ":streamGenerateContent",
     ":predict",

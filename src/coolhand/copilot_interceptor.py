@@ -256,7 +256,13 @@ def patch() -> bool:
             "method": "POST",
             "url": "copilot://session.send",
             "headers": p.get("requestHeaders") or {},
-            "body": {**session_ctx, **dict(p)},
+            # requestHeaders is already carried (and masked) in "headers"; leaving
+            # it in the body would ship Authorization/X-API-Key values unmasked.
+            "body": {
+                k: v
+                for k, v in {**session_ctx, **dict(p)}.items()
+                if k != "requestHeaders"
+            },
             "timestamp": start,
         }
 
@@ -279,7 +285,10 @@ def patch() -> bool:
             with _lock:
                 still_owned = _remove_from_pre_pending(session_id, entry)
             if still_owned:
-                _handler(req_data, None, str(e))
+                try:
+                    _handler(req_data, None, str(e))
+                except Exception:
+                    logger.debug("Copilot handler error on error path", exc_info=True)
             raise
 
         # Schedule a fallback in case assistant.message never arrives (e.g. the
@@ -310,7 +319,10 @@ def patch() -> bool:
         _original_handle_message(self, message)
         if not _handler:
             return
-        _sweep_stale()
+        try:
+            _sweep_stale()
+        except Exception:
+            logger.debug("Copilot stale sweep failed", exc_info=True)
         try:
             if (
                 "method" in message

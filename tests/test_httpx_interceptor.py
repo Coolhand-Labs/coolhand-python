@@ -549,6 +549,87 @@ class TestSyncRequestCapture:
             unpatch()
 
 
+class TestUnreadableRequestBody:
+    """Streamed/multipart request bodies must not break the host's call."""
+
+    def test_streamed_request_body_does_not_raise(self, reset_global_instance):
+        import httpx
+
+        from coolhand import httpx_interceptor
+
+        captured = []
+        set_handler(lambda req, res, err: captured.append((req, res, err)))
+        patch_httpx()
+        try:
+
+            def gen():
+                yield b"chunk"
+
+            # A generator body: request.content raises httpx.RequestNotRead
+            request = httpx.Request(
+                "POST", "https://api.openai.com/v1/audio/transcriptions", content=gen()
+            )
+            with pytest.raises(httpx.RequestNotRead):
+                request.content  # noqa: B018 - confirms the precondition
+
+            mock_response = MagicMock()
+            mock_response.status_code = 200
+            mock_response.headers = {"content-type": "application/json"}
+            mock_response._content = b"{}"
+            mock_response.content = b"{}"
+            original = httpx_interceptor._original_send
+            httpx_interceptor._original_send = MagicMock(return_value=mock_response)
+            try:
+                response = httpx.Client.send(httpx.Client(), request)
+            finally:
+                httpx_interceptor._original_send = original
+
+            assert response is mock_response
+            assert len(captured) == 1
+            assert captured[0][0]["body"] == "[unreadable body]"
+        finally:
+            unpatch()
+
+    @pytest.mark.asyncio
+    async def test_streamed_request_body_does_not_raise_async(
+        self, reset_global_instance
+    ):
+        import httpx
+
+        from coolhand import httpx_interceptor
+
+        captured = []
+        set_handler(lambda req, res, err: captured.append((req, res, err)))
+        patch_httpx()
+        try:
+
+            async def agen():
+                yield b"chunk"
+
+            request = httpx.Request(
+                "POST", "https://api.openai.com/v1/audio/transcriptions", content=agen()
+            )
+            mock_response = MagicMock()
+            mock_response.status_code = 200
+            mock_response.headers = {"content-type": "application/json"}
+            mock_response._content = b"{}"
+            mock_response.content = b"{}"
+            original = httpx_interceptor._original_async_send
+            httpx_interceptor._original_async_send = AsyncMock(
+                return_value=mock_response
+            )
+            try:
+                async with httpx.AsyncClient() as client:
+                    response = await httpx.AsyncClient.send(client, request)
+            finally:
+                httpx_interceptor._original_async_send = original
+
+            assert response is mock_response
+            assert captured[0][0]["body"] == "[unreadable body]"
+        finally:
+            unpatch()
+
+
 class TestAsyncRequestCapture:
     """Tests for asynchronous request capture."""
 

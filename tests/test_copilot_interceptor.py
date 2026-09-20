@@ -1950,3 +1950,67 @@ class TestAssistantUsageEvent:
 
         with copilot_interceptor._lock:
             assert "s-stale" not in copilot_interceptor._session_usage
+
+
+class TestRedTeamHardening:
+    """Findings from the v0.7.2 whole-package review."""
+
+    @pytest.mark.asyncio
+    async def test_request_headers_not_duplicated_unmasked_in_body(self, handler):
+        from coolhand import copilot_interceptor
+
+        cls = _inject_fake_sdk()
+        copilot_interceptor.set_handler(handler)
+        copilot_interceptor.patch()
+
+        instance = cls()
+        await instance.request(
+            "session.send",
+            {
+                "sessionId": "s1",
+                "prompt": "hi",
+                "requestHeaders": {"Authorization": "Bearer sk-live-secret-value"},
+            },
+        )
+
+        req_data = copilot_interceptor._pre_pending["s1"][0]["req_data"]
+        assert req_data["headers"] == {"Authorization": "Bearer sk-live-secret-value"}
+        # The raw values still reach the handler via "headers" (masked downstream by
+        # log_interaction) but must not ride along a second time inside the body.
+        assert "requestHeaders" not in req_data["body"]
+        assert req_data["body"]["prompt"] == "hi"
+
+    @pytest.mark.asyncio
+    async def test_raising_handler_does_not_mask_sdk_error(self):
+        from coolhand import copilot_interceptor
+
+        class FailingClient:
+            async def request(self, method, params=None, timeout=None, **kwargs):
+                raise ConnectionError("sdk transport down")
+
+            def _handle_message(self, message):
+                pass
+
+        _inject_fake_sdk(FailingClient)
+        copilot_interceptor.set_handler(
+            MagicMock(side_effect=RuntimeError("handler bug"))
+        )
+        copilot_interceptor.patch()
+
+        with pytest.raises(ConnectionError, match="sdk transport down"):
+            await FailingClient().request("session.send", {"sessionId": "s1"})
+
+    def test_sweep_failure_does_not_break_message_handling(self, handler, monkeypatch):
+        from coolhand import copilot_interceptor
+
+        cls = _inject_fake_sdk()
+        copilot_interceptor.set_handler(handler)
+        copilot_interceptor.patch()
+        monkeypatch.setattr(
+            copilot_interceptor,
+            "_sweep_stale",
+            MagicMock(side_effect=RuntimeError("sweep bug")),
+        )
+
+        # Must not raise on the SDK's reader thread
+        cls()._handle_message(_assistant_message_notification("s1", "m1", "hi"))

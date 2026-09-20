@@ -51,7 +51,6 @@ import coolhand
 
 _ch = coolhand.Coolhand(
     api_key=os.getenv("COOLHAND_API_KEY"),
-    intercept_addresses=["models.github.ai"],
     silent=True,
 )
 
@@ -98,6 +97,25 @@ async def _resolve_github_token(provided: str) -> str:
     )
 
 
+# Chat-completions api-version for the raw httpx request; the azure-ai-inference
+# SDK path picks its own default.
+_AZURE_API_VERSION = "2024-05-01-preview"
+
+
+def _azure_config() -> tuple[str, str, str]:
+    """Return (endpoint, key, model) for the Azure modes from the environment."""
+    endpoint = os.getenv("AZURE_INFERENCE_ENDPOINT", "").strip().rstrip("/")
+    key = os.getenv("AZURE_INFERENCE_KEY", "").strip()
+    model = os.getenv("AZURE_INFERENCE_MODEL", "").strip() or "gpt-4.1-mini"
+    if not endpoint or not key:
+        raise HTTPException(
+            status_code=501,
+            detail="Azure modes need AZURE_INFERENCE_ENDPOINT and AZURE_INFERENCE_KEY "
+            "in .env (GitHub Models was retired on 2026-07-30).",
+        )
+    return endpoint, key, model
+
+
 class GuessBandsRequest(BaseModel):
     github_token: str = ""
     sentence: str
@@ -125,8 +143,8 @@ class SubmitFeedbackResponse(BaseModel):
 # ---------------------------------------------------------------------------
 
 
-async def _guess_via_azure_sdk(github_token: str, sentence: str) -> str:
-    """Call GitHub Models via azure-ai-inference ChatCompletionsClient (requests transport).
+async def _guess_via_azure_sdk(sentence: str) -> str:
+    """Call Azure AI Foundry via azure-ai-inference ChatCompletionsClient (requests transport).
 
     This path is NOT intercepted by coolhand's httpx patcher — use it to test issue #12.
     """
@@ -134,17 +152,18 @@ async def _guess_via_azure_sdk(github_token: str, sentence: str) -> str:
 
     from azure.ai.inference import ChatCompletionsClient
 
+    endpoint, key, model = _azure_config()
     print(
         "[AZURE-AI-INFERENCE SDK] Making inference call via ChatCompletionsClient (requests transport)"
     )
 
     def _sync():
         client = ChatCompletionsClient(
-            endpoint="https://models.github.ai/inference",
-            credential=AzureKeyCredential(github_token),
+            endpoint=endpoint,
+            credential=AzureKeyCredential(key),
         )
         resp = client.complete(
-            model="openai/gpt-4o-mini",
+            model=model,
             messages=[
                 SystemMessage(content=SYSTEM_PROMPT),
                 UserMessage(
@@ -161,9 +180,7 @@ async def _guess_via_azure_sdk(github_token: str, sentence: str) -> str:
     except Exception as e:
         err = str(e)
         if "401" in err or "unauthorized" in err.lower():
-            raise HTTPException(
-                status_code=401, detail="Invalid or expired GitHub token."
-            )
+            raise HTTPException(status_code=401, detail="Invalid Azure API key.")
         if "429" in err or "rate limit" in err.lower():
             raise HTTPException(
                 status_code=429, detail="Rate limit reached — please try again shortly."
@@ -173,10 +190,10 @@ async def _guess_via_azure_sdk(github_token: str, sentence: str) -> str:
         )
 
 
-async def _guess_via_azure(github_token: str, sentence: str) -> str:
-    """Call GitHub Models via azure-core credential + httpx transport (intercepted by coolhand)."""
-    print("[AZURE HTTPX] Making inference call via models.github.ai")
-    cred = AzureKeyCredential(github_token)
+async def _guess_via_azure(sentence: str) -> str:
+    """Call Azure AI Foundry via a raw httpx request (intercepted by coolhand)."""
+    endpoint, key, model = _azure_config()
+    print("[AZURE HTTPX] Making inference call via httpx to the Azure endpoint")
     messages = [
         SystemMessage(content=SYSTEM_PROMPT),
         UserMessage(
@@ -186,10 +203,11 @@ async def _guess_via_azure(github_token: str, sentence: str) -> str:
     async with httpx.AsyncClient() as client:
         try:
             resp = await client.post(
-                "https://models.github.ai/inference/chat/completions",
-                headers={"Authorization": f"Bearer {cred.key}"},
+                f"{endpoint}/chat/completions",
+                params={"api-version": _AZURE_API_VERSION},
+                headers={"api-key": key},
                 json={
-                    "model": "openai/gpt-4o-mini",
+                    "model": model,
                     "messages": [m.as_dict() for m in messages],
                     "temperature": 0.9,
                     "max_tokens": 200,
@@ -202,14 +220,15 @@ async def _guess_via_azure(github_token: str, sentence: str) -> str:
             )
 
     if resp.status_code == 401:
-        raise HTTPException(status_code=401, detail="Invalid or expired GitHub token.")
+        raise HTTPException(status_code=401, detail="Invalid Azure API key.")
     if resp.status_code == 429:
         raise HTTPException(
             status_code=429, detail="Rate limit reached — please try again shortly."
         )
     if not resp.is_success:
         raise HTTPException(
-            status_code=502, detail=f"GitHub Models API error: HTTP {resp.status_code}"
+            status_code=502,
+            detail=f"Azure inference API error: HTTP {resp.status_code}",
         )
 
     data = resp.json()
@@ -280,7 +299,6 @@ async def serve_index():
 
 @app.post("/api/guess-bands", response_model=GuessBandsResponse)
 async def guess_bands(body: GuessBandsRequest):
-    github_token = await _resolve_github_token(body.github_token)
     if not body.sentence.strip():
         raise HTTPException(
             status_code=400, detail="Please write something about yourself."
@@ -292,10 +310,11 @@ async def guess_bands(body: GuessBandsRequest):
 
     try:
         if body.mode == "azure":
-            raw = await _guess_via_azure(github_token, body.sentence)
+            raw = await _guess_via_azure(body.sentence)
         elif body.mode == "azure-sdk":
-            raw = await _guess_via_azure_sdk(github_token, body.sentence)
+            raw = await _guess_via_azure_sdk(body.sentence)
         else:
+            github_token = await _resolve_github_token(body.github_token)
             raw = await _guess_via_copilot(github_token, body.sentence)
     except HTTPException:
         raise
@@ -303,7 +322,7 @@ async def guess_bands(body: GuessBandsRequest):
         err = str(e)
         if "401" in err or "Unauthorized" in err or "authentication" in err.lower():
             raise HTTPException(
-                status_code=401, detail="Invalid or expired GitHub token."
+                status_code=401, detail="Invalid or expired credentials."
             )
         if "429" in err or "rate limit" in err.lower():
             raise HTTPException(

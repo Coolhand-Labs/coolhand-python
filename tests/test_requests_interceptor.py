@@ -266,6 +266,24 @@ class TestRequestsCapture:
         assert captured[0][1]["body"] == "[streaming]"
         assert captured[0][1]["is_streaming"] is True
 
+    def test_binary_response_body_replaced_with_placeholder(self):
+        import requests
+
+        captured = []
+        set_handler(lambda req, res, err: captured.append((req, res, err)))
+        fake_response = _make_response(
+            content_type="audio/mpeg", content=b"\x00\x01\x02binarydata"
+        )
+        _patch_and_mock_original(fake_response)
+
+        session = requests.Session()
+        req = _make_prepared_request("https://api.openai.com/v1/chat/completions")
+        session.send(req)
+
+        assert len(captured) == 1
+        assert captured[0][1]["body"] == "[binary]"
+        assert captured[0][1]["is_streaming"] is False
+
     def test_response_fields_populated(self):
         import requests
 

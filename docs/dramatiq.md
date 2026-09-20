@@ -60,7 +60,7 @@ See [`examples/dramatiq_pydantic_ai.py`](../examples/dramatiq_pydantic_ai.py) fo
 
 **Problem:** Coolhand's httpx patch lives in the parent process's memory. Worker processes started with a fresh interpreter (e.g. `python -m dramatiq myapp`) begin without the patch applied.
 
-**Fix:** Add `CoolhandDramatiqMiddleware` to your broker. It calls `coolhand.start_monitoring()` in Dramatiq's `after_process_boot` lifecycle hook, ensuring monitoring is active in every worker process.
+**Fix:** Add `CoolhandDramatiqMiddleware` to your broker. In Dramatiq's `after_process_boot` lifecycle hook it creates, replaces, or re-patches the Coolhand instance as needed, ensuring monitoring is active — with the right config — in every worker process.
 
 ```python
 import coolhand
@@ -79,9 +79,20 @@ Start your workers as usual:
 python -m dramatiq tasks
 ```
 
-> **Note:** Coolhand reads `COOLHAND_API_KEY` from the environment at import time. Make sure this variable is set in your worker process environment (e.g. via your process manager, Kubernetes secret, or `.env` file).
+> **Note:** Coolhand reads `COOLHAND_API_KEY` from the environment at import time. Make sure this variable is set in your worker process environment (e.g. via your process manager, Kubernetes secret, or `.env` file) — unless you pass `api_key=` to `CoolhandDramatiqMiddleware` instead, per the next note.
 
-> **Note:** In a worker process that has no prior instance, `CoolhandDramatiqMiddleware` constructs a bare `Coolhand()` with no arguments — it only picks up `COOLHAND_*` environment variables, not config passed as constructor kwargs (`api_key=`, `intercept_addresses=`, `exclude_api_patterns=`, `base_url=`) in your main process. If you rely on kwarg-based config, configure it via the matching environment variables for Dramatiq deployments, or the worker process will silently fall back to defaults.
+> **Note:** `CoolhandDramatiqMiddleware` accepts the same config as `Coolhand(...)` — pass `api_key=`, `intercept_addresses=`, `exclude_api_patterns=`, `base_url=`, etc. to the middleware constructor. In every worker process, `import coolhand` auto-initializes a default instance from environment variables only, before the middleware's own config is applied; `after_process_boot` detects any mismatch against the config you passed and replaces that instance with one carrying it, starting a new session in the process. This only fires when the config actually differs — e.g. it won't replace an instance that was already built from `COOLHAND_API_KEY`/`COOLHAND_BASE_URL` matching what you passed here.
+>
+> ```python
+> import os
+>
+> broker.add_middleware(
+>     CoolhandDramatiqMiddleware(
+>         api_key=os.environ["COOLHAND_API_KEY"],
+>         intercept_addresses=["custom-llm-gateway.internal"],
+>     )
+> )
+> ```
 
 ---
 
@@ -89,7 +100,9 @@ python -m dramatiq tasks
 
 **Problem:** All LLM calls across all worker threads share a single global `session_id`. There is no built-in way to know which Coolhand interaction was triggered by which Dramatiq message.
 
-**Workaround:** Add the `CoolhandDramatiqMiddleware` below to your broker. It uses a `ContextVar` to tag each worker thread with the current message ID and routes LLM interactions to a per-task Coolhand instance carrying that ID as the `session_id`.
+**Workaround:** Add the `TaskSessionMiddleware` below to your broker. It uses a `ContextVar` to tag each worker thread with the current message ID and routes LLM interactions to a per-task Coolhand instance carrying that ID as the `session_id`.
+
+> **Conflict with Gap 1:** don't add both `CoolhandDramatiqMiddleware` (Gap 1) and this middleware to the same broker. `CoolhandDramatiqMiddleware.after_process_boot` always ends by calling `start_monitoring()`, which resets the httpx interceptor's handler back to the global one — clobbering the `_task_routing_handler` this workaround installs, silently losing per-task session correlation in exactly the process-worker deployments Gap 1 targets. If you need both process-worker support and per-task correlation, re-apply `httpx_interceptor.set_handler(_task_routing_handler)` after `CoolhandDramatiqMiddleware`'s `after_process_boot` has run (e.g. from this middleware's own `after_process_boot`, added after `CoolhandDramatiqMiddleware` on the broker).
 
 ```python
 # coolhand_middleware.py
@@ -108,14 +121,14 @@ _current_task_id: contextvars.ContextVar[str | None] = contextvars.ContextVar(
 _token_local = threading.local()
 
 
-class CoolhandDramatiqMiddleware(dramatiq.Middleware):
+class TaskSessionMiddleware(dramatiq.Middleware):
     """
     Routes each Dramatiq message's LLM calls to a dedicated Coolhand
     session_id derived from the message ID.
 
     Add to your broker before starting workers:
 
-        broker.add_middleware(CoolhandDramatiqMiddleware())
+        broker.add_middleware(TaskSessionMiddleware())
     """
 
     def before_process_message(self, broker, message):  # type: ignore[override]
@@ -150,13 +163,13 @@ Wire it up in your broker setup:
 
 ```python
 import coolhand                          # patches httpx first
-from coolhand_middleware import CoolhandDramatiqMiddleware
+from coolhand_middleware import TaskSessionMiddleware
 
 import dramatiq
 from dramatiq.brokers.redis import RedisBroker
 
 broker = RedisBroker(url="redis://localhost:6379")
-broker.add_middleware(CoolhandDramatiqMiddleware())
+broker.add_middleware(TaskSessionMiddleware())
 dramatiq.set_broker(broker)
 ```
 

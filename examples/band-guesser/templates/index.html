@@ -292,24 +292,25 @@
         <input type="radio" id="mode-copilot" name="mode" value="copilot" checked>
         <label for="mode-copilot">GitHub Copilot SDK</label>
         <input type="radio" id="mode-azure" name="mode" value="azure">
-        <label for="mode-azure">GitHub Models (httpx)</label>
+        <label for="mode-azure">Azure Foundry (httpx)</label>
         <input type="radio" id="mode-azure-sdk" name="mode" value="azure-sdk">
-        <label for="mode-azure-sdk">GitHub Models (SDK)</label>
+        <label for="mode-azure-sdk">Azure Foundry (SDK)</label>
       </div>
 
       <div class="field">
-        <label for="token">GitHub Token <span style="font-weight:400;color:var(--muted)">(optional)</span></label>
+        <label for="token" id="token-label">GitHub Token <span style="font-weight:400;color:var(--muted)">(optional)</span></label>
         <input type="password" id="token" placeholder="Leave blank to use gh auth token" autocomplete="off" spellcheck="false">
         <p id="token-hint-copilot" class="hint">
           Leave blank to use <code>gh auth token</code> automatically.
           If you paste one, it must be an <strong>OAuth token</strong> (<code>gho_</code>) — classic PATs (<code>ghp_</code>) are not supported by the Copilot API.
         </p>
         <p id="token-hint-azure" class="hint hidden">
-          Leave blank to use <code>gh auth token</code> automatically.
-          Both OAuth tokens (<code>gho_</code>) and classic PATs (<code>ghp_</code>) work with GitHub Models.
+          The GitHub token is not used in this mode. The server calls Azure using
+          <code>AZURE_INFERENCE_ENDPOINT</code> and <code>AZURE_INFERENCE_KEY</code> from <code>.env</code>.
         </p>
         <p id="token-hint-azure-sdk" class="hint hidden">
-          Leave blank to use <code>gh auth token</code> automatically.
+          The GitHub token is not used in this mode. The server reads
+          <code>AZURE_INFERENCE_ENDPOINT</code> and <code>AZURE_INFERENCE_KEY</code> from <code>.env</code>.
           Uses <code>azure-ai-inference</code> <code>ChatCompletionsClient</code> directly (requests transport) — this path is <strong>not intercepted</strong> by coolhand's httpx patcher.
         </p>
       </div>
@@ -384,6 +385,9 @@
     document.querySelectorAll('input[name="mode"]').forEach((radio) => {
       radio.addEventListener('change', () => {
         const mode = getMode();
+        // The GitHub token only applies to copilot mode; hide it for the Azure modes.
+        document.getElementById('token-label').classList.toggle('hidden', mode !== 'copilot');
+        document.getElementById('token').classList.toggle('hidden', mode !== 'copilot');
         document.getElementById('token-hint-copilot').classList.toggle('hidden', mode !== 'copilot');
         document.getElementById('token-hint-azure').classList.toggle('hidden', mode !== 'azure');
         document.getElementById('token-hint-azure-sdk').classList.toggle('hidden', mode !== 'azure-sdk');
@@ -429,10 +433,10 @@
 
         const badge = document.getElementById('mode-badge');
         if (mode === 'azure') {
-          badge.textContent = 'GitHub Models (httpx)';
+          badge.textContent = 'Azure Foundry (httpx)';
           badge.className = 'mode-badge azure';
         } else if (mode === 'azure-sdk') {
-          badge.textContent = 'GitHub Models (SDK)';
+          badge.textContent = 'Azure Foundry (SDK)';
           badge.className = 'mode-badge azure-sdk';
         } else {
           badge.textContent = 'GitHub Copilot SDK';

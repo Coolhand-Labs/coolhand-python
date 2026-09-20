@@ -180,6 +180,33 @@ class TestPatchUnpatch:
         assert copilot_interceptor._pre_pending == {}
         assert copilot_interceptor._session_params == {}
 
+    @pytest.mark.asyncio
+    async def test_unpatch_cancels_outstanding_fallback_timers(self):
+        """unpatch() must cancel scheduled fallback timers, not just clear the
+        dicts, so a stray callback doesn't hold a reference to req_data (and
+        fire pointlessly) for up to COPILOT_INTERCEPTOR_FALLBACK_TIMEOUT after
+        monitoring was supposedly turned off.
+        """
+        import asyncio
+
+        from coolhand import copilot_interceptor
+
+        cls = _inject_fake_sdk()
+        copilot_interceptor.set_handler(MagicMock())
+        copilot_interceptor.patch()
+
+        instance = cls()
+        await instance.request("session.send", {"sessionId": "s1", "prompt": "hi"})
+        entry = copilot_interceptor._pre_pending["s1"][0]
+        timer = entry["timer"]
+        assert timer.cancelled() is False
+
+        copilot_interceptor.unpatch()
+        # call_soon_threadsafe schedules the cancel; give the loop a tick.
+        await asyncio.sleep(0)
+
+        assert timer.cancelled() is True
+
     def test_unpatch_when_not_patched_is_noop(self):
         from coolhand import copilot_interceptor
 
@@ -351,6 +378,44 @@ class TestRequestInterception:
         handler.assert_not_called()
 
     @pytest.mark.asyncio
+    async def test_fallback_not_scheduled_when_entry_already_consumed(self, handler):
+        """Mirror of test_no_duplicate_handler_call_when_entry_already_consumed
+        for the success path: if _handle_message delivers the response and
+        consumes the entry before this coroutine resumes from the await, no
+        fallback timer should be scheduled for the now-orphaned entry.
+        """
+        from coolhand import copilot_interceptor
+
+        consumed_by_handle_message = []
+
+        class RaceClient:
+            async def request(self_inner, method, params=None, timeout=None):
+                with copilot_interceptor._lock:
+                    q = copilot_interceptor._pre_pending.get("s1", [])
+                    if q:
+                        entry = q.pop(0)
+                        consumed_by_handle_message.append(entry)
+                        if not q:
+                            del copilot_interceptor._pre_pending["s1"]
+                handler(entry["req_data"], {"body": {"content": "hi"}}, None)
+                return {"messageId": "msg-001"}
+
+            def _handle_message(self, message):
+                pass
+
+        _inject_fake_sdk(RaceClient)
+        copilot_interceptor.set_handler(handler)
+        copilot_interceptor.patch()
+
+        instance = RaceClient()
+        await instance.request("session.send", {"sessionId": "s1", "prompt": "hi"})
+
+        handler.assert_called_once()
+        assert copilot_interceptor._pre_pending == {}
+        # No fallback timer scheduled for an entry already delivered by the race.
+        assert consumed_by_handle_message[0].get("timer") is None
+
+    @pytest.mark.asyncio
     async def test_no_pending_entry_when_handler_is_none(self):
         from coolhand import copilot_interceptor
 
@@ -385,6 +450,128 @@ class TestRequestInterception:
         assert entry["req_data"]["body"]["attachments"] == [
             {"type": "file", "path": "/tmp/x"}
         ]
+
+    @pytest.mark.asyncio
+    async def test_session_send_no_assistant_message_event_still_logs(
+        self, handler, monkeypatch
+    ):
+        """When _original_request returns but no assistant.message notification
+        fires (e.g. the copilot model rejected the request silently), the fallback
+        scheduled via call_later must log the interaction as an error.
+        """
+        import asyncio
+
+        from coolhand import copilot_interceptor
+
+        cls = _inject_fake_sdk()
+        copilot_interceptor.set_handler(handler)
+        copilot_interceptor.patch()
+
+        # Zero timeout: fallback fires on the next event-loop iteration
+        monkeypatch.setattr(
+            copilot_interceptor, "COPILOT_INTERCEPTOR_FALLBACK_TIMEOUT", 0
+        )
+
+        instance = cls()
+        # session.send returns (RPC ack) but no assistant.message fires
+        await instance.request("session.send", {"sessionId": "s1", "prompt": "hi"})
+        handler.assert_not_called()  # fallback not yet fired
+
+        # call_later(0, ...) moves to the ready queue on the first cycle and
+        # fires on the second — two yields guarantee it runs.
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+
+        handler.assert_called_once()
+        req_data, res_data, err = handler.call_args[0]
+        assert res_data is None
+        assert "no assistant.message" in err
+        assert req_data["url"] == "copilot://session.send"
+        assert req_data["body"]["prompt"] == "hi"
+        # The entry is reported, not evicted — a legitimately slow response
+        # arriving after the fallback fires must still be deliverable.
+        assert copilot_interceptor._pre_pending["s1"][0]["logged"] is True
+
+    @pytest.mark.asyncio
+    async def test_late_assistant_message_after_fallback_still_delivered(
+        self, handler, monkeypatch
+    ):
+        """A response that legitimately arrives after the fallback timeout must
+        still be delivered as a success, not silently dropped. The fallback only
+        reports a not-yet-answered request; it doesn't evict the pending entry.
+        """
+        import asyncio
+
+        from coolhand import copilot_interceptor
+
+        cls = _inject_fake_sdk()
+        copilot_interceptor.set_handler(handler)
+        copilot_interceptor.patch()
+
+        monkeypatch.setattr(
+            copilot_interceptor, "COPILOT_INTERCEPTOR_FALLBACK_TIMEOUT", 0
+        )
+
+        instance = cls()
+        await instance.request("session.send", {"sessionId": "s1", "prompt": "hi"})
+
+        # Let the fallback fire first (simulating a response slower than the
+        # configured fallback timeout).
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+        handler.assert_called_once()
+        assert handler.call_args[0][1] is None  # the fallback's error report
+
+        # The real assistant.message notification arrives late.
+        instance._handle_message(
+            _assistant_message_notification("s1", "msg-001", "world")
+        )
+
+        assert handler.call_count == 2
+        req_data, res_data, err = handler.call_args[0]
+        assert err is None
+        assert res_data["body"]["content"] == "world"
+        assert copilot_interceptor._pre_pending == {}
+
+    @pytest.mark.asyncio
+    async def test_fallback_then_ttl_sweep_reports_only_once(
+        self, handler, monkeypatch
+    ):
+        """If assistant.message never arrives at all, the fallback reports the
+        error at COPILOT_INTERCEPTOR_FALLBACK_TIMEOUT and entry["logged"] must
+        stop _sweep_stale's later COPILOT_INTERCEPTOR_PENDING_TTL_SECONDS
+        eviction from reporting the same entry a second time.
+        """
+        import asyncio
+
+        from coolhand import copilot_interceptor
+
+        cls = _inject_fake_sdk()
+        copilot_interceptor.set_handler(handler)
+        copilot_interceptor.patch()
+
+        monkeypatch.setattr(
+            copilot_interceptor, "COPILOT_INTERCEPTOR_FALLBACK_TIMEOUT", 0
+        )
+
+        instance = cls()
+        await instance.request("session.send", {"sessionId": "s1", "prompt": "hi"})
+
+        # Fallback fires.
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+        handler.assert_called_once()
+
+        # Backdate the entry past the pending TTL and force a sweep — as
+        # _handle_message does unconditionally on every notification.
+        entry = copilot_interceptor._pre_pending["s1"][0]
+        entry["start"] = time.time() - (
+            copilot_interceptor.COPILOT_INTERCEPTOR_PENDING_TTL_SECONDS + 1
+        )
+        copilot_interceptor._sweep_stale()
+
+        assert copilot_interceptor._pre_pending == {}
+        handler.assert_called_once()  # still just the one report, not two
 
     def test_remove_from_pre_pending_returns_false_when_not_found(self):
         from coolhand import copilot_interceptor
@@ -971,9 +1158,13 @@ class TestHandleMessageInterception:
         )
 
         assert "s-stale" not in copilot_interceptor._pre_pending
-        handler.assert_not_called()
+        # Stale entry is now logged via handler rather than silently dropped
+        handler.assert_called_once()
+        req_d, res_d, err = handler.call_args[0]
+        assert res_d is None
+        assert "no assistant.message" in err
 
-    def test_stale_entries_evicted_silently(self, handler):
+    def test_stale_entries_evicted_and_logged_alongside_live(self, handler):
         from coolhand import copilot_interceptor
 
         cls = _inject_fake_sdk()
@@ -994,36 +1185,13 @@ class TestHandleMessageInterception:
             _assistant_message_notification("s1", "msg-001", "world")
         )
 
-        # Stale entry gone, handler called once (not for stale entry)
+        # Stale entry gone and logged; live entry also logged
         assert "s-stale" not in copilot_interceptor._pre_pending
-        handler.assert_called_once()
-
-    def test_stale_pre_pending_entries_evicted(self, handler):
-        from coolhand import copilot_interceptor
-
-        cls = _inject_fake_sdk()
-        copilot_interceptor.set_handler(handler)
-        copilot_interceptor.patch()
-
-        stale_start = time.time() - 400
-        with copilot_interceptor._lock:
-            copilot_interceptor._pre_pending["s-stale"] = [
-                {"req_data": {}, "start": stale_start}
-            ]
-
-        instance = cls()
-        instance._handle_message(
-            {
-                "method": "session.event",
-                "params": {
-                    "sessionId": "s1",
-                    "event": {"type": "session.idle", "data": {}},
-                },
-            }
-        )
-
-        assert "s-stale" not in copilot_interceptor._pre_pending
-        handler.assert_not_called()
+        assert handler.call_count == 2
+        # One call is the stale error, one is the live response
+        errors = [c[0][2] for c in handler.call_args_list]
+        assert any("no assistant.message" in (e or "") for e in errors)
+        assert any(e is None for e in errors)
 
     def test_stale_session_params_evicted(self, handler):
         from coolhand import copilot_interceptor

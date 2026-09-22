@@ -39,7 +39,7 @@ node <workspaceRoot>/coolhand/harness/harness.mjs my-issue --run <RUN_DIR> --rep
 2. `<workspaceRoot>/coolhand/harness/RESIST_RULES.md` — the refuse list.
 3. The API definition at `specPath`. It is your only source of truth **for the endpoint's
    contract** — paths, params, response fields, status codes.
-4. `coolhand-python/CLAUDE.md` — this repo's own rulebook. It is authoritative for setup,
+4. `coolhand-python/AGENTS.md` — this repo's own rulebook. It is authoritative for setup,
    tooling and verification commands.
 
 **Your issue links node's PR as the reference implementation. Use it for structure, not
@@ -54,7 +54,7 @@ yours to reconcile — it means one of them is wrong. Escalate (R3) and STOP.
 Naming does not port. `searchFeedback` in node is `search_feedback` here. Match the
 concept, not the characters.
 
-**If `CLAUDE.md` disagrees with this file, `CLAUDE.md` wins.** Follow it, and say so in
+**If `AGENTS.md` disagrees with this file, `AGENTS.md` wins.** Follow it, and say so in
 your PR.
 
 ## 2. Build the wrapper

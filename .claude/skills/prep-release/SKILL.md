@@ -24,7 +24,7 @@ and everything merged since the last tag, not just one diff. For an
 iterative diff-scoped review during normal development, use
 `/loop-review` instead; this skill is for the release event itself.
 
-Per `CLAUDE.md`, feature/fix branches never touch `CHANGELOG.md`,
+Per `AGENTS.md`, feature/fix branches never touch `CHANGELOG.md`,
 `pyproject.toml`'s `version`, or `src/coolhand/version.py` — this skill is
 the only place those get written. If a chosen PR's diff does touch any of
 them, treat it as a normal part of that PR's diff (don't strip it), but
@@ -115,7 +115,7 @@ never on `main` directly.
      write the entry without one rather than skipping it.
    - `README.md` / `docs/*.md` — any new config option, public method, or
      behavior change needs the relevant section updated. Follow this
-     repo's docs philosophy from `CLAUDE.md`: the README stays a scannable
+     repo's docs philosophy from `AGENTS.md`: the README stays a scannable
      landing page (basic config/feedback snippets only); anything needing
      more than one code block belongs in `docs/`.
 4. **Clean, don't just append.** Look for docs that are now stale,
@@ -123,7 +123,7 @@ never on `main` directly.
    last tag — consolidate/rewrite rather than layering a new paragraph on
    top of an outdated one. Remove docs for anything removed from the
    package.
-5. **Bump the version.** Since `CLAUDE.md` now forbids per-PR bumps, this
+5. **Bump the version.** Since `AGENTS.md` now forbids per-PR bumps, this
    should always be needed — but check `src/coolhand/version.py`'s
    `__version__` and `pyproject.toml`'s `version` against the last tag
    first as a defensive sanity check in case something bumped it out of
@@ -186,7 +186,7 @@ the same "hand it to a human" rule `/loop-review` uses for stuck findings.
 ## Phase 4: Validate the release branch
 
 1. Run `make verify` (ruff lint, ruff format check, pytest — this repo's
-   single gate per `CLAUDE.md`; never invoke the tools individually) on
+   single gate per `AGENTS.md`; never invoke the tools individually) on
    `release/vX.Y.Z`. Everything must pass before continuing — a release
    doesn't ship on a red build. If it fails, stop here and report the
    failures; fixing genuine bugs takes priority over the rest of this

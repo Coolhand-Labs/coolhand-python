@@ -13,7 +13,7 @@ import os
 
 import pytest
 
-from coolhand import CoolhandAPIError, FeedbackLinkService
+from coolhand import CoolhandAPIError, FeedbackLinkService, FeedbackService
 
 LIVE_BASE_URL = os.environ.get("COOLHAND_LIVE_BASE_URL", "")
 LIVE_API_KEY = os.environ.get("COOLHAND_LIVE_API_KEY", "")
@@ -35,22 +35,19 @@ def live_service(api_key: str = LIVE_API_KEY) -> FeedbackLinkService:
     )
 
 
-def link_first_free_feedback(service, note):
-    """Link the first fixture feedback that is not already linked (422 means taken)."""
-    for feedback_id in FEEDBACK_IDS:
-        try:
-            return feedback_id, service.link_feedback(
-                OPTIMIZATION_ID, feedback_id, note=note
-            )
-        except CoolhandAPIError as error:
-            if error.status != 422:
-                raise
-    raise AssertionError("Live fixture broken: every feedback is already linked.")
-
-
 def test_link_then_duplicate_then_unlink():
     service = live_service()
-    feedback_id, link = link_first_free_feedback(service, "live test")
+    # A fresh feedback each run: the fixture ones may already be linked, and a link's
+    # id is only returned by the single mode.
+    created = FeedbackService(
+        api_key=LIVE_API_KEY, base_url=LIVE_BASE_URL, silent=True
+    ).create_feedback(
+        {"original_output": "feedback link live test", "sentiment": "like"}
+    )
+    assert created is not None
+    feedback_id = created["id"]
+
+    link = service.link_feedback(OPTIMIZATION_ID, feedback_id, note="live test")
     try:
         assert link["feedback_id"] == feedback_id
         assert link["optimization_id"] == OPTIMIZATION_ID

@@ -15,7 +15,12 @@ from urllib.parse import quote
 from urllib.request import Request
 
 from ._config import _DEFAULT_BASE_URL, _build_opener, _normalize_base_url
-from .template_service import DEFAULT_TIMEOUT_SECONDS, CoolhandAPIError, _error_body
+from .template_service import (
+    _MAX_ERROR_BODY_CHARS,
+    DEFAULT_TIMEOUT_SECONDS,
+    CoolhandAPIError,
+    _error_body,
+)
 from .types import BulkLinkFeedbackResult, Config, OptimizationFeedbackLink
 from .version import __version__
 
@@ -25,8 +30,6 @@ OPTIMIZATIONS_ENDPOINT = "/api/v2/optimizations"
 
 # Server-side cap on `feedback_ids` per call (more is a 422).
 BULK_LINK_BATCH_SIZE = 100
-
-_MAX_ERROR_BODY_CHARS = 2000
 
 
 def _encode_id(value: str, message: str) -> str:

@@ -250,6 +250,10 @@ These are read methods, so they **raise** `CoolhandAPIError` (carrying the HTTP 
 
 For the full filter reference, pagination, and error handling, see [Reading Templates](./docs/templates.md).
 
+## Linking Feedback to an Optimization
+
+`link_feedback`, `bulk_link_feedback` (batches of 100) and `unlink_feedback` attach feedback to an optimization as evidence. Private API key required; errors raise `CoolhandAPIError`. See [Linking Feedback](./docs/feedback-links.md).
+
 ## Troubleshooting
 
 ### Enable Debug Output
@@ -292,6 +296,7 @@ export COOLHAND_SILENT=false
 - [Feedback API](./docs/feedback.md) — full field reference, matching strategies, sentiment values, async usage
 - [Supported Libraries](./docs/supported-libraries.md) — interception mechanisms, streaming, thread/process safety, delivery model
 - [Dramatiq + pydantic-ai](./docs/dramatiq.md) — task queue integration guide, known gaps, workarounds
+- [Linking Feedback to an Optimization](./docs/feedback-links.md) — link one or many feedbacks to an optimization as evidence, using the private API key
 - [Reading Templates](./docs/templates.md) — search LLM request templates and fetch a single one, prompt patterns included, using the private API key
 
 ## Related Packages

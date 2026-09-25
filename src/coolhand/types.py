@@ -158,3 +158,22 @@ class SearchTemplatesResponse(TypedDict):
 
     templates: list[LlmRequestTemplateSummary]
     pagination: Pagination
+
+
+class OptimizationFeedbackLink(TypedDict):
+    """A feedback-to-optimization link from `POST .../feedback_links` (single mode)."""
+
+    id: str  # The link's hashid, not the feedback's; what `unlink_feedback` takes
+    optimization_id: str
+    feedback_id: str
+    note: str | None
+    created_at: str  # ISO-8601 UTC
+
+
+class BulkLinkFeedbackResult(TypedDict):
+    """Counts from `POST .../feedback_links` in bulk mode, summed across batches."""
+
+    linked: int
+    already_linked: int
+    errored: int
+    not_found: list[str]  # Unknown, malformed and other-client ids

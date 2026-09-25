@@ -12,6 +12,7 @@ import logging
 
 from . import copilot_interceptor, httpx_interceptor
 from .client import CoolhandClient, get_instance, initialize, set_instance
+from .feedback_link_service import FeedbackLinkService
 from .feedback_service import (
     FeedbackService,
     acreate_feedback,
@@ -21,12 +22,14 @@ from .feedback_service import (
 from .httpx_interceptor import DEFAULT_EXCLUDE_API_PATTERNS, DEFAULT_INTERCEPT_ADDRESSES
 from .template_service import CoolhandAPIError, TemplateService, get_template_service
 from .types import (
+    BulkLinkFeedbackResult,
     Config,
     FeedbackData,
     FeedbackResponse,
     LlmRequestTemplateDetail,
     LlmRequestTemplateStatus,
     LlmRequestTemplateSummary,
+    OptimizationFeedbackLink,
     Pagination,
     RequestData,
     ResponseData,
@@ -49,6 +52,7 @@ class Coolhand(CoolhandClient):
         # Initialize feedback and template services with same config
         self._feedback_service = FeedbackService(self.config)
         self._template_service = TemplateService(self.config)
+        self._feedback_link_service = FeedbackLinkService(self.config)
 
         # Start monitoring
         self.start_monitoring()
@@ -183,6 +187,65 @@ class Coolhand(CoolhandClient):
         """
         return self._template_service.get_template(template_id)
 
+    @property
+    def feedback_link_service(self) -> FeedbackLinkService:
+        """Get the feedback link service instance."""
+        return self._feedback_link_service
+
+    def link_feedback(
+        self,
+        optimization_id: str,
+        feedback_id: str,
+        *,
+        note: str | None = None,
+    ) -> OptimizationFeedbackLink:
+        """Link one feedback to an optimization as evidence.
+
+        Requires the **private** API key. The returned `id` is the link's hashid,
+        which `unlink_feedback` takes. See `FeedbackLinkService.link_feedback`.
+
+        Raises:
+            ValueError: If an id is blank.
+            CoolhandAPIError: On a non-2xx response, with the HTTP status on `status`
+                (`422` already linked, `404` unknown optimization or feedback).
+        """
+        return self._feedback_link_service.link_feedback(
+            optimization_id, feedback_id, note=note
+        )
+
+    def bulk_link_feedback(
+        self,
+        optimization_id: str,
+        feedback_ids: list[str],
+        *,
+        note: str | None = None,
+    ) -> BulkLinkFeedbackResult:
+        """Link many feedbacks to an optimization, 100 ids per request.
+
+        Requires the **private** API key. Counts are summed and `not_found`
+        concatenated across batches; already-linked ids are counted, not errors. See
+        `FeedbackLinkService.bulk_link_feedback`.
+
+        Raises:
+            ValueError: If `feedback_ids` is empty or has a blank id; raised before
+                any request is sent.
+            CoolhandAPIError: On a non-2xx response; earlier batches stay applied.
+        """
+        return self._feedback_link_service.bulk_link_feedback(
+            optimization_id, feedback_ids, note=note
+        )
+
+    def unlink_feedback(self, optimization_id: str, link_id: str) -> None:
+        """Remove a feedback link (by the link's hashid, not the feedback's).
+
+        Requires the **private** API key.
+
+        Raises:
+            ValueError: If an id is blank.
+            CoolhandAPIError: On a non-2xx response (`404` if the link does not exist).
+        """
+        self._feedback_link_service.unlink_feedback(optimization_id, link_id)
+
 
 # Module-level convenience functions
 def status() -> dict:
@@ -243,6 +306,9 @@ __all__ = [
     "create_feedback",
     "acreate_feedback",
     "CoolhandAPIError",
+    "BulkLinkFeedbackResult",
+    "FeedbackLinkService",
+    "OptimizationFeedbackLink",
     "LlmRequestTemplateDetail",
     "LlmRequestTemplateStatus",
     "LlmRequestTemplateSummary",

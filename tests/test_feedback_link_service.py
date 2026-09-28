@@ -1,5 +1,6 @@
 """Tests for FeedbackLinkService."""
 
+import http.client
 import json
 from email.message import Message
 from urllib.error import HTTPError, URLError
@@ -162,6 +163,47 @@ class TestLinkFeedback:
 
         assert excinfo.value.status is None
 
+    @pytest.mark.parametrize(
+        "error",
+        [
+            TimeoutError("read timed out"),
+            ConnectionResetError("reset"),
+            http.client.IncompleteRead(b""),
+            UnicodeDecodeError("utf-8", b"", 0, 1, "bad"),
+        ],
+    )
+    def test_read_timeout_or_undecodable_body_raises_api_error(self, error):
+        service = build_service(error=error)
+
+        with pytest.raises(CoolhandAPIError) as excinfo:
+            service.link_feedback("opt123", "fb123")
+
+        assert excinfo.value.status is None
+
+    @pytest.mark.parametrize(
+        "body",
+        [{"error": "boom"}, {**LINK_BODY, "id": ""}, {**LINK_BODY, "id": None}],
+    )
+    def test_malformed_link_response_raises_api_error(self, body):
+        service = build_service(body)
+
+        with pytest.raises(CoolhandAPIError, match="malformed"):
+            service.link_feedback("opt123", "fb123")
+
+    def test_timeout_reaches_the_opener(self):
+        service = build_service(LINK_BODY, timeout=5)
+
+        service.link_feedback("opt123", "fb123")
+
+        assert service._opener.timeout == 5
+
+    def test_default_timeout_reaches_the_opener(self):
+        service = build_service(LINK_BODY)
+
+        service.link_feedback("opt123", "fb123")
+
+        assert service._opener.timeout == 30.0
+
     def test_non_json_body_raises(self):
         service = build_service("<html>")
 
@@ -220,6 +262,40 @@ class TestBulkLinkFeedback:
         assert result == bulk_result(
             linked=238, already_linked=6, errored=1, not_found=["x", "y", "z"]
         )
+
+    @pytest.mark.parametrize(
+        "body",
+        [
+            {"linked": 1, "already_linked": 0, "errored": 0},
+            {"linked": 1, "already_linked": 0, "errored": 0, "not_found": None},
+            {"linked": "1", "already_linked": 0, "errored": 0, "not_found": []},
+            {"linked": True, "already_linked": 0, "errored": 0, "not_found": []},
+            {"error": "boom"},
+        ],
+    )
+    def test_malformed_bulk_response_raises_api_error(self, body):
+        service = build_service(body)
+
+        with pytest.raises(CoolhandAPIError, match="malformed"):
+            service.bulk_link_feedback("opt123", ["a"])
+
+    def test_accepts_a_tuple(self):
+        service = build_service(bulk_result(linked=2))
+
+        result = service.bulk_link_feedback("opt123", ("a", "b"))
+
+        assert result["linked"] == 2
+        assert sent(service._opener.request)["feedback_ids"] == ["a", "b"]
+
+    def test_one_over_the_cap_makes_a_second_batch_of_one(self):
+        ids = [f"id{i}" for i in range(BULK_LINK_BATCH_SIZE + 1)]
+        service = build_service(bulk_result(linked=100), bulk_result(linked=1))
+
+        result = service.bulk_link_feedback("opt123", ids)
+
+        batches = [sent(r)["feedback_ids"] for r in service._opener.requests]
+        assert [len(b) for b in batches] == [BULK_LINK_BATCH_SIZE, 1]
+        assert result["linked"] == 101
 
     def test_does_not_dedupe_ids(self):
         service = build_service(bulk_result(linked=1, already_linked=1))
@@ -294,7 +370,7 @@ class TestUnlinkFeedback:
 
         assert service._opener.request.full_url.endswith("/feedback_links/a%2Fb")
 
-    @pytest.mark.parametrize("bad", ["", " ", ".", ".."])
+    @pytest.mark.parametrize("bad", ["", " ", ".", "..", None])
     def test_rejects_bad_link_id_before_any_request(self, bad):
         service = build_service()
 
@@ -312,15 +388,47 @@ class TestUnlinkFeedback:
         assert excinfo.value.status == 404
 
 
+class TestLogging:
+    def test_logs_when_not_silent(self, caplog):
+        service = build_service(LINK_BODY, {}, silent=False)
+
+        with caplog.at_level("INFO", logger="coolhand.feedback_link_service"):
+            service.link_feedback("opt123", "fb123")
+            service.unlink_feedback("opt123", "link123abc")
+
+        assert "Linked feedback fb123" in caplog.text
+        assert "Unlinked link123abc" in caplog.text
+
+    def test_silent_by_default_in_tests(self, caplog):
+        service = build_service(LINK_BODY)
+
+        with caplog.at_level("INFO", logger="coolhand.feedback_link_service"):
+            service.link_feedback("opt123", "fb123")
+
+        assert caplog.text == ""
+
+
 class TestCoolhandFacade:
     def test_delegates_to_the_service(self):
         ch = Coolhand(api_key="k", base_url=BASE_URL, silent=True)
         try:
-            ch.feedback_link_service._opener = _FakeOpener(
-                [_FakeResponse(LINK_BODY), _FakeResponse(bulk_result(linked=1))]
+            opener = _FakeOpener(
+                [
+                    _FakeResponse(LINK_BODY),
+                    _FakeResponse(bulk_result(linked=1)),
+                    _FakeResponse(""),
+                ]
             )
+            ch.feedback_link_service._opener = opener
 
-            assert ch.link_feedback("opt123", "fb123")["id"] == "link123abc"
-            assert ch.bulk_link_feedback("opt123", ["a"])["linked"] == 1
+            assert ch.link_feedback("opt123", "fb123", note="n")["id"] == "link123abc"
+            assert ch.bulk_link_feedback("opt123", ["a"], note="m")["linked"] == 1
+            assert ch.unlink_feedback("opt123", "link123abc") is None
+
+            single, bulk, unlink = opener.requests
+            assert sent(single) == {"feedback_id": "fb123", "note": "n"}
+            assert sent(bulk) == {"feedback_ids": ["a"], "note": "m"}
+            assert unlink.get_method() == "DELETE"
+            assert unlink.full_url.endswith("/opt123/feedback_links/link123abc")
         finally:
             ch.stop_monitoring()

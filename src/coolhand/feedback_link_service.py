@@ -6,6 +6,7 @@ modes share that one route; the request body picks the mode) and
 methods require the client's **private** API key; the public key gets a `401`.
 """
 
+import http.client
 import json
 import logging
 import os
@@ -31,6 +32,14 @@ OPTIMIZATIONS_ENDPOINT = "/api/v2/optimizations"
 # Server-side cap on `feedback_ids` per call (more is a 422).
 BULK_LINK_BATCH_SIZE = 100
 
+_LINK_KEYS = ("id", "optimization_id", "feedback_id")
+_BULK_COUNT_KEYS = ("linked", "already_linked", "errored")
+
+
+def _require_non_blank_str(value: Any, message: str) -> None:
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError(message)
+
 
 def _encode_id(value: str, message: str) -> str:
     """URL-encode a hashid, rejecting values that would retarget the request.
@@ -38,16 +47,10 @@ def _encode_id(value: str, message: str) -> str:
     `quote` leaves `.` unescaped, so `.` and `..` would be resolved away as path
     segments and silently hit a different route.
     """
-    if not isinstance(value, str) or not value.strip():
-        raise ValueError(message)
+    _require_non_blank_str(value, message)
     if value.strip() in {".", ".."}:
         raise ValueError(f"{message} (and not a relative path segment)")
     return quote(value, safe="")
-
-
-def _check_feedback_id(value: Any, message: str) -> None:
-    if not isinstance(value, str) or not value.strip():
-        raise ValueError(message)
 
 
 class FeedbackLinkService:
@@ -121,20 +124,25 @@ class FeedbackLinkService:
                 for a missing/public key. `status` is `None` on a transport failure or
                 a non-JSON-object body.
         """
-        _check_feedback_id(
+        _require_non_blank_str(
             feedback_id, "link_feedback: feedback_id must be a non-empty string"
         )
         payload: dict[str, Any] = {"feedback_id": feedback_id}
         if note is not None:
             payload["note"] = note
         link = self._post_links(optimization_id, "link_feedback", payload)
+        if not all(isinstance(link.get(key), str) and link[key] for key in _LINK_KEYS):
+            raise CoolhandAPIError(
+                "Feedback link response is missing or has malformed fields: "
+                f"{str(link)[:_MAX_ERROR_BODY_CHARS]}"
+            )
         self._log(f"Linked feedback {feedback_id} to optimization {optimization_id}")
         return cast(OptimizationFeedbackLink, link)
 
     def bulk_link_feedback(
         self,
         optimization_id: str,
-        feedback_ids: list[str],
+        feedback_ids: list[str] | tuple[str, ...],
         *,
         note: str | None = None,
     ) -> BulkLinkFeedbackResult:
@@ -167,10 +175,10 @@ class FeedbackLinkService:
         """
         if not isinstance(feedback_ids, (list, tuple)) or len(feedback_ids) == 0:
             raise ValueError(
-                "bulk_link_feedback: feedback_ids must be a non-empty list"
+                "bulk_link_feedback: feedback_ids must be a non-empty list or tuple"
             )
         for feedback_id in feedback_ids:
-            _check_feedback_id(
+            _require_non_blank_str(
                 feedback_id,
                 "bulk_link_feedback: every feedback id must be a non-empty string",
             )
@@ -192,14 +200,20 @@ class FeedbackLinkService:
             }
             if note is not None:
                 payload["note"] = note
-            result = cast(
-                BulkLinkFeedbackResult,
-                self._post_links(optimization_id, "bulk_link_feedback", payload),
-            )
-            total["linked"] += result["linked"]
-            total["already_linked"] += result["already_linked"]
-            total["errored"] += result["errored"]
-            total["not_found"].extend(result["not_found"])
+            result = self._post_links(optimization_id, "bulk_link_feedback", payload)
+            not_found = result.get("not_found")
+            counts = [result.get(key) for key in _BULK_COUNT_KEYS]
+            if not isinstance(not_found, list) or not all(
+                isinstance(count, int) and not isinstance(count, bool)
+                for count in counts
+            ):
+                raise CoolhandAPIError(
+                    "Bulk feedback link response is missing or has malformed "
+                    f"fields: {str(result)[:_MAX_ERROR_BODY_CHARS]}"
+                )
+            for key, count in zip(_BULK_COUNT_KEYS, counts, strict=True):
+                total[key] += count  # type: ignore[literal-required]
+            total["not_found"].extend(not_found)
         self._log(
             f"Bulk-linked {len(feedback_ids)} feedback(s) to optimization "
             f"{optimization_id}"
@@ -283,6 +297,10 @@ class FeedbackLinkService:
             raise CoolhandAPIError(
                 f"Feedback link request failed: {error.reason}"
             ) from error
+        except (OSError, http.client.HTTPException, UnicodeDecodeError) as error:
+            # A read timeout, reset, truncated or undecodable body escapes `urlopen`
+            # unwrapped.
+            raise CoolhandAPIError(f"Feedback link request failed: {error}") from error
 
     def _log(self, message: str) -> None:
         if not self.silent:

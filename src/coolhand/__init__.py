@@ -216,7 +216,7 @@ class Coolhand(CoolhandClient):
     def bulk_link_feedback(
         self,
         optimization_id: str,
-        feedback_ids: list[str],
+        feedback_ids: list[str] | tuple[str, ...],
         *,
         note: str | None = None,
     ) -> BulkLinkFeedbackResult:

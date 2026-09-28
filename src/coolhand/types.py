@@ -36,9 +36,10 @@ class Config(TypedDict, total=False):
     session_id: str | None
     intercept_addresses: list[str] | None
     exclude_api_patterns: list[str] | None
-    # HTTP timeout in seconds for the read methods on TemplateService. The write paths
-    # (CoolhandClient._send_one, FeedbackService._submit) keep their own fixed
-    # _config._WRITE_TIMEOUT_SECONDS and ignore this.
+    # HTTP timeout in seconds for the read methods on TemplateService and every
+    # FeedbackLinkService call. The write paths (CoolhandClient._send_one,
+    # FeedbackService._submit) keep their own fixed _config._WRITE_TIMEOUT_SECONDS and
+    # ignore this.
     timeout: float
 
 
@@ -158,3 +159,22 @@ class SearchTemplatesResponse(TypedDict):
 
     templates: list[LlmRequestTemplateSummary]
     pagination: Pagination
+
+
+class OptimizationFeedbackLink(TypedDict):
+    """A feedback-to-optimization link from `POST .../feedback_links` (single mode)."""
+
+    id: str  # The link's hashid, not the feedback's; what `unlink_feedback` takes
+    optimization_id: str
+    feedback_id: str
+    note: str | None
+    created_at: str  # ISO-8601 UTC
+
+
+class BulkLinkFeedbackResult(TypedDict):
+    """Counts from `POST .../feedback_links` in bulk mode, summed across batches."""
+
+    linked: int
+    already_linked: int
+    errored: int
+    not_found: list[str]  # Unknown, malformed and other-client ids

@@ -1,9 +1,9 @@
 """Tests for TemplateService."""
 
-import json
+from datetime import datetime, timedelta, timezone
 from email.message import Message
-from urllib.error import HTTPError, URLError
-from urllib.parse import parse_qs, urlparse
+from urllib.error import URLError
+from urllib.parse import urlparse
 from urllib.request import HTTPRedirectHandler
 
 import pytest
@@ -20,7 +20,15 @@ from coolhand.template_service import (
     TEMPLATES_ENDPOINT,
 )
 
-BASE_URL = "https://test.coolhandlabs.com"
+from .fake_transport import (
+    BASE_URL,
+    PAGINATION_HEADERS,
+    FakeOpener,
+    FakeResponse,
+    query_of,
+)
+from .fake_transport import build_service as fake_build_service
+from .fake_transport import http_error as fake_http_error
 
 SUMMARY_ROW = {
     "id": "tmpl123abc456",
@@ -43,76 +51,13 @@ DETAIL_BODY = {
     "system_prompt_pattern": None,
 }
 
-PAGINATION_HEADERS = {
-    "X-Page": "1",
-    "X-Per-Page": "25",
-    "X-Total-Count": "1",
-    "X-Total-Pages": "1",
-}
-
-
-class _FakeResponse:
-    """Stands in for what urlopen yields: a context manager with read() and headers."""
-
-    def __init__(self, body, headers=None):
-        raw = body if isinstance(body, str) else json.dumps(body)
-        self._body = raw.encode("utf-8")
-        self.headers = Message()
-        for key, value in (headers or {}).items():
-            self.headers[key] = value
-
-    def read(self):
-        return self._body
-
-    def __enter__(self):
-        return self
-
-    def __exit__(self, *_args):
-        return False
-
-
-class _FakeOpener:
-    """Records the Request it was handed, then returns a canned response or raises."""
-
-    def __init__(self, response=None, error=None):
-        self.response = response
-        self.error = error
-        self.request = None
-        self.timeout = None
-
-    def open(self, request, timeout=None):
-        self.request = request
-        self.timeout = timeout
-        if self.error is not None:
-            raise self.error
-        return self.response
-
 
 def build_service(body=None, headers=None, error=None, **config):
-    """Create a TemplateService whose transport is a `_FakeOpener`."""
-    settings = {"api_key": "test-private-key", "base_url": BASE_URL, "silent": True}
-    settings.update(config)
-    service = TemplateService(**settings)
-    response = None if error is not None else _FakeResponse(body, headers)
-    service._opener = _FakeOpener(response=response, error=error)
-    return service
+    return fake_build_service(TemplateService, body, headers, error, **config)
 
 
 def http_error(status, body):
-    """Build an HTTPError whose body reads back, the way a real one does."""
-    error = HTTPError(
-        url=f"{BASE_URL}{TEMPLATES_ENDPOINT}",
-        code=status,
-        msg="error",
-        hdrs=Message(),
-        fp=None,
-    )
-    error.read = lambda: body.encode("utf-8")
-    return error
-
-
-def query_of(request):
-    return parse_qs(urlparse(request.full_url).query)
+    return fake_http_error(f"{BASE_URL}{TEMPLATES_ENDPOINT}", status, body)
 
 
 @pytest.fixture
@@ -407,6 +352,119 @@ class TestGetTemplate:
         assert excinfo.value.status is None
 
 
+class TestMetricsWindow:
+    """Test the include_metrics / days_back / since / until params."""
+
+    def test_search_maps_the_metrics_params_onto_the_wire(self):
+        service = build_service([], PAGINATION_HEADERS)
+
+        service.search_templates(
+            include_metrics=True,
+            days_back=7,
+            since=datetime(2026, 9, 1, tzinfo=timezone.utc),
+            until="2026-10-01",
+        )
+
+        assert query_of(service._opener.request) == {
+            "include_metrics": ["true"],
+            "days_back": ["7"],
+            "since": ["2026-09-01T00:00:00Z"],
+            "until": ["2026-10-01"],
+        }
+
+    def test_search_sends_include_metrics_false(self):
+        service = build_service([], PAGINATION_HEADERS)
+
+        service.search_templates(include_metrics=False)
+
+        assert query_of(service._opener.request) == {"include_metrics": ["false"]}
+
+    def test_search_returns_metrics_untouched(self):
+        metrics = {
+            "days_back": None,
+            "since": "2026-09-01T00:00:00Z",
+            "failure_count": 0,
+        }
+        service = build_service(
+            [{**SUMMARY_ROW, "metrics": metrics}], PAGINATION_HEADERS
+        )
+
+        result = service.search_templates(include_metrics=True)
+
+        assert result["templates"][0]["metrics"] == metrics
+
+    def test_get_template_sends_the_window_and_never_include_metrics(self):
+        service = build_service(DETAIL_BODY)
+
+        service.get_template(
+            "tmpl123abc456", days_back=14, since="2026-09-01", until="2026-09-15"
+        )
+
+        assert query_of(service._opener.request) == {
+            "days_back": ["14"],
+            "since": ["2026-09-01"],
+            "until": ["2026-09-15"],
+        }
+
+    def test_get_template_without_a_window_sends_no_query(self):
+        service = build_service(DETAIL_BODY)
+
+        service.get_template("tmpl123abc456")
+
+        assert urlparse(service._opener.request.full_url).query == ""
+
+    def test_a_plus_offset_in_a_string_is_encoded_as_percent_2b(self):
+        service = build_service([], PAGINATION_HEADERS)
+
+        service.search_templates(
+            include_metrics=True, since="2026-09-01T00:00:00+05:30"
+        )
+
+        assert (
+            "since=2026-09-01T00%3A00%3A00%2B05%3A30"
+            in service._opener.request.full_url
+        )
+        assert query_of(service._opener.request)["since"] == [
+            "2026-09-01T00:00:00+05:30"
+        ]
+
+    def test_a_naive_datetime_is_sent_as_utc(self):
+        service = build_service([], PAGINATION_HEADERS)
+
+        service.search_templates(since=datetime(2026, 9, 1, 12, 30))
+
+        assert query_of(service._opener.request)["since"] == ["2026-09-01T12:30:00Z"]
+
+    def test_an_aware_datetime_is_converted_to_utc(self):
+        service = build_service([], PAGINATION_HEADERS)
+        plus_two = timezone(timedelta(hours=2))
+
+        service.search_templates(until=datetime(2026, 9, 1, 12, 0, tzinfo=plus_two))
+
+        assert query_of(service._opener.request)["until"] == ["2026-09-01T10:00:00Z"]
+
+    @pytest.mark.parametrize("bad", [12345, 1.5, True])
+    def test_rejects_a_bound_that_is_neither_datetime_nor_string(self, bad):
+        service = build_service([], PAGINATION_HEADERS)
+
+        with pytest.raises(ValueError, match="since must be a datetime"):
+            service.search_templates(since=bad)
+        with pytest.raises(ValueError, match="until must be a datetime"):
+            service.get_template("tmpl123abc456", until=bad)
+
+        assert service._opener.request is None
+
+    def test_a_422_on_the_window_surfaces_the_status_and_body(self):
+        body = '{"errors":{"since":["must be before until"]}}'
+        service = build_service(error=http_error(422, body))
+
+        with pytest.raises(CoolhandAPIError) as caught:
+            service.search_templates(include_metrics=True, since="2026-10-01")
+
+        assert caught.value.status == 422
+        assert "must be before until" in str(caught.value)
+
+
 class TestErrorHandling:
     """Test the read-path error convention: raise, carrying the HTTP status."""
 
@@ -575,8 +633,8 @@ class TestCoolhandDelegation:
         self, mock_config, reset_global_instance
     ):
         instance = Coolhand(config=mock_config)
-        instance._template_service._opener = _FakeOpener(
-            response=_FakeResponse([SUMMARY_ROW], PAGINATION_HEADERS)
+        instance._template_service._opener = FakeOpener(
+            response=FakeResponse([SUMMARY_ROW], PAGINATION_HEADERS)
         )
 
         result = instance.search_templates(include_system=True, per=5)
@@ -587,11 +645,34 @@ class TestCoolhandDelegation:
 
     def test_get_template_delegates(self, mock_config, reset_global_instance):
         instance = Coolhand(config=mock_config)
-        instance._template_service._opener = _FakeOpener(
-            response=_FakeResponse(DETAIL_BODY)
+        instance._template_service._opener = FakeOpener(
+            response=FakeResponse(DETAIL_BODY)
         )
 
         template = instance.get_template("tmpl123abc456")
 
         assert template["id"] == "tmpl123abc456"
         assert "user_prompt_pattern" in template
+
+    def test_metrics_params_are_forwarded(self, mock_config, reset_global_instance):
+        instance = Coolhand(config=mock_config)
+        instance._template_service._opener = FakeOpener(
+            response=FakeResponse([SUMMARY_ROW], PAGINATION_HEADERS)
+        )
+
+        instance.search_templates(include_metrics=True, days_back=3, since="2026-09-01")
+
+        assert query_of(instance._template_service._opener.request) == {
+            "include_metrics": ["true"],
+            "days_back": ["3"],
+            "since": ["2026-09-01"],
+        }
+        instance._template_service._opener = FakeOpener(
+            response=FakeResponse(DETAIL_BODY)
+        )
+
+        instance.get_template("tmpl123abc456", until="2026-09-15")
+
+        assert query_of(instance._template_service._opener.request) == {
+            "until": ["2026-09-15"]
+        }

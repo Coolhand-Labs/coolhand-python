@@ -9,6 +9,7 @@ Usage:
 """
 
 import logging
+from datetime import datetime
 
 from . import copilot_interceptor, httpx_interceptor
 from .client import CoolhandClient, get_instance, initialize, set_instance
@@ -19,20 +20,32 @@ from .feedback_service import (
     get_feedback_service,
 )
 from .httpx_interceptor import DEFAULT_EXCLUDE_API_PATTERNS, DEFAULT_INTERCEPT_ADDRESSES
+from .log_service import LogService
 from .template_service import CoolhandAPIError, TemplateService, get_template_service
 from .types import (
     Config,
     FeedbackData,
     FeedbackResponse,
+    LlmMetrics,
+    LlmRequestLogContent,
+    LlmRequestLogCostBreakdown,
+    LlmRequestLogOrder,
+    LlmRequestLogSummary,
     LlmRequestTemplateDetail,
     LlmRequestTemplateStatus,
     LlmRequestTemplateSummary,
+    LogPagination,
     Pagination,
     RequestData,
     ResponseData,
+    SearchLogsResponse,
     SearchTemplatesResponse,
+    SearchWorkloadsResponse,
+    WorkloadSummary,
+    WorkloadTemplate,
 )
 from .version import __version__
+from .workload_service import WorkloadService
 
 logger = logging.getLogger(__name__)
 
@@ -46,9 +59,11 @@ class Coolhand(CoolhandClient):
         # Set as global instance
         set_instance(self)
 
-        # Initialize feedback and template services with same config
+        # Initialize feedback and read services with same config
         self._feedback_service = FeedbackService(self.config)
         self._template_service = TemplateService(self.config)
+        self._workload_service = WorkloadService(self.config)
+        self._log_service = LogService(self.config)
 
         # Start monitoring
         self.start_monitoring()
@@ -135,6 +150,10 @@ class Coolhand(CoolhandClient):
         status: LlmRequestTemplateStatus | None = None,
         include_deprecated: bool | None = None,
         include_system: bool | None = None,
+        include_metrics: bool | None = None,
+        days_back: int | None = None,
+        since: datetime | str | None = None,
+        until: datetime | str | None = None,
         page: int | None = None,
         per: int | None = None,
     ) -> SearchTemplatesResponse:
@@ -143,7 +162,9 @@ class Coolhand(CoolhandClient):
         Requires the **private** API key. Search is a parameter on the list endpoint
         rather than a route of its own, so this is one method and not a list/search
         pair. The "Unmatched" / "Ignored API Calls" system buckets are hidden unless
-        `include_system=True`.
+        `include_system=True`. `include_metrics=True` adds a `metrics` object per
+        template over a rolling `days_back` window or an explicit `since` / `until`
+        one (`datetime` or ISO8601 string).
 
         See `TemplateService.search_templates` for the full filter and error reference.
 
@@ -161,27 +182,177 @@ class Coolhand(CoolhandClient):
             status=status,
             include_deprecated=include_deprecated,
             include_system=include_system,
+            include_metrics=include_metrics,
+            days_back=days_back,
+            since=since,
+            until=until,
             page=page,
             per=per,
         )
 
-    def get_template(self, template_id: str) -> LlmRequestTemplateDetail:
+    def get_template(
+        self,
+        template_id: str,
+        *,
+        days_back: int | None = None,
+        since: datetime | str | None = None,
+        until: datetime | str | None = None,
+    ) -> LlmRequestTemplateDetail:
         """Get a single template by hashid, including both prompt patterns.
 
         Requires the **private** API key. Deprecated and system templates are reachable
-        here by id with no opt-in flag, unlike the list.
+        here by id with no opt-in flag, unlike the list. `metrics` is always returned,
+        over `days_back` or an explicit `since` / `until` window.
 
         Args:
             template_id: The template hashid, i.e. the `id` field from
                 `search_templates`.
+            days_back: Rolling metrics window in days. Ignored when `since` is given.
+            since: Metrics window start, inclusive (`datetime` or ISO8601 string).
+            until: Metrics window end, exclusive; defaults to now.
 
         Raises:
             ValueError: If `template_id` is blank, not a string, or a relative path
-                segment.
+                segment, or if `since`/`until` is neither a `datetime` nor a string.
             CoolhandAPIError: On a non-2xx response, with the HTTP status on `status`
                 (`404` for an unknown id or one belonging to another client).
         """
-        return self._template_service.get_template(template_id)
+        return self._template_service.get_template(
+            template_id, days_back=days_back, since=since, until=until
+        )
+
+    @property
+    def workload_service(self) -> WorkloadService:
+        """Get the workload service instance."""
+        return self._workload_service
+
+    def search_workloads(
+        self,
+        *,
+        search: str | None = None,
+        include_archived: bool | None = None,
+        include_system: bool | None = None,
+        include_templates: bool | None = None,
+        include_metrics: bool | None = None,
+        days_back: int | None = None,
+        since: datetime | str | None = None,
+        until: datetime | str | None = None,
+        page: int | None = None,
+        per: int | None = None,
+    ) -> SearchWorkloadsResponse:
+        """List your workloads, optionally with cost and performance metrics.
+
+        Requires the **private** API key. A workload's `id` is its hashid, the value the
+        `workload_id` filter on `search_templates` and `search_logs` expects.
+
+        See `WorkloadService.search_workloads` for the full filter and error reference.
+
+        Raises:
+            ValueError: If `since`/`until` is neither a `datetime` nor a string.
+            CoolhandAPIError: On a non-2xx response, with the HTTP status on `status`.
+                A `504` is expected and retryable rather than a bug.
+        """
+        return self._workload_service.search_workloads(
+            search=search,
+            include_archived=include_archived,
+            include_system=include_system,
+            include_templates=include_templates,
+            include_metrics=include_metrics,
+            days_back=days_back,
+            since=since,
+            until=until,
+            page=page,
+            per=per,
+        )
+
+    @property
+    def log_service(self) -> LogService:
+        """Get the log read service instance."""
+        return self._log_service
+
+    def search_logs(
+        self,
+        *,
+        template_id: str | None = None,
+        workload_id: str | None = None,
+        system_prompt_contains: str | None = None,
+        user_prompt_contains: str | None = None,
+        model: str | None = None,
+        source_api: str | None = None,
+        source_api_result: str | None = None,
+        project_path: str | None = None,
+        unmatched_only: bool | None = None,
+        days_back: int | None = None,
+        since: datetime | str | None = None,
+        until: datetime | str | None = None,
+        min_cost: float | None = None,
+        order: LlmRequestLogOrder | None = None,
+        include_prompts: bool | None = None,
+        sort: str | None = None,
+        include_total: bool | None = None,
+        page: int | None = None,
+        per: int | None = None,
+    ) -> SearchLogsResponse:
+        """Search the logs Coolhand has collected, with per-log `cost`.
+
+        Requires the **private** API key. `since` / `until` bound `created_at` and
+        replace `days_back`; `min_cost` and `order="cost_desc"` limit the result to logs
+        that can be priced.
+
+        See `LogService.search_logs` for the full filter and error reference.
+
+        Raises:
+            ValueError: If `since`/`until` is neither a `datetime` nor a string.
+            CoolhandAPIError: On a non-2xx response, with the HTTP status on `status`.
+        """
+        return self._log_service.search_logs(
+            template_id=template_id,
+            workload_id=workload_id,
+            system_prompt_contains=system_prompt_contains,
+            user_prompt_contains=user_prompt_contains,
+            model=model,
+            source_api=source_api,
+            source_api_result=source_api_result,
+            project_path=project_path,
+            unmatched_only=unmatched_only,
+            days_back=days_back,
+            since=since,
+            until=until,
+            min_cost=min_cost,
+            order=order,
+            include_prompts=include_prompts,
+            sort=sort,
+            include_total=include_total,
+            page=page,
+            per=per,
+        )
+
+    def get_log(
+        self,
+        log_id: str,
+        *,
+        section: str | None = None,
+        max_chars: int | None = None,
+        search_query: str | None = None,
+        include_thinking: bool | None = None,
+    ) -> LlmRequestLogContent:
+        """Get one log's content, `cost` and `cost_breakdown` by hashid.
+
+        Requires the **private** API key.
+
+        Raises:
+            ValueError: If `log_id` is blank, not a string, or a relative path segment,
+                or if `search_query` is given but blank.
+            CoolhandAPIError: On a non-2xx response, with the HTTP status on `status`
+                (`404` for an unknown id or one belonging to another client).
+        """
+        return self._log_service.get_log(
+            log_id,
+            section=section,
+            max_chars=max_chars,
+            search_query=search_query,
+            include_thinking=include_thinking,
+        )
 
 
 # Module-level convenience functions
@@ -243,12 +414,24 @@ __all__ = [
     "create_feedback",
     "acreate_feedback",
     "CoolhandAPIError",
+    "LlmMetrics",
+    "LlmRequestLogContent",
+    "LlmRequestLogCostBreakdown",
+    "LlmRequestLogOrder",
+    "LlmRequestLogSummary",
     "LlmRequestTemplateDetail",
     "LlmRequestTemplateStatus",
     "LlmRequestTemplateSummary",
+    "LogPagination",
+    "LogService",
     "Pagination",
+    "SearchLogsResponse",
     "SearchTemplatesResponse",
+    "SearchWorkloadsResponse",
     "TemplateService",
+    "WorkloadService",
+    "WorkloadSummary",
+    "WorkloadTemplate",
     "get_template_service",
     "initialize",
     "get_instance",

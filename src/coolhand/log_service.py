@@ -85,6 +85,7 @@ class LogService(ReadService):
         model: str | None = None,
         source_api: str | None = None,
         source_api_result: str | None = None,
+        source_application: str | None = None,
         project_path: str | None = None,
         unmatched_only: bool | None = None,
         days_back: int | None = None,
@@ -111,6 +112,7 @@ class LogService(ReadService):
             model: Exact model name.
             source_api: Source API, e.g. "openai" or "anthropic".
             source_api_result: Result status, e.g. "success" or "failed".
+            source_application: Exact match on `source_application`.
             project_path: Exact match against `metadata.project_path`.
             unmatched_only: Only logs with no assigned template.
             days_back: Logs created in the last N days. Unrestricted when omitted.
@@ -158,6 +160,7 @@ class LogService(ReadService):
             "model": model,
             "source_api": source_api,
             "source_api_result": source_api_result,
+            "source_application": source_application,
             "project_path": project_path,
             "unmatched_only": unmatched_only,
             **_window_filters(days_back, since, until),

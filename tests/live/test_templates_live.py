@@ -191,6 +191,15 @@ class TestTemplateMetricsLive:
         assert_metrics_shape(detail["metrics"])
         assert detail["metrics"]["days_back"] is None
 
+    def test_get_template_include_metrics_false_omits_metrics_and_skips_the_window(
+        self, any_template
+    ):
+        detail = live_service().get_template(
+            any_template["id"], include_metrics=False, since="bad"
+        )
+
+        assert "metrics" not in detail
+
     def test_get_template_with_a_malformed_window_is_a_422(self, any_template):
         with pytest.raises(CoolhandAPIError) as excinfo:
             live_service().get_template(any_template["id"], since="bad")

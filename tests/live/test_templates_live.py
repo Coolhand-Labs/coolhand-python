@@ -16,26 +16,14 @@ Every request is read-only. Nothing in this file creates, updates or deletes a r
 so it is safe to point at a shared development database.
 """
 
-import os
+from datetime import datetime, timezone
 
 import pytest
 
 from coolhand import CoolhandAPIError, TemplateService
 
-LIVE_BASE_URL = os.environ.get("COOLHAND_LIVE_BASE_URL", "")
-LIVE_API_KEY = os.environ.get("COOLHAND_LIVE_API_KEY", "")
-
-if not LIVE_BASE_URL or not LIVE_API_KEY:
-    raise RuntimeError(
-        "Live tests need COOLHAND_LIVE_BASE_URL and COOLHAND_LIVE_API_KEY (a private "
-        "API key) in the environment. Set both and re-run `make test-live`."
-    )
-
-# Round trips from the host to a containerised local server go through port forwarding,
-# which on Windows adds ~15-20s per request even when the server itself answers in
-# ~400ms. The SDK default of 30s would fail these for environmental reasons that have
-# nothing to do with the wrapper.
-LIVE_TIMEOUT_SECONDS = 120
+from .live_env import LIVE_API_KEY, assert_metrics_shape
+from .live_env import live_service as _live_service
 
 # Every client is created with these two system buckets, and they are hidden from the
 # list unless include_system is passed — which makes them a real fixture for that flag.
@@ -45,12 +33,7 @@ NULLABLE_STRING_FIELDS = ["status", "version", "group", "deprecated_at"]
 
 
 def live_service(api_key: str = LIVE_API_KEY) -> TemplateService:
-    return TemplateService(
-        api_key=api_key,
-        base_url=LIVE_BASE_URL,
-        silent=True,
-        timeout=LIVE_TIMEOUT_SECONDS,
-    )
+    return _live_service(TemplateService, api_key)
 
 
 def assert_summary_shape(template: dict) -> None:
@@ -125,6 +108,92 @@ class TestSearchTemplatesLive:
     def test_an_undecodable_workload_hashid_is_a_422_not_an_empty_list(self):
         with pytest.raises(CoolhandAPIError) as excinfo:
             live_service().search_templates(workload_id="not-a-hashid")
+
+        assert excinfo.value.status == 422
+
+
+@pytest.fixture(scope="module")
+def any_template():
+    rows = live_service().search_templates(include_system=True, per=1)["templates"]
+    assert rows, "Live fixture broken: the server has no template."
+    return rows[0]
+
+
+class TestTemplateMetricsLive:
+    """include_metrics and the since/until window against the live server."""
+
+    def test_metrics_are_omitted_unless_requested(self):
+        rows = live_service().search_templates(include_system=True, per=5)["templates"]
+
+        assert rows
+        assert all("metrics" not in row for row in rows)
+
+    def test_include_metrics_adds_the_full_metrics_object(self):
+        rows = live_service().search_templates(
+            include_system=True, include_metrics=True, per=5
+        )["templates"]
+
+        assert rows
+        for row in rows:
+            assert_metrics_shape(row["metrics"])
+            assert row["metrics"]["days_back"] == 28
+
+    def test_an_explicit_since_overrides_days_back_and_nulls_it(self):
+        since = datetime(2026, 9, 1, tzinfo=timezone.utc)
+        until = datetime(2026, 10, 1, tzinfo=timezone.utc)
+
+        rows = live_service().search_templates(
+            include_system=True,
+            include_metrics=True,
+            days_back=7,
+            since=since,
+            until=until,
+            per=3,
+        )["templates"]
+
+        assert rows
+        for row in rows:
+            assert row["metrics"]["days_back"] is None
+            assert row["metrics"]["since"] == "2026-09-01T00:00:00Z"
+            assert row["metrics"]["until"] == "2026-10-01T00:00:00Z"
+
+    def test_a_plus_offset_string_is_accepted_not_a_422(self):
+        rows = live_service().search_templates(
+            include_system=True,
+            include_metrics=True,
+            since="2026-09-01T02:00:00+02:00",
+            until="2026-10-01",
+            per=1,
+        )["templates"]
+
+        assert rows[0]["metrics"]["since"] == "2026-09-01T00:00:00Z"
+
+    def test_a_malformed_since_is_a_422_on_the_since_key(self):
+        with pytest.raises(CoolhandAPIError) as excinfo:
+            live_service().search_templates(include_metrics=True, since="bad")
+
+        assert excinfo.value.status == 422
+        assert "since" in str(excinfo.value)
+
+    def test_an_inverted_window_is_a_422(self):
+        with pytest.raises(CoolhandAPIError) as excinfo:
+            live_service().search_templates(
+                include_metrics=True, since="2026-10-01", until="2026-09-01"
+            )
+
+        assert excinfo.value.status == 422
+
+    def test_get_template_always_returns_metrics_over_the_window(self, any_template):
+        detail = live_service().get_template(
+            any_template["id"], since="2026-09-01", until="2026-10-01"
+        )
+
+        assert_metrics_shape(detail["metrics"])
+        assert detail["metrics"]["days_back"] is None
+
+    def test_get_template_with_a_malformed_window_is_a_422(self, any_template):
+        with pytest.raises(CoolhandAPIError) as excinfo:
+            live_service().get_template(any_template["id"], since="bad")
 
         assert excinfo.value.status == 422
 

@@ -106,6 +106,13 @@ class TestSearchLogsLive:
 
         assert isinstance(result["logs"], list)
 
+    def test_source_application_filters_to_an_exact_match(self):
+        logs = live_service().search_logs(
+            source_application="no-such-application", per=5, **WINDOW
+        )["logs"]
+
+        assert logs == []
+
     def test_include_prompts_adds_the_prompt_fields(self):
         logs = live_service().search_logs(include_prompts=True, per=3, **WINDOW)["logs"]
 

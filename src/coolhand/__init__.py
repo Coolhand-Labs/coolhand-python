@@ -194,6 +194,7 @@ class Coolhand(CoolhandClient):
         self,
         template_id: str,
         *,
+        include_metrics: bool | None = None,
         days_back: int | None = None,
         since: datetime | str | None = None,
         until: datetime | str | None = None,
@@ -201,12 +202,14 @@ class Coolhand(CoolhandClient):
         """Get a single template by hashid, including both prompt patterns.
 
         Requires the **private** API key. Deprecated and system templates are reachable
-        here by id with no opt-in flag, unlike the list. `metrics` is always returned,
-        over `days_back` or an explicit `since` / `until` window.
+        here by id with no opt-in flag, unlike the list. `metrics` is returned by
+        default, over `days_back` or an explicit `since` / `until` window.
 
         Args:
             template_id: The template hashid, i.e. the `id` field from
                 `search_templates`.
+            include_metrics: Pass `False` to omit `metrics` (server default is true),
+                which also skips validating the window.
             days_back: Rolling metrics window in days. Ignored when `since` is given.
             since: Metrics window start, inclusive (`datetime` or ISO8601 string).
             until: Metrics window end, exclusive; defaults to now.
@@ -218,7 +221,11 @@ class Coolhand(CoolhandClient):
                 (`404` for an unknown id or one belonging to another client).
         """
         return self._template_service.get_template(
-            template_id, days_back=days_back, since=since, until=until
+            template_id,
+            include_metrics=include_metrics,
+            days_back=days_back,
+            since=since,
+            until=until,
         )
 
     @property
@@ -280,6 +287,7 @@ class Coolhand(CoolhandClient):
         model: str | None = None,
         source_api: str | None = None,
         source_api_result: str | None = None,
+        source_application: str | None = None,
         project_path: str | None = None,
         unmatched_only: bool | None = None,
         days_back: int | None = None,
@@ -313,6 +321,7 @@ class Coolhand(CoolhandClient):
             model=model,
             source_api=source_api,
             source_api_result=source_api_result,
+            source_application=source_application,
             project_path=project_path,
             unmatched_only=unmatched_only,
             days_back=days_back,

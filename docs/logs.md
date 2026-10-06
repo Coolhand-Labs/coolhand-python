@@ -61,6 +61,7 @@ Ransack predicates; `sort` is the only Ransack passthrough.
 | `model` | `str` | Model name |
 | `source_api` | `str` | e.g. `"openai"`, `"anthropic"`, `"vertex"` |
 | `source_api_result` | `str` | Result status, e.g. `"success"` or `"failed"` |
+| `source_application` | `str` | Exact match on `source_application` |
 | `project_path` | `str` | Exact match against `metadata.project_path` |
 | `unmatched_only` | `bool` | Only logs with no assigned template |
 | `days_back` | `int` | Logs created in the last N days. Unrestricted when omitted. Ignored when `since` or `until` is given |

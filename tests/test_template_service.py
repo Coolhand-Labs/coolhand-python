@@ -393,7 +393,7 @@ class TestMetricsWindow:
 
         assert result["templates"][0]["metrics"] == metrics
 
-    def test_get_template_sends_the_window_and_never_include_metrics(self):
+    def test_get_template_sends_the_window_and_omits_include_metrics_by_default(self):
         service = build_service(DETAIL_BODY)
 
         service.get_template(
@@ -405,6 +405,13 @@ class TestMetricsWindow:
             "since": ["2026-09-01"],
             "until": ["2026-09-15"],
         }
+
+    def test_get_template_sends_include_metrics_false_to_omit_metrics(self):
+        service = build_service(DETAIL_BODY)
+
+        service.get_template("tmpl123abc456", include_metrics=False)
+
+        assert query_of(service._opener.request) == {"include_metrics": ["false"]}
 
     def test_get_template_without_a_window_sends_no_query(self):
         service = build_service(DETAIL_BODY)
@@ -671,8 +678,11 @@ class TestCoolhandDelegation:
             response=FakeResponse(DETAIL_BODY)
         )
 
-        instance.get_template("tmpl123abc456", until="2026-09-15")
+        instance.get_template(
+            "tmpl123abc456", include_metrics=False, until="2026-09-15"
+        )
 
         assert query_of(instance._template_service._opener.request) == {
-            "until": ["2026-09-15"]
+            "include_metrics": ["false"],
+            "until": ["2026-09-15"],
         }

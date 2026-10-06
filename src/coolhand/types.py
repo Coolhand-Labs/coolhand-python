@@ -183,7 +183,8 @@ class LlmRequestTemplateDetail(LlmRequestTemplateSummary, total=False):
     """A template from `GET /api/v2/llm_request_templates/{id}`.
 
     Every field of `LlmRequestTemplateSummary` plus the full untruncated regexes the
-    list endpoint omits. `metrics` is always present here, unlike on the list.
+    list endpoint omits. `metrics` is present unless `include_metrics=False` was
+    passed, unlike on the list, where it is opt-in.
     """
 
     user_prompt_pattern: str | None

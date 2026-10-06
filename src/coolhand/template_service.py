@@ -158,6 +158,7 @@ class TemplateService(ReadService):
         self,
         template_id: str,
         *,
+        include_metrics: bool | None = None,
         days_back: int | None = None,
         since: datetime | str | None = None,
         until: datetime | str | None = None,
@@ -171,6 +172,8 @@ class TemplateService(ReadService):
         Args:
             template_id: The template hashid, i.e. the `id` field from
                 `search_templates`.
+            include_metrics: Server default is true. Pass `False` to omit `metrics`,
+                which also skips validating the window.
             days_back: Rolling window in days for `metrics`. Ignored when `since` is
                 given.
             since: Metrics window start, inclusive; a `datetime` (naive means UTC) or
@@ -181,8 +184,7 @@ class TemplateService(ReadService):
         Returns:
             The template, with `user_prompt_pattern` and `system_prompt_pattern` — the
             full untruncated regexes `search_templates` omits — present as keys even
-            when null, and `metrics` always present (there is no `include_metrics`
-            here).
+            when null, and `metrics` unless `include_metrics=False`.
 
         Raises:
             ValueError: If `template_id` is blank, not a string, or a relative path
@@ -190,7 +192,8 @@ class TemplateService(ReadService):
             CoolhandAPIError: On a non-2xx response, with `status` set — `404` for an
                 unknown id *or* one belonging to another client (existence is not
                 disclosed, so this is never a `403`), `422` for a malformed or inverted
-                `since`/`until` window or one over 365 days (always validated here), and
+                `since`/`until` window or one over 365 days (validated unless
+                `include_metrics=False`), and
                 `504` on the same `log_count`
                 timeout `search_templates` describes, which fetching the "Unmatched"
                 bucket by id can trip on its own. Also raised, with `status` left
@@ -199,7 +202,10 @@ class TemplateService(ReadService):
         encoded_id = _encode_path_id(template_id, "template_id", "get_template")
         url = _with_query(
             f"{self.config['base_url']}{TEMPLATES_ENDPOINT}/{encoded_id}",
-            _window_filters(days_back, since, until),
+            {
+                "include_metrics": include_metrics,
+                **_window_filters(days_back, since, until),
+            },
         )
 
         body, _headers = self._get_json(url)

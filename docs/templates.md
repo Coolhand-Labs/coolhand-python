@@ -122,7 +122,8 @@ of its own returns an empty list, not those two rows.** Each row carries a
 
 `template_id` is the template hashid — the `id` field from a `search_templates` row.
 Optional keyword arguments `days_back`, `since` and `until` set the window for the
-`metrics` it always returns. There is no `include_metrics` here, so do not look for one.
+`metrics` it returns. Unlike the list, `include_metrics` defaults to **true** here;
+pass `include_metrics=False` to omit `metrics`, which also skips validating the window.
 
 Unlike the list, this applies no filtering beyond client ownership: a deprecated or
 system template is reachable by id **with no opt-in flag**, since inspecting one of
@@ -137,7 +138,7 @@ regexes the list omits:
 |---|---|
 | `user_prompt_pattern` | `str \| None` |
 | `system_prompt_pattern` | `str \| None` |
-| `metrics` | [`LlmMetrics`](#metrics), always present here |
+| `metrics` | [`LlmMetrics`](#metrics), present unless `include_metrics=False` |
 
 Both patterns are present as keys even when null.
 
@@ -148,7 +149,7 @@ resolve away to the list route and return an array where you expect one template
 ## Metrics
 
 `include_metrics=True` on `search_templates` (and `search_workloads`), and every
-`get_template` call, adds a `metrics` object computed by the same SQL as the dashboard,
+`get_template` call unless it passes `include_metrics=False`, adds a `metrics` object computed by the same SQL as the dashboard,
 so tiered pricing, cached-token discounts and reasoning tokens are applied and the
 numbers match it.
 
@@ -178,7 +179,7 @@ print(metrics["total_cost"], metrics["failure_count"])
   Anything else raises `ValueError` before any request is made.
 - A malformed value, a `since` not before `until`, or a window over 365 days is a `422`
   with the error on the `since` or `until` key. It is only checked when metrics are
-  requested, which for `get_template` is always.
+  requested, which for `get_template` is unless you pass `include_metrics=False`.
 
 ### Fields
 

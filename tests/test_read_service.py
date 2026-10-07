@@ -1,5 +1,6 @@
 """Tests for the shared read-service helpers."""
 
+import logging
 from datetime import datetime, timedelta, timezone
 
 import pytest
@@ -10,6 +11,8 @@ from coolhand._read_service import (
     _timestamp_param,
     _window_filters,
 )
+from coolhand.log_service import LogService
+from coolhand.workload_service import WorkloadService
 
 from .fake_transport import build_service as fake_build_service
 
@@ -106,3 +109,24 @@ class TestJsonShapeHelpers:
 
         with pytest.raises(CoolhandAPIError, match="Thing response .* JSON object"):
             service._get_json_object("https://x.test/y", "Thing")
+
+
+class TestLogging:
+    @pytest.mark.parametrize("service_class", [LogService, WorkloadService])
+    def test_each_service_logs_under_its_own_module(self, service_class, caplog):
+        service = fake_build_service(service_class, body=[], silent=False)
+
+        with caplog.at_level(logging.INFO):
+            service._log("hello")
+
+        assert [(r.name, r.getMessage()) for r in caplog.records] == [
+            (service_class.__module__, "hello")
+        ]
+
+    def test_silent_mode_logs_nothing(self, caplog):
+        service = fake_build_service(LogService, body=[], silent=True)
+
+        with caplog.at_level(logging.INFO):
+            service._log("hello")
+
+        assert caplog.records == []

@@ -28,8 +28,6 @@ from .declared_context import validate_key
 from .types import Config, Pagination
 from .version import __version__
 
-logger = logging.getLogger(__name__)
-
 # Every query behind these endpoints is bounded by a 10-second statement timeout
 # server-side, and answers 504 when it trips. A client timeout at or below that would
 # abort the connection just before the 504 arrived, turning a reportable server answer
@@ -389,4 +387,4 @@ class ReadService:
     def _log(self, message: str) -> None:
         """Log a message if not in silent mode."""
         if not self.silent:
-            logger.info(message)
+            logging.getLogger(type(self).__module__).info(message)

@@ -53,6 +53,66 @@ LOG_CONTENT = {
     "output": "Hello",
 }
 
+ALL_SEARCH_ARGS = {
+    "template_id": "tmpl1",
+    "workload_id": "wkld1",
+    "system_prompt_contains": "sys",
+    "user_prompt_contains": "usr",
+    "model": "gpt-4o",
+    "source_api": "openai",
+    "source_api_result": "failed",
+    "source_application": "claude_code",
+    "project_path": "/work/app",
+    "unmatched_only": True,
+    "days_back": 7,
+    "since": datetime(2026, 9, 1, tzinfo=timezone.utc),
+    "until": "2026-10-01",
+    "min_cost": 0.5,
+    "order": "cost_desc",
+    "include_prompts": True,
+    "sort": "created_at desc",
+    "include_total": True,
+    "page": 2,
+    "per": 50,
+}
+
+ALL_SEARCH_QUERY = {
+    "template_id": ["tmpl1"],
+    "workload_id": ["wkld1"],
+    "system_prompt_contains": ["sys"],
+    "user_prompt_contains": ["usr"],
+    "model": ["gpt-4o"],
+    "source_api": ["openai"],
+    "source_api_result": ["failed"],
+    "source_application": ["claude_code"],
+    "project_path": ["/work/app"],
+    "unmatched_only": ["true"],
+    "days_back": ["7"],
+    "since": ["2026-09-01T00:00:00Z"],
+    "until": ["2026-10-01"],
+    "min_cost": ["0.5"],
+    "order": ["cost_desc"],
+    "include_prompts": ["true"],
+    "q[s]": ["created_at desc"],
+    "include_total": ["true"],
+    "page": ["2"],
+    "per": ["50"],
+}
+
+ALL_GET_ARGS = {
+    "section": "end",
+    "max_chars": 2000,
+    "search_query": "timeout",
+    "include_thinking": False,
+}
+
+ALL_GET_QUERY = {
+    "section": ["end"],
+    "max_chars": ["2000"],
+    "search_query": ["timeout"],
+    "include_thinking": ["false"],
+}
+
 # The endpoint only sends X-Page / X-Per-Page unless include_total=true.
 PAGE_ONLY_HEADERS = {"X-Page": "1", "X-Per-Page": "2"}
 
@@ -81,51 +141,9 @@ class TestSearchLogsRequest:
     def test_maps_every_filter_onto_its_wire_param(self):
         service = build_service([], PAGINATION_HEADERS)
 
-        service.search_logs(
-            template_id="tmpl1",
-            workload_id="wkld1",
-            system_prompt_contains="sys",
-            user_prompt_contains="usr",
-            model="gpt-4o",
-            source_api="openai",
-            source_api_result="failed",
-            source_application="claude_code",
-            project_path="/work/app",
-            unmatched_only=True,
-            days_back=7,
-            since=datetime(2026, 9, 1, tzinfo=timezone.utc),
-            until="2026-10-01",
-            min_cost=0.5,
-            order="cost_desc",
-            include_prompts=True,
-            sort="created_at desc",
-            include_total=True,
-            page=2,
-            per=50,
-        )
+        service.search_logs(**ALL_SEARCH_ARGS)
 
-        assert query_of(service._opener.request) == {
-            "template_id": ["tmpl1"],
-            "workload_id": ["wkld1"],
-            "system_prompt_contains": ["sys"],
-            "user_prompt_contains": ["usr"],
-            "model": ["gpt-4o"],
-            "source_api": ["openai"],
-            "source_api_result": ["failed"],
-            "source_application": ["claude_code"],
-            "project_path": ["/work/app"],
-            "unmatched_only": ["true"],
-            "days_back": ["7"],
-            "since": ["2026-09-01T00:00:00Z"],
-            "until": ["2026-10-01"],
-            "min_cost": ["0.5"],
-            "order": ["cost_desc"],
-            "include_prompts": ["true"],
-            "q[s]": ["created_at desc"],
-            "include_total": ["true"],
-            "page": ["2"],
-            "per": ["50"],
-        }
+        assert query_of(service._opener.request) == ALL_SEARCH_QUERY
 
     def test_min_cost_zero_is_sent(self):
         service = build_service([], PAGINATION_HEADERS)
@@ -244,15 +262,9 @@ class TestGetLog:
     def test_maps_the_options_onto_the_wire(self):
         service = build_service(LOG_CONTENT)
 
-        service.get_log(
-            "log123abc456", section="end", max_chars=2000, include_thinking=False
-        )
+        service.get_log("log123abc456", **ALL_GET_ARGS)
 
-        assert query_of(service._opener.request) == {
-            "section": ["end"],
-            "max_chars": ["2000"],
-            "include_thinking": ["false"],
-        }
+        assert query_of(service._opener.request) == ALL_GET_QUERY
 
     def test_sends_a_search_query(self):
         service = build_service({"id": "log123abc456", "matches": {}})
@@ -345,7 +357,7 @@ class TestCoolhandDelegation:
 
         assert isinstance(instance.log_service, LogService)
 
-    def test_search_logs_delegates_with_its_filters(
+    def test_search_logs_delegates_every_filter(
         self, mock_config, reset_global_instance
     ):
         instance = Coolhand(config=mock_config)
@@ -353,20 +365,16 @@ class TestCoolhandDelegation:
             response=FakeResponse([LOG_ROW], PAGE_ONLY_HEADERS)
         )
 
-        result = instance.search_logs(min_cost=1, order="cost_desc", sort="id asc")
+        result = instance.search_logs(**ALL_SEARCH_ARGS)
 
-        assert query_of(instance._log_service._opener.request) == {
-            "min_cost": ["1"],
-            "order": ["cost_desc"],
-            "q[s]": ["id asc"],
-        }
+        assert query_of(instance._log_service._opener.request) == ALL_SEARCH_QUERY
         assert result["logs"] == [LOG_ROW]
 
-    def test_get_log_delegates(self, mock_config, reset_global_instance):
+    def test_get_log_delegates_every_option(self, mock_config, reset_global_instance):
         instance = Coolhand(config=mock_config)
         instance._log_service._opener = FakeOpener(response=FakeResponse(LOG_CONTENT))
 
-        log = instance.get_log("log123abc456", max_chars=10)
+        log = instance.get_log("log123abc456", **ALL_GET_ARGS)
 
         assert log["id"] == "log123abc456"
-        assert query_of(instance._log_service._opener.request) == {"max_chars": ["10"]}
+        assert query_of(instance._log_service._opener.request) == ALL_GET_QUERY

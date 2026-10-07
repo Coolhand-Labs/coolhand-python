@@ -78,6 +78,7 @@ class TestSearchWorkloadsLive:
             per=2,
         )["workloads"]
 
+        assert workloads
         for workload in workloads:
             assert workload["metrics"]["days_back"] is None
             assert workload["metrics"]["since"] == "2026-09-01T00:00:00Z"

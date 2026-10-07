@@ -250,6 +250,25 @@ These are read methods, so they **raise** `CoolhandAPIError` (carrying the HTTP 
 
 For the full filter reference, pagination, and error handling, see [Reading Templates](./docs/templates.md).
 
+## Reading Workloads and Cost Metrics
+
+`search_workloads` lists your workloads, and `include_metrics` adds the dashboard's cost and performance numbers to workloads and templates, over a rolling `days_back` window or an explicit `since`/`until` one. `search_logs` returns a per-log `cost` and can filter and sort on it. All need your **private** API key:
+
+```python
+from datetime import datetime, timezone
+
+workloads = ch.search_workloads(include_metrics=True, days_back=30)['workloads']
+workloads[0]['metrics']['total_cost']
+
+logs = ch.search_logs(
+    since=datetime(2026, 9, 1, tzinfo=timezone.utc),
+    min_cost=0.5,
+    order='cost_desc',
+)['logs']
+```
+
+See [Reading Workloads](./docs/workloads.md) for the workload reference, [Reading Templates](./docs/templates.md#metrics) for the `metrics` fields and window rules, and [Reading Logs](./docs/logs.md) for log search and `get_log`.
+
 ## Troubleshooting
 
 ### Enable Debug Output
@@ -293,6 +312,8 @@ export COOLHAND_SILENT=false
 - [Supported Libraries](./docs/supported-libraries.md) — interception mechanisms, streaming, thread/process safety, delivery model
 - [Dramatiq + pydantic-ai](./docs/dramatiq.md) — task queue integration guide, known gaps, workarounds
 - [Reading Templates](./docs/templates.md) — search LLM request templates and fetch a single one, prompt patterns included, using the private API key
+- [Reading Workloads](./docs/workloads.md) — list workloads with cost and performance metrics over a rolling or explicit window
+- [Reading Logs](./docs/logs.md) — search logs by cost, time window and more, and fetch one log's content and cost breakdown
 
 ## Related Packages
 

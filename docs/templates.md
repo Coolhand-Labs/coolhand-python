@@ -55,8 +55,14 @@ All arguments are keyword-only and optional.
 | `status` | `"draft"` / `"published"` / `"failure"` | Any other non-empty value returns `422` |
 | `include_deprecated` | `bool` | Include templates with a non-null `deprecated_at`. Defaults to false server-side |
 | `include_system` | `bool` | Include the `Unmatched` / `Ignored API Calls` buckets. Defaults to false server-side |
+| `include_metrics` | `bool` | Add a [`metrics`](#metrics) object to each template. Off by default |
+| `days_back` | `int` | Rolling metrics window in days ending now (server default 28, max 365). Ignored when `since` is given |
+| `since` | `datetime \| str` | Metrics window start, inclusive. Overrides `days_back` |
+| `until` | `datetime \| str` | Metrics window end, exclusive; defaults to now |
 | `page` | `int` | 1-based |
 | `per` | `int` | Page size, default 25, max 100 (both enforced server-side) |
+
+The endpoint's `include_archived` and `include_patterns` list params are not exposed yet.
 
 **There is no `client_id`.** The client is always derived from the authenticating API
 key and cannot be supplied by the caller.
@@ -114,9 +120,12 @@ of its own returns an empty list, not those two rows.** Each row carries a
 
 `Unmatched` is the bucket to inspect when logs are misrouting.
 
-## `get_template(template_id)`
+## `get_template(template_id, ...)`
 
 `template_id` is the template hashid — the `id` field from a `search_templates` row.
+Optional keyword arguments `days_back`, `since` and `until` set the window for the
+`metrics` it returns. Unlike the list, `include_metrics` defaults to **true** here;
+pass `include_metrics=False` to omit `metrics`, which also skips validating the window.
 
 Unlike the list, this applies no filtering beyond client ownership: a deprecated or
 system template is reachable by id **with no opt-in flag**, since inspecting one of
@@ -131,12 +140,72 @@ regexes the list omits:
 |---|---|
 | `user_prompt_pattern` | `str \| None` |
 | `system_prompt_pattern` | `str \| None` |
+| `metrics` | [`LlmMetrics`](#metrics), present unless `include_metrics=False` |
 
-Both are present as keys even when null.
+Both patterns are present as keys even when null.
 
 `get_template` raises `ValueError` before making a request if `template_id` is blank,
 not a string, or a relative path segment (`.` / `..`) — any of which would otherwise
 resolve away to the list route and return an array where you expect one template.
+
+## Metrics
+
+`include_metrics=True` on `search_templates` (and `search_workloads`), and every
+`get_template` call unless it passes `include_metrics=False`, adds a `metrics` object
+computed by the same SQL as the dashboard, so tiered pricing, cached-token discounts and
+reasoning tokens are applied and the numbers match it.
+
+```python
+from datetime import datetime, timezone
+
+result = service.search_templates(
+    include_metrics=True,
+    since=datetime(2026, 9, 1, tzinfo=timezone.utc),
+    until="2026-10-01",
+)
+metrics = result["templates"][0]["metrics"]
+print(metrics["total_cost"], metrics["failure_count"])
+```
+
+### The window
+
+- `days_back` is a rolling lookback ending now.
+- `since` and `until` set an explicit window instead. `since` is inclusive; `until` is
+  exclusive and defaults to now. **Explicit wins:** with `since`, `days_back` is ignored
+  and comes back `None` in `metrics`. With only `until`, the window is `days_back` long
+  ending there.
+- The prior window behind `error_rate_change` is the same length, immediately before.
+- Pass a `datetime` (naive means UTC) or an ISO8601 string. A string without an offset is
+  UTC and a date alone is midnight UTC. A string is sent as-is for the server to
+  validate, and a `+hh:mm` offset is URL-encoded for you, so it never arrives as a space.
+  Anything else raises `ValueError` before any request is made.
+- A malformed value, a `since` not before `until`, or a window over 365 days is a `422`
+  with the error on the `since` or `until` key. It is only checked when metrics are
+  requested, which for `get_template` is unless you pass `include_metrics=False`.
+
+### Fields
+
+| Field | Type | Notes |
+|---|---|---|
+| `days_back` | `int \| None` | `None` when an explicit `since` defined the window |
+| `since`, `until` | `str` | The resolved window, ISO-8601 UTC |
+| `request_count` | `int` | |
+| `failure_count` | `int` | Failed logs in the window |
+| `error_rate` | `float \| None` | `None` when `failure_count` is 0 |
+| `error_rate_change` | `float \| None` | |
+| `avg_cost_per_request` | `float \| None` | USD |
+| `total_cost` | `float \| None` | USD; `None` when no log in the window could be priced |
+| `priced_request_count` | `int` | Non-failed logs with tokens whose model has pricing: the logs `total_cost` covers |
+| `long_context_request_count` | `int` | Priced logs that crossed their model's input-token pricing tier |
+| `total_input_tokens`, `total_output_tokens` | `int` | Raw token columns summed over non-failed logs, not cache-adjusted |
+| `avg_input_tokens`, `avg_output_tokens` | `int \| None` | |
+| `avg_latency_ms` | `float \| None` | |
+| `correctness_score`, `sentiment_score` | `float \| None` | `sentiment_score` is all-time |
+| `revision_score` | `float \| None` | 0-100; all-time |
+| `first_request_at`, `last_request_at` | `str \| None` | Lifetime, not windowed |
+
+Everything not marked all-time or lifetime covers the resolved window over non-failed,
+directly-collected client logs.
 
 ## Errors
 
@@ -166,7 +235,7 @@ except CoolhandAPIError as error:
 |---|---|---|
 | `401` | Missing, empty, invalid, or public API key | `{"error": "..."}` |
 | `404` | Unknown template id, **or** one belonging to another client | `{"errors": {"<model>": ["..."]}}` |
-| `422` | Unrecognized `status`, or an undecodable/foreign `workload_id` | `{"errors": {"<param>": ["..."]}}` |
+| `422` | Unrecognized `status`, an undecodable/foreign `workload_id`, or a bad `since`/`until` window (see [Metrics](#metrics)) | `{"errors": {"<param>": ["..."]}}` |
 | `504` | The `log_count` aggregate exceeded the server's statement timeout | `{"errors": {"system": ["..."]}}` |
 
 A template belonging to another client returns `404`, not `403` — its existence is not

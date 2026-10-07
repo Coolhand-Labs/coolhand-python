@@ -91,15 +91,18 @@ class TestSearchLogsLive:
         assert logs
         assert all(log["cost"] is not None for log in logs)
 
-    def test_since_and_until_bound_created_at(self):
-        today = datetime.now(timezone.utc).date()
-        since = (today - timedelta(days=30)).isoformat()
-        until = (today - timedelta(days=28)).isoformat()
+    def test_since_and_until_bound_created_at(self, priced_logs):
+        created = datetime.fromisoformat(priced_logs[0]["created_at"])
+        since = created - timedelta(days=1)
+        until = created + timedelta(days=1)
 
         logs = live_service().search_logs(since=since, until=until, per=25)["logs"]
 
+        assert logs
         for log in logs:
-            assert since <= log["created_at"] < until
+            assert since <= datetime.fromisoformat(log["created_at"]) < until, log[
+                "created_at"
+            ]
 
     def test_a_plus_offset_string_is_accepted_not_a_422(self):
         today = datetime.now(timezone.utc).date()

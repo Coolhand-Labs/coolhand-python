@@ -56,6 +56,33 @@ WORKLOAD_ROW = {
 }
 
 
+ALL_ARGS = {
+    "search": "agent",
+    "include_archived": True,
+    "include_system": False,
+    "include_templates": True,
+    "include_metrics": True,
+    "days_back": 30,
+    "since": datetime(2026, 9, 1, tzinfo=timezone.utc),
+    "until": "2026-10-01T00:00:00Z",
+    "page": 2,
+    "per": 50,
+}
+
+ALL_QUERY = {
+    "search": ["agent"],
+    "include_archived": ["true"],
+    "include_system": ["false"],
+    "include_templates": ["true"],
+    "include_metrics": ["true"],
+    "days_back": ["30"],
+    "since": ["2026-09-01T00:00:00Z"],
+    "until": ["2026-10-01T00:00:00Z"],
+    "page": ["2"],
+    "per": ["50"],
+}
+
+
 def build_service(body=None, headers=None, error=None, **config):
     return fake_build_service(WorkloadService, body, headers, error, **config)
 
@@ -80,31 +107,9 @@ class TestSearchWorkloadsRequest:
     def test_maps_every_param_onto_its_wire_name(self):
         service = build_service([], PAGINATION_HEADERS)
 
-        service.search_workloads(
-            search="agent",
-            include_archived=True,
-            include_system=False,
-            include_templates=True,
-            include_metrics=True,
-            days_back=30,
-            since=datetime(2026, 9, 1, tzinfo=timezone.utc),
-            until="2026-10-01T00:00:00Z",
-            page=2,
-            per=50,
-        )
+        service.search_workloads(**ALL_ARGS)
 
-        assert query_of(service._opener.request) == {
-            "search": ["agent"],
-            "include_archived": ["true"],
-            "include_system": ["false"],
-            "include_templates": ["true"],
-            "include_metrics": ["true"],
-            "days_back": ["30"],
-            "since": ["2026-09-01T00:00:00Z"],
-            "until": ["2026-10-01T00:00:00Z"],
-            "page": ["2"],
-            "per": ["50"],
-        }
+        assert query_of(service._opener.request) == ALL_QUERY
 
     def test_sends_per_not_per_page(self):
         service = build_service([], PAGINATION_HEADERS)
@@ -220,7 +225,7 @@ class TestCoolhandDelegation:
 
         assert isinstance(instance.workload_service, WorkloadService)
 
-    def test_search_workloads_delegates_with_its_params(
+    def test_search_workloads_delegates_every_param(
         self, mock_config, reset_global_instance
     ):
         instance = Coolhand(config=mock_config)
@@ -228,13 +233,7 @@ class TestCoolhandDelegation:
             response=FakeResponse([WORKLOAD_ROW], PAGINATION_HEADERS)
         )
 
-        result = instance.search_workloads(
-            include_metrics=True, since="2026-09-01", per=5
-        )
+        result = instance.search_workloads(**ALL_ARGS)
 
-        assert query_of(instance._workload_service._opener.request) == {
-            "include_metrics": ["true"],
-            "since": ["2026-09-01"],
-            "per": ["5"],
-        }
+        assert query_of(instance._workload_service._opener.request) == ALL_QUERY
         assert result["workloads"] == [WORKLOAD_ROW]

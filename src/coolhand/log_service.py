@@ -11,8 +11,6 @@ from email.message import Message
 from typing import cast
 
 from ._read_service import (
-    _MAX_ERROR_BODY_CHARS,
-    CoolhandAPIError,
     QueryValue,
     ReadService,
     _encode_path_id,
@@ -116,7 +114,8 @@ class LogService(ReadService):
             project_path: Exact match against `metadata.project_path`.
             unmatched_only: Only logs with no assigned template.
             days_back: Logs created in the last N days. Unrestricted when omitted.
-                Ignored when `since` or `until` is given.
+                Ignored when `since` is given; with only `until`, the window starts
+                `days_back` days before it.
             since: Lower bound on `created_at`, inclusive. A `datetime` (naive means
                 UTC) or an ISO8601 string; a string without an offset is UTC and a date
                 alone is midnight UTC.
@@ -174,12 +173,7 @@ class LogService(ReadService):
         }
         url = _with_query(f"{self.config['base_url']}{LOGS_ENDPOINT}", filters)
 
-        body, headers = self._get_json(url)
-        if not isinstance(body, list):
-            raise CoolhandAPIError(
-                "Log list response was not a JSON array: "
-                f"{str(body)[:_MAX_ERROR_BODY_CHARS]}"
-            )
+        body, headers = self._get_json_array(url, "Log list")
 
         logs: list[LlmRequestLogSummary] = body
         self._log(f"Fetched {len(logs)} log(s)")
@@ -239,12 +233,7 @@ class LogService(ReadService):
             f"{self.config['base_url']}{LOGS_ENDPOINT}/{encoded_id}", filters
         )
 
-        body, _headers = self._get_json(url)
-        if not isinstance(body, dict):
-            raise CoolhandAPIError(
-                "Log response was not a JSON object: "
-                f"{str(body)[:_MAX_ERROR_BODY_CHARS]}"
-            )
+        body, _headers = self._get_json_object(url, "Log")
 
         log = cast(LlmRequestLogContent, body)
         self._log(f"Fetched log {log.get('id', 'unknown')}")

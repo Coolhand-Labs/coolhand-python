@@ -4,7 +4,7 @@ Nothing here is mocked. Run it with `make test-live` (the environment it needs i
 described in `test_templates_live.py`). Every request is read-only.
 """
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import pytest
 
@@ -24,7 +24,7 @@ COST_BREAKDOWN_FIELDS = [
 
 # Bounded so min_cost / order=cost_desc cannot trip the statement timeout on a large
 # history, as the endpoint's own description advises.
-WINDOW = {"since": datetime(2026, 9, 1, tzinfo=timezone.utc)}
+WINDOW = {"since": datetime.now(timezone.utc) - timedelta(days=60)}
 
 
 def live_service(api_key: str = LIVE_API_KEY) -> LogService:
@@ -92,17 +92,21 @@ class TestSearchLogsLive:
         assert all(log["cost"] is not None for log in logs)
 
     def test_since_and_until_bound_created_at(self):
-        logs = live_service().search_logs(
-            since="2026-09-10", until="2026-09-12", per=25
-        )["logs"]
+        today = datetime.now(timezone.utc).date()
+        since = (today - timedelta(days=30)).isoformat()
+        until = (today - timedelta(days=28)).isoformat()
+
+        logs = live_service().search_logs(since=since, until=until, per=25)["logs"]
 
         for log in logs:
-            assert "2026-09-10" <= log["created_at"] < "2026-09-12"
+            assert since <= log["created_at"] < until
 
     def test_a_plus_offset_string_is_accepted_not_a_422(self):
-        result = live_service().search_logs(
-            since="2026-09-10T02:00:00+02:00", until="2026-09-11", per=1
-        )
+        today = datetime.now(timezone.utc).date()
+        since = f"{today - timedelta(days=30)}T02:00:00+02:00"
+        until = (today - timedelta(days=29)).isoformat()
+
+        result = live_service().search_logs(since=since, until=until, per=1)
 
         assert isinstance(result["logs"], list)
 

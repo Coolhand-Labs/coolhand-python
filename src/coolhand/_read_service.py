@@ -269,6 +269,26 @@ class ReadService:
                 f"{raw[:_MAX_ERROR_BODY_CHARS]}"
             ) from error
 
+    def _get_json_array(self, url: str, what: str) -> tuple[list[Any], Message]:
+        """`_get_json` for a list endpoint; `what` names it in the error message."""
+        body, headers = self._get_json(url)
+        if not isinstance(body, list):
+            raise CoolhandAPIError(
+                f"{what} response was not a JSON array: "
+                f"{str(body)[:_MAX_ERROR_BODY_CHARS]}"
+            )
+        return body, headers
+
+    def _get_json_object(self, url: str, what: str) -> tuple[dict[str, Any], Message]:
+        """`_get_json` for a show endpoint; `what` names it in the error message."""
+        body, headers = self._get_json(url)
+        if not isinstance(body, dict):
+            raise CoolhandAPIError(
+                f"{what} response was not a JSON object: "
+                f"{str(body)[:_MAX_ERROR_BODY_CHARS]}"
+            )
+        return body, headers
+
     def _log(self, message: str) -> None:
         """Log a message if not in silent mode."""
         if not self.silent:

@@ -47,16 +47,16 @@ def _build_opener() -> OpenerDirector:
     """Build a urllib opener that never follows redirects.
 
     Shared by every code path that sends `X-API-Key` (`CoolhandClient`,
-    `FeedbackService`, `TemplateService`) so none of them can be tricked into
-    replaying the key to a redirect target.
+    `FeedbackService`, and the `ReadService` subclasses) so none of them can be tricked
+    into replaying the key to a redirect target.
     """
     return build_opener(HTTPSHandler(context=_ssl_context), _RefuseRedirects())
 
 
 # Fixed timeout (seconds) for the write paths: CoolhandClient._send_one and
 # FeedbackService._submit. Deliberately not configurable via Config.timeout,
-# which only applies to TemplateService's read methods — see the comment on
-# that field in types.py.
+# which only applies to the read services' methods (TemplateService, WorkloadService,
+# LogService) — see the comment on that field in types.py.
 _WRITE_TIMEOUT_SECONDS = 10
 
 

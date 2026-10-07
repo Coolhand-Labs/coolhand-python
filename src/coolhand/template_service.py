@@ -13,7 +13,6 @@ from datetime import datetime
 from typing import Any, cast
 
 from ._read_service import (
-    _MAX_ERROR_BODY_CHARS,
     DEFAULT_TIMEOUT_SECONDS,
     CoolhandAPIError,
     QueryValue,
@@ -140,12 +139,7 @@ class TemplateService(ReadService):
         }
         url = _with_query(f"{self.config['base_url']}{TEMPLATES_ENDPOINT}", filters)
 
-        body, headers = self._get_json(url)
-        if not isinstance(body, list):
-            raise CoolhandAPIError(
-                "Template list response was not a JSON array: "
-                f"{str(body)[:_MAX_ERROR_BODY_CHARS]}"
-            )
+        body, headers = self._get_json_array(url, "Template list")
 
         templates: list[LlmRequestTemplateSummary] = body
         self._log(f"Fetched {len(templates)} template(s)")
@@ -208,12 +202,7 @@ class TemplateService(ReadService):
             },
         )
 
-        body, _headers = self._get_json(url)
-        if not isinstance(body, dict):
-            raise CoolhandAPIError(
-                "Template response was not a JSON object: "
-                f"{str(body)[:_MAX_ERROR_BODY_CHARS]}"
-            )
+        body, _headers = self._get_json_object(url, "Template")
 
         template = cast(LlmRequestTemplateDetail, body)
         self._log(f"Fetched template {template.get('id', 'unknown')}")

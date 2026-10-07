@@ -64,9 +64,9 @@ Ransack predicates; `sort` is the only Ransack passthrough.
 | `source_application` | `str` | Exact match on `source_application` |
 | `project_path` | `str` | Exact match against `metadata.project_path` |
 | `unmatched_only` | `bool` | Only logs with no assigned template |
-| `days_back` | `int` | Logs created in the last N days. Unrestricted when omitted. Ignored when `since` or `until` is given |
-| `since` | `datetime \| str` | Lower bound on `created_at`, inclusive. Replaces `days_back` |
-| `until` | `datetime \| str` | Upper bound on `created_at`, exclusive; must be after `since`. Replaces `days_back` |
+| `days_back` | `int` | Logs created in the last N days. Unrestricted when omitted. Ignored when `since` is given; with only `until`, the window starts `days_back` days before it |
+| `since` | `datetime \| str` | Lower bound on `created_at`, inclusive. Overrides `days_back` |
+| `until` | `datetime \| str` | Upper bound on `created_at`, exclusive; must be after `since`. With only `until`, the window starts `days_back` days before it (or is unbounded below if `days_back` is unset) |
 | `min_cost` | `float` | Only logs whose per-log `cost` (USD) is at least this. Unpriceable logs are excluded. `0` is sent |
 | `order` | `"cost_desc"` | Sort by per-log `cost`, highest first, replacing `sort`. Priceable logs only. Any other value is a `422` |
 | `include_prompts` | `bool` | Add `system_prompt` / `user_prompt`, truncated to 500 characters |

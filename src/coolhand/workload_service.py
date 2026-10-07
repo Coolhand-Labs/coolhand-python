@@ -8,8 +8,6 @@ per-workload endpoint.
 from datetime import datetime
 
 from ._read_service import (
-    _MAX_ERROR_BODY_CHARS,
-    CoolhandAPIError,
     QueryValue,
     ReadService,
     _pagination_from_headers,
@@ -100,12 +98,7 @@ class WorkloadService(ReadService):
         }
         url = _with_query(f"{self.config['base_url']}{WORKLOADS_ENDPOINT}", filters)
 
-        body, headers = self._get_json(url)
-        if not isinstance(body, list):
-            raise CoolhandAPIError(
-                "Workload list response was not a JSON array: "
-                f"{str(body)[:_MAX_ERROR_BODY_CHARS]}"
-            )
+        body, headers = self._get_json_array(url, "Workload list")
 
         workloads: list[WorkloadSummary] = body
         self._log(f"Fetched {len(workloads)} workload(s)")

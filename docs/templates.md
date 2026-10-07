@@ -62,6 +62,8 @@ All arguments are keyword-only and optional.
 | `page` | `int` | 1-based |
 | `per` | `int` | Page size, default 25, max 100 (both enforced server-side) |
 
+The endpoint's `include_archived` and `include_patterns` list params are not exposed yet.
+
 **There is no `client_id`.** The client is always derived from the authenticating API
 key and cannot be supplied by the caller.
 
@@ -149,9 +151,9 @@ resolve away to the list route and return an array where you expect one template
 ## Metrics
 
 `include_metrics=True` on `search_templates` (and `search_workloads`), and every
-`get_template` call unless it passes `include_metrics=False`, adds a `metrics` object computed by the same SQL as the dashboard,
-so tiered pricing, cached-token discounts and reasoning tokens are applied and the
-numbers match it.
+`get_template` call unless it passes `include_metrics=False`, adds a `metrics` object
+computed by the same SQL as the dashboard, so tiered pricing, cached-token discounts and
+reasoning tokens are applied and the numbers match it.
 
 ```python
 from datetime import datetime, timezone

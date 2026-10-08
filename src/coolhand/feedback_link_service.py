@@ -86,8 +86,12 @@ class FeedbackLinkService:
 
     @property
     def api_key(self) -> str:
-        """Get the configured API key."""
-        return self.config.get("api_key") or ""
+        """Get the configured API key, stripped of surrounding whitespace.
+
+        A trailing newline (common in env files / k8s secrets) makes http.client
+        reject the header with a ValueError whose message contains the full key.
+        """
+        return (self.config.get("api_key") or "").strip()
 
     @property
     def silent(self) -> bool:

@@ -106,6 +106,15 @@ class TestLinkFeedback:
         assert request.get_header("X-api-key") == "test-private-key"
         assert request.get_header("Content-type") == "application/json"
 
+    def test_strips_whitespace_from_the_api_key_before_sending(self):
+        # An unstripped trailing newline makes http.client raise a ValueError whose
+        # message contains the full private key.
+        service = build_service(LINK_BODY, api_key="  test-private-key\n")
+
+        service.link_feedback("opt123", "fb123")
+
+        assert service._opener.request.get_header("X-api-key") == "test-private-key"
+
     def test_includes_note_when_given(self):
         service = build_service(LINK_BODY)
 

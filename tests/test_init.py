@@ -1,5 +1,8 @@
 """Tests for coolhand public API (__init__.py)."""
 
+import re
+from pathlib import Path
+
 import coolhand
 from coolhand import (
     Config,
@@ -33,9 +36,12 @@ class TestVersion:
         assert parts[0].isdigit()
         assert parts[1].isdigit()
 
-    def test_version_is_0_8_0(self):
-        """Current version is 0.8.0."""
-        assert __version__ == "0.8.0"
+    def test_version_matches_pyproject(self):
+        """__version__ and pyproject.toml's version are bumped in lockstep."""
+        pyproject = Path(__file__).parent.parent / "pyproject.toml"
+        match = re.search(r'^version = "([^"]+)"', pyproject.read_text(), re.M)
+        assert match is not None
+        assert __version__ == match.group(1)
 
 
 class TestExports:

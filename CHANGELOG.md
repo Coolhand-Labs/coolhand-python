@@ -11,6 +11,7 @@ All notable changes to this project will be documented in this file.
 
 ### Security
 - **A `COOLHAND_API_KEY` with trailing whitespace or a newline is now stripped before use in `TemplateService` and `FeedbackLinkService`.** The 0.8.0 fix covered only the write paths (`CoolhandClient`, `FeedbackService`); the private-key read services still sent the raw value, so `http.client` rejected the header and raised a `ValueError` whose message contained the full private key into the host application's traceback or logs.
+- **Copilot `session.create` credentials are no longer captured in cleartext.** The interceptor merges the `session.create` params into every captured `session.send` body, but only `requestHeaders` was masked, so a `github_token` passed to `create_session` (sent as `gitHubToken`), a BYOK `provider` `api_key` / `bearer_token` / `headers`, and MCP server `env` / `headers` all reached Coolhand unmasked. These are now redacted: `gitHubToken` entirely; credential-named keys, every `headers` / `env` value, and URL query secrets inside `provider`, `mcpServers` and `customAgents`. If redaction itself fails the whole subtree is dropped. Secrets embedded in MCP server `args` (for example `--token=...`) are not detectable and are still captured as given. Because matching is by key name, a non-secret field such as `maxPromptTokens` inside `provider` is also masked.
 
 ### Internal
 - Renamed `CLAUDE.md` to `AGENTS.md` and updated references. (#158)

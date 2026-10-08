@@ -55,8 +55,8 @@ def _build_opener() -> OpenerDirector:
 
 # Fixed timeout (seconds) for the write paths: CoolhandClient._send_one and
 # FeedbackService._submit. Deliberately not configurable via Config.timeout,
-# which only applies to TemplateService's read methods — see the comment on
-# that field in types.py.
+# which only applies to TemplateService's read methods and FeedbackLinkService —
+# see the comment on that field in types.py.
 _WRITE_TIMEOUT_SECONDS = 10
 
 

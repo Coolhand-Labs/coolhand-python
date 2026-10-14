@@ -1,6 +1,6 @@
 """Tests for requests.Session.send interception in coolhand.httpx_interceptor."""
 
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock, PropertyMock, patch
 
 import pytest
 
@@ -265,6 +265,74 @@ class TestRequestsCapture:
         assert len(captured) == 1
         assert captured[0][1]["body"] == "[streaming]"
         assert captured[0][1]["is_streaming"] is True
+
+    @pytest.mark.parametrize("via_session_default", [False, True])
+    def test_stream_true_json_response_not_consumed(self, via_session_default):
+        import requests
+
+        captured = []
+        set_handler(lambda req, res, err: captured.append((req, res, err)))
+        fake_response = _make_response(content_type="application/json")
+        content_access = PropertyMock(return_value=b'{"result": "ok"}')
+        # MagicMock gives each instance its own class, so this doesn't leak.
+        type(fake_response).content = content_access
+        _patch_and_mock_original(fake_response)
+
+        session = requests.Session()
+        req = _make_prepared_request("https://api.openai.com/v1/chat/completions")
+        if via_session_default:
+            session.stream = True
+            session.send(req)
+        else:
+            session.send(req, stream=True)
+
+        content_access.assert_not_called()
+        assert len(captured) == 1
+        assert captured[0][1]["body"] == "[streaming]"
+        assert captured[0][1]["is_streaming"] is True
+
+    def test_stream_true_binary_response_recorded_as_streaming(self):
+        import requests
+
+        captured = []
+        set_handler(lambda req, res, err: captured.append((req, res, err)))
+        _patch_and_mock_original(_make_response(content_type="audio/mpeg"))
+
+        session = requests.Session()
+        req = _make_prepared_request("https://api.openai.com/v1/chat/completions")
+        session.send(req, stream=True)
+
+        assert captured[0][1]["body"] == "[streaming]"
+        assert captured[0][1]["is_streaming"] is True
+
+    def test_explicit_stream_false_overrides_session_default(self):
+        import requests
+
+        captured = []
+        set_handler(lambda req, res, err: captured.append((req, res, err)))
+        _patch_and_mock_original(_make_response(content=b'{"result": "ok"}'))
+
+        session = requests.Session()
+        session.stream = True
+        req = _make_prepared_request("https://api.openai.com/v1/chat/completions")
+        session.send(req, stream=False)
+
+        assert captured[0][1]["body"] == '{"result": "ok"}'
+        assert captured[0][1]["is_streaming"] is False
+
+    def test_stream_false_json_response_body_captured(self):
+        import requests
+
+        captured = []
+        set_handler(lambda req, res, err: captured.append((req, res, err)))
+        _patch_and_mock_original(_make_response(content=b'{"result": "ok"}'))
+
+        session = requests.Session()
+        req = _make_prepared_request("https://api.openai.com/v1/chat/completions")
+        session.send(req, stream=False)
+
+        assert captured[0][1]["body"] == '{"result": "ok"}'
+        assert captured[0][1]["is_streaming"] is False
 
     def test_binary_response_body_replaced_with_placeholder(self):
         import requests

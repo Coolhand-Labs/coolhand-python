@@ -226,6 +226,17 @@ class TestSearchTemplatesRequest:
         assert service._opener.request.headers["X-api-key"] == ""
 
 
+class TestApiKeyHandling:
+    def test_strips_whitespace_from_the_api_key_before_sending(self):
+        # An unstripped trailing newline makes http.client raise a ValueError whose
+        # message contains the full private key.
+        service = build_service([], api_key="  test-private-key\n")
+
+        service.search_templates()
+
+        assert service._opener.request.get_header("X-api-key") == "test-private-key"
+
+
 class TestSearchTemplatesResponse:
     """Test what search_templates returns."""
 

@@ -4,6 +4,21 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [0.9.0] - 2026-10-08
+
+### Added
+- **Link feedback to an optimization as evidence.** New `link_feedback(optimization_id, feedback_id, note=None)`, `bulk_link_feedback(optimization_id, feedback_ids, note=None)` and `unlink_feedback(optimization_id, link_id)` methods on `Coolhand`, backed by a new `FeedbackLinkService` (also exported from the package root, with the `OptimizationFeedbackLink` and `BulkLinkFeedbackResult` types). They wrap `POST` / `DELETE /api/v2/optimizations/{optimization_id}/feedback_links` and require the **private** API key; a non-2xx response raises `CoolhandAPIError` with the HTTP status on `.status`. `bulk_link_feedback` splits longer lists into batches of 100 (the server cap) and merges the counts; if a later batch fails, earlier batches stay applied, and re-running is safe because already-linked ids are counted rather than rejected. See [docs/feedback-links.md](./docs/feedback-links.md). (#160)
+
+### Security
+- **A `COOLHAND_API_KEY` with trailing whitespace or a newline is now stripped before use in `TemplateService` and `FeedbackLinkService`.** The 0.8.0 fix covered only the write paths (`CoolhandClient`, `FeedbackService`); the private-key read services still sent the raw value, so `http.client` rejected the header and raised a `ValueError` whose message contained the full private key into the host application's traceback or logs.
+- **Copilot `session.create` credentials are no longer captured in cleartext.** The interceptor merges the `session.create` params into every captured `session.send` body, but only `requestHeaders` was masked, so a `github_token` passed to `create_session` (sent as `gitHubToken`), a BYOK `provider` `api_key` / `bearer_token` / `headers`, and MCP server `env` / `headers` all reached Coolhand unmasked. These are now redacted: `gitHubToken` entirely; credential-named keys, every `headers` / `env` value, and URL query secrets inside `provider`, `mcpServers` and `customAgents`. If redaction itself fails the whole subtree is dropped. Secrets embedded in MCP server `args` (for example `--token=...`) are not detectable and are still captured as given. Because matching is by key name, a non-secret field such as `maxPromptTokens` inside `provider` is also masked.
+
+### Internal
+- Renamed `CLAUDE.md` to `AGENTS.md` and updated references. (#158)
+- Rewrote the harness's review step so a leaf agent requests its review from the parent node instead of running it itself (`AGENTS.harness.md`). (#161)
+- `make test-live` now covers the feedback link live tests (`COOLHAND_LIVE_OPTIMIZATION_ID`, `COOLHAND_LIVE_FEEDBACK_IDS`). (#160)
+- Development dependency and CI updates: ruff 0.16.7 → 0.16.9 (#163), coverage 7.16.0 → 7.16.1 (#154), types-requests 2.33.0.20260712 → 2.33.0.20260906 (#155), `astral-sh/setup-uv` 10.1.0 → 10.2.0 (#162), and `uv.lock` bumps of urllib3 2.7.0 → 2.8.0 (#167), PyJWT 2.13.0 → 2.15.0 (#165) and virtualenv 21.3.1 → 21.7.13 (#166).
+
 ## [0.8.0] - 2026-09-20
 
 ### Added

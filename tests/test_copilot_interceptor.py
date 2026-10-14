@@ -301,6 +301,70 @@ class TestRequestInterception:
         assert entry["req_data"]["method"] == "POST"
 
     @pytest.mark.asyncio
+    async def test_session_create_credentials_are_redacted_in_captured_body(
+        self, handler
+    ):
+        from coolhand import copilot_interceptor
+
+        cls = _inject_fake_sdk()
+        copilot_interceptor.set_handler(handler)
+        copilot_interceptor.patch()
+
+        instance = cls()
+        await instance.request(
+            "session.create",
+            {
+                "sessionId": "s1",
+                "model": "gpt-5",
+                "gitHubToken": "ghp_SECRETTOKEN",
+                "provider": {
+                    "type": "openai",
+                    "baseUrl": "https://example.com/v1?api_key=URLSECRET",
+                    "apiKey": "sk-SECRETKEY",
+                    "bearerToken": "bt-SECRET",
+                    "headers": {"Authorization": "Bearer HDRSECRET"},
+                },
+                "mcpServers": {
+                    "gh": {
+                        "command": "npx",
+                        "env": {"GH_PAT": "ENVSECRET"},
+                        "headers": {"X-Custom": "MCPSECRET"},
+                    }
+                },
+            },
+        )
+        await instance.request("session.send", {"sessionId": "s1", "prompt": "hello"})
+
+        body = copilot_interceptor._pre_pending["s1"][0]["req_data"]["body"]
+        assert body["gitHubToken"] == "[REDACTED]"
+        assert body["provider"]["apiKey"] == "[REDACTED]"
+        assert body["provider"]["bearerToken"] == "[REDACTED]"
+        assert body["provider"]["headers"] == {"Authorization": "[REDACTED]"}
+        assert "URLSECRET" not in body["provider"]["baseUrl"]
+        assert body["mcpServers"]["gh"]["env"] == {"GH_PAT": "[REDACTED]"}
+        assert body["mcpServers"]["gh"]["headers"] == {"X-Custom": "[REDACTED]"}
+        # Non-secret session config and the prompt stay verbatim.
+        assert body["provider"]["type"] == "openai"
+        assert body["mcpServers"]["gh"]["command"] == "npx"
+        assert body["model"] == "gpt-5"
+        assert body["prompt"] == "hello"
+        assert "SECRET" not in str(body)
+
+    def test_sanitize_session_body_fails_closed(self, monkeypatch):
+        from coolhand import copilot_interceptor
+
+        def boom(_value):
+            raise RuntimeError("redaction broke")
+
+        monkeypatch.setattr(copilot_interceptor, "_redact_session_config", boom)
+
+        result = copilot_interceptor._sanitize_session_body(
+            {"provider": {"apiKey": "sk-SECRET"}, "prompt": "hi"}
+        )
+
+        assert result == {"provider": "[REDACTED]", "prompt": "hi"}
+
+    @pytest.mark.asyncio
     async def test_passthrough_for_non_session_send(self, handler):
         from coolhand import copilot_interceptor
 

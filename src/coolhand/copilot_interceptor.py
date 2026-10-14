@@ -7,6 +7,7 @@ import time
 from collections.abc import Callable
 from typing import Any
 
+from .client import _is_sensitive_body_key, _sanitize_url
 from .types import RequestData, ResponseData
 
 logger = logging.getLogger(__name__)
@@ -47,6 +48,54 @@ _session_models: dict[str | None, dict[str, Any]] = {}
 _session_usage: dict[str | None, dict[str, Any]] = {}
 
 _lock = threading.Lock()
+
+
+# session.create params carry credentials in the *body* — a top-level gitHubToken,
+# BYOK provider apiKey/bearerToken/headers, and MCP server env/headers — which are
+# merged into the captured session.send body and would reach Coolhand in cleartext.
+# Redaction is scoped to these fields so prompts and other payload stay verbatim.
+_SESSION_SECRET_FIELDS = ("gitHubToken",)
+_SESSION_CONFIG_FIELDS = ("provider", "mcpServers", "customAgents")
+# Maps of credential-bearing values whose names (e.g. "Authorization") don't look
+# sensitive, so every value in them is masked.
+_SECRET_VALUE_MAPS = ("headers", "env", "environment")
+_URL_FIELDS = ("url", "baseUrl")
+
+
+def _redact_session_config(value: Any) -> Any:
+    """Recursively redact credentials inside a Copilot session config subtree."""
+    if isinstance(value, dict):
+        redacted: dict[str, Any] = {}
+        for k, v in value.items():
+            if k in _SECRET_VALUE_MAPS and isinstance(v, dict):
+                redacted[k] = {name: "[REDACTED]" for name in v}
+            elif _is_sensitive_body_key(k):
+                redacted[k] = "[REDACTED]"
+            elif k in _URL_FIELDS and isinstance(v, str):
+                redacted[k] = _sanitize_url(v)
+            else:
+                redacted[k] = _redact_session_config(v)
+        return redacted
+    if isinstance(value, list):
+        return [_redact_session_config(v) for v in value]
+    return value
+
+
+def _sanitize_session_body(body: dict[str, Any]) -> dict[str, Any]:
+    """Redact credentials from a merged session.create/session.send body."""
+    sanitized = dict(body)
+    for field in _SESSION_SECRET_FIELDS:
+        if field in sanitized:
+            sanitized[field] = "[REDACTED]"
+    for field in _SESSION_CONFIG_FIELDS:
+        if field in sanitized:
+            try:
+                sanitized[field] = _redact_session_config(sanitized[field])
+            except Exception:
+                # Fail closed, like client._sanitize_body: drop the whole subtree
+                # rather than risk forwarding an unredacted credential.
+                sanitized[field] = "[REDACTED]"
+    return sanitized
 
 
 def _remove_from_pre_pending(session_id: str | None, entry: dict[str, Any]) -> bool:
@@ -258,11 +307,13 @@ def patch() -> bool:
             "headers": p.get("requestHeaders") or {},
             # requestHeaders is already carried (and masked) in "headers"; leaving
             # it in the body would ship Authorization/X-API-Key values unmasked.
-            "body": {
-                k: v
-                for k, v in {**session_ctx, **dict(p)}.items()
-                if k != "requestHeaders"
-            },
+            "body": _sanitize_session_body(
+                {
+                    k: v
+                    for k, v in {**session_ctx, **dict(p)}.items()
+                    if k != "requestHeaders"
+                }
+            ),
             "timestamp": start,
         }
 

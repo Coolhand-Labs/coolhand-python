@@ -82,6 +82,7 @@ def reset_global_instance():
     original_handler = httpx_interceptor._handler
     original_intercept_addresses = httpx_interceptor._intercept_addresses
     original_exclude_api_patterns = httpx_interceptor._exclude_api_patterns
+    original_max_body_bytes = httpx_interceptor._max_body_bytes
 
     # Reset before test
     client._instance = None
@@ -98,6 +99,7 @@ def reset_global_instance():
     httpx_interceptor._handler = original_handler
     httpx_interceptor._intercept_addresses = original_intercept_addresses
     httpx_interceptor._exclude_api_patterns = original_exclude_api_patterns
+    httpx_interceptor._max_body_bytes = original_max_body_bytes
 
     # Unpatch if patched during test
     if httpx_interceptor._patched:

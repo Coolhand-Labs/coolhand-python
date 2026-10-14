@@ -14,6 +14,7 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import parse_qs, urlencode, urlparse, urlunparse
 from urllib.request import Request
 
+from ._body_limit import DEFAULT_MAX_BODY_BYTES, cap_body
 from ._config import (
     _DEFAULT_BASE_URL,
     _WRITE_TIMEOUT_SECONDS,
@@ -125,6 +126,7 @@ def _get_default_config() -> Config:
         "auto_submit": True,
         "session_id": f"session_{int(time.time() * 1000)}",
         "exclude_api_patterns": list(DEFAULT_EXCLUDE_API_PATTERNS),
+        "max_body_bytes": DEFAULT_MAX_BODY_BYTES,
     }
 
 
@@ -317,6 +319,8 @@ class CoolhandClient:
         )
         duration_seconds = response.get("duration", 0.0) if response else 0.0
 
+        max_body_bytes = self.config.get("max_body_bytes")
+
         # Build flat interaction data (matching Ruby/Node format)
         interaction = {
             "id": str(uuid.uuid4()),
@@ -324,12 +328,19 @@ class CoolhandClient:
             "method": request.get("method", "").lower(),
             "url": _sanitize_url(request.get("url", "")),
             "headers": _sanitize_headers(request.get("headers", {})),
-            "request_body": _sanitize_body(_parse_body(request.get("body"))),
+            "request_body": cap_body(
+                _sanitize_body(_parse_body(request.get("body"))), max_body_bytes
+            ),
             "response_headers": (
                 _sanitize_headers(response.get("headers", {})) if response else {}
             ),
             "response_body": (
-                _sanitize_body(_parse_body(response.get("body"))) if response else None
+                cap_body(
+                    _sanitize_body(_parse_body(response.get("body"))),
+                    None if response.get("body_truncated") else max_body_bytes,
+                )
+                if response
+                else None
             ),
             "status_code": response.get("status_code", 0) if response else 0,
             "duration_ms": round(duration_seconds * 1000, 2),

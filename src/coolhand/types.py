@@ -24,6 +24,9 @@ class ResponseData(TypedDict, total=False):
     timestamp: float
     duration: float
     is_streaming: bool
+    # Set by an interceptor that already truncated ``body`` to ``max_body_bytes``
+    # (the streaming accumulator), so the client doesn't truncate it again.
+    body_truncated: bool
 
 
 class Config(TypedDict, total=False):
@@ -36,6 +39,10 @@ class Config(TypedDict, total=False):
     session_id: str | None
     intercept_addresses: list[str] | None
     exclude_api_patterns: list[str] | None
+    # Max size in bytes of each captured request/response body. Larger bodies are
+    # truncated and end with a "[truncated: N bytes, ...]" marker. ``None`` or 0
+    # disables the limit. Defaults to 1 MiB.
+    max_body_bytes: int | None
     # HTTP timeout in seconds for the read methods on TemplateService and every
     # FeedbackLinkService call. The write paths (CoolhandClient._send_one,
     # FeedbackService._submit) keep their own fixed _config._WRITE_TIMEOUT_SECONDS and

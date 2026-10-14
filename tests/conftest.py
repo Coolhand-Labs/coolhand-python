@@ -1,5 +1,6 @@
 """Pytest fixtures for Coolhand tests."""
 
+import logging
 import os
 import time
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -19,6 +20,17 @@ import pytest
 # separate opt-in `tests/live/` suite and are untouched here.
 os.environ.pop("COOLHAND_API_KEY", None)
 os.environ.pop("COOLHAND_BASE_URL", None)
+
+
+@pytest.fixture(autouse=True)
+def restore_coolhand_logger():
+    """A non-silent client configures the ``coolhand`` logger's level and may
+    attach a handler; undo that so it can't leak into later tests."""
+    pkg = logging.getLogger("coolhand")
+    handlers, level = pkg.handlers[:], pkg.level
+    yield
+    pkg.handlers = handlers
+    pkg.setLevel(level)
 
 
 @pytest.fixture

@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
 
+from ._body_limit import DEFAULT_MAX_BODY_BYTES, truncate_text
 from .types import RequestData, ResponseData
 
 logger = logging.getLogger(__name__)
@@ -21,6 +22,8 @@ _original_requests_send: Callable | None = None
 _handler: Callable[[RequestData, ResponseData | None, str | None], None] | None = None
 _intercept_addresses: list[str] | None = None
 _exclude_api_patterns: list[str] | None = None
+# Byte cap for the streaming accumulator; None/0 means unlimited.
+_max_body_bytes: int | None = DEFAULT_MAX_BODY_BYTES
 
 # Reentrancy guard: prevents the handler from firing more than once per logical
 # request when the same intercepted call re-enters the public send() — e.g. a
@@ -129,6 +132,51 @@ def set_exclude_api_patterns(patterns: list[str] | None) -> None:
     """
     global _exclude_api_patterns
     _exclude_api_patterns = patterns
+
+
+def set_max_body_bytes(max_bytes: int | None) -> None:
+    """Set the byte cap for captured streaming response bodies.
+
+    ``None`` or 0 disables the cap.
+    """
+    global _max_body_bytes
+    _max_body_bytes = max_bytes
+
+
+class _BoundedChunks:
+    """Accumulates streamed text, retaining at most ``cap`` bytes.
+
+    Keeps counting the total so the truncation marker can report the full size,
+    but stops storing once the cap is reached so memory stays bounded however
+    long the stream runs. ``cap`` of ``None`` or 0 means unlimited.
+    """
+
+    def __init__(self, cap: int | None) -> None:
+        self._cap = cap
+        self._chunks: list[str] = []
+        self._stored = 0
+        self.total = 0
+
+    def append(self, text: str) -> None:
+        size = len(text.encode("utf-8", errors="replace"))
+        self.total += size
+        if self._cap and self._stored >= self._cap:
+            return
+        self._chunks.append(text)
+        self._stored += size
+
+    @property
+    def truncated(self) -> bool:
+        return bool(self._cap) and self.total > self._cap
+
+    def __bool__(self) -> bool:
+        return bool(self._chunks)
+
+    def joined(self) -> str:
+        text = "".join(self._chunks)
+        if self.truncated:
+            return truncate_text(text, self.total, self._cap or 0)
+        return text
 
 
 def _matches_any(url: str, override: list[str] | None, defaults: list[str]) -> bool:
@@ -328,7 +376,7 @@ def patch() -> bool:
 
             if is_streaming:
                 # Wrap streaming methods to capture content
-                captured_chunks = []
+                captured_chunks = _BoundedChunks(_max_body_bytes)
                 content_sent = [False]  # Use list to allow mutation in closures
 
                 def send_captured():
@@ -337,10 +385,11 @@ def patch() -> bool:
                         res_data: ResponseData = {
                             "status_code": response.status_code,
                             "headers": dict(response.headers),
-                            "body": "".join(captured_chunks),
+                            "body": captured_chunks.joined(),
                             "timestamp": time.time(),
                             "duration": time.time() - start,
                             "is_streaming": True,
+                            "body_truncated": captured_chunks.truncated,
                         }
                         try:
                             _handler(req_data, res_data, None)
@@ -518,7 +567,7 @@ def patch() -> bool:
 
 def unpatch() -> None:
     """Restore original httpx methods."""
-    global _patched, _original_requests_send, _exclude_api_patterns
+    global _patched, _original_requests_send, _exclude_api_patterns, _max_body_bytes
 
     if not _patched:
         return
@@ -543,6 +592,7 @@ def unpatch() -> None:
 
     _original_requests_send = None
     _exclude_api_patterns = None
+    _max_body_bytes = DEFAULT_MAX_BODY_BYTES
     _patched = False
     logger.info("Global HTTP monitoring disabled")
 

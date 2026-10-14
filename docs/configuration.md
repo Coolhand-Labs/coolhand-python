@@ -19,6 +19,8 @@ coolhand_client = Coolhand(
 
 Any request whose URL contains one of the listed substrings is passed through without logging. The default list (`DEFAULT_EXCLUDE_API_PATTERNS`) excludes non-inference management endpoints for Vertex AI, Azure OpenAI and Cohere, such as `/batchPredictionJobs/`, `/openai/fine_tuning` and `api.cohere.com/v1/embed-jobs` (which would otherwise match the Cohere `/v1/embed` allow-list entry); setting `exclude_api_patterns` **replaces** the default entirely.
 
+`exclude_api_patterns` and `intercept_addresses` must be lists of strings; anything else logs a warning when `Coolhand(...)` is constructed. If matching still fails at request time (for example a non-string entry), the request is not captured — it is treated as excluded for `exclude_api_patterns` and as not matching for `intercept_addresses`. Fix the list to restore capture.
+
 To extend the defaults rather than replace them:
 
 ```python

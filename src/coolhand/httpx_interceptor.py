@@ -118,6 +118,7 @@ def set_intercept_addresses(addresses: list[str] | None) -> None:
     ``DEFAULT_INTERCEPT_ADDRESSES``.
     """
     global _intercept_addresses
+    _warn_on_invalid_entries("intercept_addresses", addresses)
     _intercept_addresses = addresses
 
 
@@ -128,25 +129,61 @@ def set_exclude_api_patterns(patterns: list[str] | None) -> None:
     ``DEFAULT_EXCLUDE_API_PATTERNS``.
     """
     global _exclude_api_patterns
+    _warn_on_invalid_entries("exclude_api_patterns", patterns)
     _exclude_api_patterns = patterns
 
 
-def _matches_any(url: str, override: list[str] | None, defaults: list[str]) -> bool:
+def _warn_on_invalid_entries(name: str, entries: list[str] | None) -> None:
+    """Warn at configuration time about a malformed pattern list.
+
+    A non-list container (a bare ``str`` iterates per character; a one-shot
+    iterator is consumed by the first match) or a non-``str`` entry makes URL
+    matching misbehave at request time, where failures are only logged at debug
+    level. Surfacing it here means a bad config is noticed when
+    ``Coolhand(...)`` is constructed. Never raises: monitoring must not break
+    the host application.
+    """
+    if entries is None:
+        return
+    if not isinstance(entries, (list, tuple)):
+        logger.warning(
+            "Invalid %s: expected a list of str, got %s.", name, type(entries).__name__
+        )
+        return
+    invalid = sorted({type(e).__name__ for e in entries if not isinstance(e, str)})
+    if invalid:
+        logger.warning(
+            "Invalid %s entries (expected str, got %s). URL matching against "
+            "this list may fail at request time, in which case the request is "
+            "not captured.",
+            name,
+            ", ".join(invalid),
+        )
+
+
+def _matches_any(
+    url: str,
+    override: list[str] | None,
+    defaults: list[str],
+    *,
+    on_error: bool,
+) -> bool:
     """Substring-match a URL against an override list, falling back to defaults.
 
     ``None`` means "no override, use defaults"; an empty list means "match
-    nothing" and is deliberately distinct from ``None``.
+    nothing" and is deliberately distinct from ``None``. ``on_error`` is the
+    result when matching raises (e.g. a non-str entry); callers choose the value
+    that means "do not capture" for their list (``False`` for the allow-list,
+    ``True`` for the deny-list). Logged at debug to avoid per-request spam; the
+    user-facing trace is the warning from ``_warn_on_invalid_entries``.
     """
     try:
         return any(
             entry in url for entry in (defaults if override is None else override)
         )
     except Exception:
-        # Fail closed for the allow-list, open for the deny-list. Either way a
-        # malformed list (e.g. a non-str entry) changes capture behaviour, so
-        # leave a trace rather than swallowing it entirely.
         logger.debug("Failed to match URL against pattern list", exc_info=True)
-        return False
+        return on_error
 
 
 def _is_localhost(url: str) -> bool:
@@ -160,12 +197,16 @@ def _is_localhost(url: str) -> bool:
 
 def _is_llm_api(url: str) -> bool:
     """Check if URL matches any intercept address (substring match)."""
-    return _matches_any(url, _intercept_addresses, DEFAULT_INTERCEPT_ADDRESSES)
+    return _matches_any(
+        url, _intercept_addresses, DEFAULT_INTERCEPT_ADDRESSES, on_error=False
+    )
 
 
 def _is_excluded(url: str) -> bool:
     """Check if URL matches any exclude pattern (deny-list after allow-list)."""
-    return _matches_any(url, _exclude_api_patterns, DEFAULT_EXCLUDE_API_PATTERNS)
+    return _matches_any(
+        url, _exclude_api_patterns, DEFAULT_EXCLUDE_API_PATTERNS, on_error=True
+    )
 
 
 def _read_request_body(request: Any) -> str | None:

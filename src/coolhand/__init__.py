@@ -75,6 +75,7 @@ class Coolhand(CoolhandClient):
         httpx_interceptor.set_exclude_api_patterns(
             self.config.get("exclude_api_patterns")
         )
+        httpx_interceptor.set_max_body_bytes(self.config.get("max_body_bytes"))
         httpx_interceptor.set_handler(self.log_interaction)
         httpx_interceptor.patch()
         copilot_interceptor.set_handler(self.log_interaction)

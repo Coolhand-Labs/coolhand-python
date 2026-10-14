@@ -21,7 +21,7 @@ The third mode is the key test case for [issue #12](https://github.com/Coolhand-
 The app deliberately replicates the dependency environment of a real client (Teladoc QA Agent Orchestrator) to surface integration issues before they reach production:
 
 - **OpenTelemetry** (`opentelemetry-instrumentation-httpx`, `opentelemetry-instrumentation-requests`) — both OTel instrumentors are applied *before* coolhand to test the worst-case patch ordering. Spans are discarded (no exporter configured); the point is that coolhand's patches wrap correctly on top of OTel's.
-- **structlog** — configured before coolhand initializes. Coolhand is passed `silent=True` to prevent it calling `logging.basicConfig`, which would interfere with structlog's logging setup.
+- **structlog** — configured before coolhand initializes. Coolhand is passed `silent=True` so it does not attach its own log handler or level alongside structlog's logging setup.
 - **gunicorn** — `gunicorn.conf.py` runs 2 workers via `UvicornWorker`. Each worker is a separate process, so coolhand fires one heartbeat per worker on startup (expected behaviour with the `fix-heartbeat-once` fix).
 
 ### Feedback flow

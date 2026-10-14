@@ -1,6 +1,8 @@
 """Tests for coolhand.client module."""
 
+import contextlib
 import json
+import logging
 import threading
 
 import pytest
@@ -712,6 +714,116 @@ class TestLogInteractionEdgeCases:
 
         assert "Captured:" in caplog.text
         assert "POST" in caplog.text or "post" in caplog.text
+
+
+@contextlib.contextmanager
+def _root_handlers(*handlers):
+    """Temporarily replace the root logger's handlers (pytest's logging plugin
+    keeps its own capture handlers there, so root is never empty by default)."""
+    root = logging.getLogger()
+    saved = root.handlers[:]
+    root.handlers = list(handlers)
+    try:
+        yield root
+    finally:
+        root.handlers = saved
+
+
+class TestLoggingConfiguration:
+    """A non-silent client may configure only the ``coolhand`` logger, never
+    the host application's root logger."""
+
+    @pytest.fixture
+    def pkg_logger(self):
+        # The autouse restore_coolhand_logger fixture undoes these changes.
+        pkg = logging.getLogger("coolhand")
+        root = logging.getLogger()
+        root_level = root.level
+        pkg.handlers = []
+        pkg.setLevel(logging.NOTSET)
+        root.setLevel(logging.WARNING)
+        yield pkg
+        root.setLevel(root_level)
+
+    def test_non_silent_client_leaves_root_logger_unchanged(
+        self, pkg_logger, reset_global_instance
+    ):
+        # basicConfig is a no-op unless root is unconfigured, so clear it.
+        with _root_handlers() as root:
+            CoolhandClient(auto_submit=False, silent=False)
+
+            assert root.handlers == []
+            assert root.level == logging.WARNING
+
+    def test_non_silent_client_attaches_single_handler_to_coolhand_logger(
+        self, pkg_logger, reset_global_instance
+    ):
+        with _root_handlers():
+            CoolhandClient(auto_submit=False, silent=False)
+            CoolhandClient(auto_submit=False, silent=False)
+
+        assert len(pkg_logger.handlers) == 1
+        assert pkg_logger.level == logging.INFO
+
+    def test_non_silent_output_keeps_basicconfig_format(
+        self,
+        pkg_logger,
+        reset_global_instance,
+        mock_request_data,
+        mock_response_data,
+        capsys,
+    ):
+        with _root_handlers():
+            client = CoolhandClient(auto_submit=False, silent=False)
+            client.log_interaction(mock_request_data, mock_response_data)
+
+        assert "INFO:coolhand.client:Captured:" in capsys.readouterr().err
+
+    def test_existing_root_handler_means_no_coolhand_handler(
+        self, pkg_logger, reset_global_instance
+    ):
+        pkg_logger.setLevel(logging.WARNING)
+
+        with _root_handlers(logging.NullHandler()):
+            CoolhandClient(auto_submit=False, silent=False)
+
+        assert pkg_logger.handlers == []
+        assert pkg_logger.level == logging.WARNING
+
+    def test_host_debug_root_level_is_not_raised_to_info(
+        self, pkg_logger, reset_global_instance
+    ):
+        logging.getLogger().setLevel(logging.DEBUG)
+
+        with _root_handlers(logging.NullHandler()):
+            CoolhandClient(auto_submit=False, silent=False)
+
+        assert pkg_logger.level == logging.NOTSET
+        assert pkg_logger.getEffectiveLevel() == logging.DEBUG
+
+    def test_existing_coolhand_handler_is_not_duplicated(
+        self, pkg_logger, reset_global_instance
+    ):
+        own_handler = logging.NullHandler()
+        pkg_logger.addHandler(own_handler)
+        pkg_logger.setLevel(logging.DEBUG)
+
+        with _root_handlers():
+            CoolhandClient(auto_submit=False, silent=False)
+
+        assert pkg_logger.handlers == [own_handler]
+        assert pkg_logger.level == logging.DEBUG
+
+    def test_silent_client_does_not_configure_any_logger(
+        self, pkg_logger, reset_global_instance
+    ):
+        with _root_handlers() as root:
+            CoolhandClient(auto_submit=False, silent=True)
+
+            assert root.handlers == []
+            assert root.level == logging.WARNING
+        assert pkg_logger.handlers == []
+        assert pkg_logger.level == logging.NOTSET
 
 
 class TestSendOne:

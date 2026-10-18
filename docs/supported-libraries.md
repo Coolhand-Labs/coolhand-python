@@ -29,7 +29,7 @@ Patches `requests.Session.send`. Only applied if the `requests` package is insta
 - **Azure Machine Learning** managed online endpoints (`inference.ml.azure.com` / `.us`)
 - Any other library using the `requests` library
 
-> **Sync transport only.** `azure-core`'s *async* pipeline defaults to `AioHttpTransport`, and Coolhand does not patch aiohttp, so calls made through `azure.ai.inference.aio` (or any other async `azure-core` pipeline) are not captured. The `openai` SDK's own `AzureOpenAI` / `AsyncAzureOpenAI` clients are httpx-based and are captured on both the sync and async paths.
+> **Sync transport only.** `azure-core`'s *async* pipeline defaults to `AioHttpTransport`, and Coolhand does not patch aiohttp, so calls made through `azure.ai.inference.aio` (or any other async `azure-core` pipeline) are not captured. The `openai` SDK's own `AzureOpenAI` / `AsyncAzureOpenAI` clients are httpx-based and are captured on both the sync and async paths. To check that a given client is actually intercepted, see [Verifying Interception in Your Tests](./testing.md).
 
 ### JSON-RPC patching
 

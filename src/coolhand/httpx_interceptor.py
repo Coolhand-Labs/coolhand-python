@@ -3,6 +3,7 @@
 import contextvars
 import json
 import logging
+import threading
 import time
 from collections.abc import Callable
 from pathlib import Path
@@ -30,6 +31,26 @@ _exclude_api_patterns: list[str] | None = None
 _intercepting: contextvars.ContextVar[bool] = contextvars.ContextVar(
     "coolhand_intercepting", default=False
 )
+
+# Process-wide count of requests the patched wrappers have captured. Exists so a
+# host app's own tests can assert that interception really happened (see
+# coolhand.testing). Never reset by unpatch(), so snapshot deltas stay valid
+# across patch cycles.
+_intercept_count = 0
+_intercept_count_lock = threading.Lock()
+
+
+def _record_interception() -> None:
+    """Count one captured request. Called once per request, not per re-entry."""
+    global _intercept_count
+    with _intercept_count_lock:
+        _intercept_count += 1
+
+
+def get_intercept_count() -> int:
+    """Return how many requests the httpx/requests patches have captured."""
+    with _intercept_count_lock:
+        return _intercept_count
 
 
 # Default intercept addresses (domains and path substrings)
@@ -259,6 +280,7 @@ def patch() -> bool:
             return _original_send(self, request, **kwargs)
 
         token = _intercepting.set(True)
+        _record_interception()
         start = time.time()
         req_data: RequestData | None = None
 
@@ -308,6 +330,7 @@ def patch() -> bool:
             return await _original_async_send(self, request, **kwargs)
 
         token = _intercepting.set(True)
+        _record_interception()
         start = time.time()
         req_data: RequestData | None = None
 
@@ -450,6 +473,7 @@ def patch() -> bool:
                 return _original_requests_send(self, request, **kwargs)
 
             token = _intercepting.set(True)
+            _record_interception()
             start = time.time()
             req_data: RequestData | None = None
 
@@ -545,6 +569,11 @@ def unpatch() -> None:
     _exclude_api_patterns = None
     _patched = False
     logger.info("Global HTTP monitoring disabled")
+
+
+def has_handler() -> bool:
+    """Check if a capture handler is set (patched requests pass through without one)."""
+    return bool(_handler)
 
 
 def is_patched() -> bool:

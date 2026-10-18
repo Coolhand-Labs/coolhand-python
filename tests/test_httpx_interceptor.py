@@ -1,5 +1,6 @@
 """Tests for coolhand.httpx_interceptor module."""
 
+import logging
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -429,13 +430,13 @@ class TestCustomInterceptAddresses:
         ``any()`` short-circuits, so a malformed entry only bites once matching
         reaches it — put it first to exercise the failure path.
         """
-        import logging
 
-        set_intercept_addresses([None, "api.openai.com"])  # type: ignore[list-item]
         with caplog.at_level(logging.DEBUG, logger="coolhand.httpx_interceptor"):
+            set_intercept_addresses([None, "api.openai.com"])  # type: ignore[list-item]
             assert _is_llm_api("https://api.openai.com/v1/chat/completions") is False
 
         assert "Failed to match URL against pattern list" in caplog.text
+        assert "Invalid intercept_addresses entries" in caplog.text
 
     def test_empty_list_matches_nothing(self, reset_global_instance):
         """Explicit empty list means capture nothing, not defaults."""
@@ -1149,6 +1150,67 @@ class TestReadResponseBodyEdgeCases:
 
 class TestIsExcluded:
     """Tests for _is_excluded helper function."""
+
+    def test_malformed_pattern_fails_closed(self, caplog, reset_global_instance):
+        """A matching error on the deny-list excludes the request (#174)."""
+
+        with caplog.at_level(logging.WARNING, logger="coolhand.httpx_interceptor"):
+            set_exclude_api_patterns([None, "/files"])  # type: ignore[list-item]
+
+        assert "Invalid exclude_api_patterns entries (expected str, got NoneType)" in (
+            caplog.text
+        )
+        url = "https://api.openai.com/v1/chat/completions"
+        assert _is_excluded(url) is True
+        assert _should_capture_url(url) is False
+
+    def test_valid_entry_before_malformed_one_still_matches(
+        self, reset_global_instance
+    ):
+        """any() short-circuits: a match before the bad entry never errors."""
+        set_exclude_api_patterns(["/files", None])  # type: ignore[list-item]
+        assert _is_excluded("https://api.openai.com/v1/files") is True
+
+    @pytest.mark.parametrize("value", [None, [], ["/health"], ("/health",)])
+    def test_valid_patterns_do_not_warn(self, value, caplog, reset_global_instance):
+
+        with caplog.at_level(logging.WARNING, logger="coolhand.httpx_interceptor"):
+            set_exclude_api_patterns(value)
+            set_intercept_addresses(value)
+
+        assert not [r for r in caplog.records if r.name == "coolhand.httpx_interceptor"]
+
+    @pytest.mark.parametrize("value", ["/health", b"/health", 5, iter(["/a"])])
+    def test_non_list_container_warns(self, value, caplog, reset_global_instance):
+
+        with caplog.at_level(logging.WARNING, logger="coolhand.httpx_interceptor"):
+            set_exclude_api_patterns(value)  # type: ignore[arg-type]
+            set_intercept_addresses(value)  # type: ignore[arg-type]
+
+        assert "Invalid exclude_api_patterns: expected a list" in caplog.text
+        assert "Invalid intercept_addresses: expected a list" in caplog.text
+
+    def test_matches_any_on_error_polarity(self):
+        from coolhand.httpx_interceptor import _matches_any
+
+        bad = [None]
+        assert _matches_any("https://x", bad, [], on_error=True) is True  # type: ignore[list-item]
+        assert _matches_any("https://x", bad, [], on_error=False) is False  # type: ignore[list-item]
+
+    def test_coolhand_construction_warns_on_malformed_exclude(
+        self, caplog, reset_global_instance
+    ):
+
+        from coolhand import Coolhand
+
+        client = None
+        try:
+            with caplog.at_level(logging.WARNING, logger="coolhand.httpx_interceptor"):
+                client = Coolhand(api_key="k", exclude_api_patterns=[None])
+            assert "Invalid exclude_api_patterns entries" in caplog.text
+        finally:
+            if client is not None:
+                client.stop_monitoring()
 
     def test_excluded_by_default_pattern(self, reset_global_instance):
         """batchPredictionJobs URLs are excluded by default."""

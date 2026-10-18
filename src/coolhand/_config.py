@@ -48,8 +48,8 @@ def _build_opener() -> OpenerDirector:
     """Build a urllib opener that never follows redirects.
 
     Shared by every code path that sends `X-API-Key` (`CoolhandClient`,
-    `FeedbackService`, `TemplateService`) so none of them can be tricked into
-    replaying the key to a redirect target.
+    `FeedbackService`, `TemplateService`, `WorkloadService`) so none of them can be
+    tricked into replaying the key to a redirect target.
     """
     return build_opener(HTTPSHandler(context=_ssl_context), _RefuseRedirects())
 

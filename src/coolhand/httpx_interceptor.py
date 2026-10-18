@@ -14,6 +14,7 @@ from typing import Any
 from urllib.parse import unquote, urlsplit
 
 from ._body_limit import DEFAULT_MAX_BODY_BYTES, truncate_text
+from .declared_context import attach_snapshot
 from .types import RequestData, ResponseData
 
 logger = logging.getLogger(__name__)
@@ -549,6 +550,7 @@ def patch() -> bool:
                 "body": _read_request_body(request),
                 "timestamp": start,
             }
+            attach_snapshot(req_data)
             response = _original_send(self, request, **kwargs)
             duration = time.time() - start
 
@@ -599,6 +601,7 @@ def patch() -> bool:
                 "body": _read_request_body(request),
                 "timestamp": start,
             }
+            attach_snapshot(req_data)
             response = await _original_async_send(self, request, **kwargs)
             duration = time.time() - start
 
@@ -747,6 +750,7 @@ def patch() -> bool:
                     "body": body,
                     "timestamp": start,
                 }
+                attach_snapshot(req_data)
                 response = _original_requests_send(self, request, **kwargs)
                 duration = time.time() - start
 

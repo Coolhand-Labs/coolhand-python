@@ -13,6 +13,8 @@ class RequestData(TypedDict, total=False):
     headers: dict[str, str]
     body: str | bytes | dict[str, Any] | None
     timestamp: float
+    # Snapshot of the active `with_context` declaration, taken when the call was made.
+    declared: dict[str, Any]
 
 
 class ResponseData(TypedDict, total=False):

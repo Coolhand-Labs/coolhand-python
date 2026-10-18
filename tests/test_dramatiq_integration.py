@@ -314,6 +314,37 @@ class TestPydanticAiFromDramatiqThread:
         )
 
 
+class TestDeclaredContextInActors:
+    """`with_context` entered inside the actor body reaches the captured request."""
+
+    def test_declaration_inside_actor_body_is_snapshotted(
+        self, captured: list[Any], stub_broker: StubBroker
+    ) -> None:
+        from coolhand import with_context
+
+        @dramatiq.actor(broker=stub_broker)
+        @with_context(workload={"key": "Actor#run"})
+        def declared_task() -> None:
+            async def _inner() -> None:
+                async with httpx.AsyncClient(
+                    transport=FakeAnthropicTransport()
+                ) as client:
+                    await client.post(
+                        "https://api.anthropic.com/v1/messages",
+                        json={},
+                        headers={"x-api-key": "test-key"},
+                    )
+
+            asyncio.run(_inner())
+
+        declared_task.send()
+        _run_actors(stub_broker, declared_task.queue_name)
+
+        assert [req.get("declared") for req, _res, _err in captured] == [
+            {"workload": {"key": "Actor#run"}}
+        ]
+
+
 class TestActorFailureFailsFast:
     """Regression test for issue #134.
 

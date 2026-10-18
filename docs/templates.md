@@ -7,8 +7,9 @@ matched against, via `GET /api/v2/llm_request_templates` and
 Both require your **private** API key. The public key is write-only on this API and is
 rejected exactly like an invalid key.
 
-This surface is read-only. Template creation, update and deprecation stay on the MCP
-surface, and there is no version-history sub-resource.
+This page covers the reads. Creating or renaming a template by its key is `upsert`, see
+[Declared Workloads and Templates](./declared-workloads.md#explicit-upserts). Deprecation
+stays on the MCP surface, and there is no version-history sub-resource.
 
 > **This is not the `search_templates` MCP tool.** The numbers deliberately differ — see
 > [Differences from the MCP tool](#differences-from-the-mcp-tool).

@@ -250,6 +250,19 @@ These are read methods, so they **raise** `CoolhandAPIError` (carrying the HTTP 
 
 For the full filter reference, pagination, and error handling, see [Reading Templates](./docs/templates.md).
 
+## Declaring Workloads and Templates
+
+If you already know which workload and template an LLM call belongs to, declare it with `with_context` and the server skips template matching for those calls:
+
+```python
+from coolhand import with_context
+
+with with_context(workload={"key": "Parser#call"}, template={"key": "Parser#call/squish:L2"}):
+    client.chat.completions.create(...)
+```
+
+Invalid declarations raise `ValueError` before your code runs. `WorkloadService.upsert` and `TemplateService.upsert` create or rename workloads and templates explicitly (private API key). See [Declared Workloads and Templates](./docs/declared-workloads.md).
+
 ## Linking Feedback to an Optimization
 
 `link_feedback`, `bulk_link_feedback` (batches of 100) and `unlink_feedback` attach feedback to an optimization as evidence. Private API key required; errors raise `CoolhandAPIError`. See [Linking Feedback](./docs/feedback-links.md).
@@ -313,6 +326,7 @@ See [Verifying Interception in Your Tests](./docs/testing.md) for what it catche
 - [Dramatiq + pydantic-ai](./docs/dramatiq.md) — task queue integration guide, known gaps, workarounds
 - [Linking Feedback to an Optimization](./docs/feedback-links.md) — link one or many feedbacks to an optimization as evidence, using the private API key
 - [Reading Templates](./docs/templates.md) — search LLM request templates and fetch a single one, prompt patterns included, using the private API key
+- [Declared Workloads and Templates](./docs/declared-workloads.md) — declare the workload/template of captured calls with `with_context`, and create or rename them with `upsert` (private API key)
 - [Examples and live smoke tests](./examples/README.md) — runnable examples, plus `make live-examples` to validate OpenAI and Anthropic calls against real keys
 
 ## Related Packages

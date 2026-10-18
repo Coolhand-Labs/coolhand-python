@@ -261,6 +261,20 @@ def _to_iso8601(timestamp: float) -> str:
     )
 
 
+def _log_response_warnings(resp: Any) -> None:
+    """Log any `warnings` the server attached to an accepted log. Never raises."""
+    try:
+        warnings = json.loads(resp.read()).get("warnings")
+        if isinstance(warnings, list):
+            for warning in warnings:
+                # %r: a newline in server text must not forge extra log lines.
+                logger.warning("Coolhand warning: %r", warning)
+    except Exception:
+        logger.debug(
+            "Could not read warnings from the submission response", exc_info=True
+        )
+
+
 class CoolhandClient:
     """Simple client for submitting interactions to Coolhand."""
 
@@ -372,6 +386,12 @@ class CoolhandClient:
             "is_streaming": response.get("is_streaming", False) if response else False,
         }
 
+        # The declaration was snapshotted on the caller's context when the call was
+        # made. It is not part of raw_request: _send_one lifts it out to sit beside it.
+        declared = request.get("declared")
+        if declared:
+            interaction["_declared"] = declared
+
         # Debug output when not silent
         if not self.config.get("silent"):
             url = _sanitize_url(request.get("url", "unknown"))
@@ -405,12 +425,15 @@ class CoolhandClient:
             return False
 
         try:
-            payload = {
-                "llm_request_log": {
-                    "raw_request": interaction,
-                    "collector": f"coolhand-python-{__version__}-auto-monitor",
-                }
+            interaction = dict(interaction)
+            declared = interaction.pop("_declared", None)
+            llm_request_log: dict[str, Any] = {
+                "raw_request": interaction,
+                "collector": f"coolhand-python-{__version__}-auto-monitor",
             }
+            if declared:
+                llm_request_log["declared"] = declared
+            payload = {"llm_request_log": llm_request_log}
 
             request = Request(
                 url=f"{self.config['base_url']}/api/v2/llm_request_logs",
@@ -425,6 +448,10 @@ class CoolhandClient:
 
             with _opener.open(request, timeout=self.config["request_timeout"]) as resp:
                 if 200 <= resp.status < 300:
+                    if declared:
+                        # Warnings (e.g. a declaration ignored over the public-key
+                        # cap) only concern logs that carried a declaration.
+                        _log_response_warnings(resp)
                     if not self.config.get("silent"):
                         method = interaction.get("method", "unknown")
                         url = interaction.get("url", "unknown")

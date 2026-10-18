@@ -16,7 +16,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 # ---------------------------------------------------------------------------
-# structlog — configure before coolhand so basicConfig is never called
+# structlog — configure before coolhand so structlog owns the logging setup
 # ---------------------------------------------------------------------------
 import structlog
 
@@ -45,7 +45,7 @@ HTTPXClientInstrumentor().instrument()  # patches httpx before coolhand
 
 # ---------------------------------------------------------------------------
 # coolhand — imported after OTel to exercise the double-patch scenario.
-# silent=True: skip logging.basicConfig so structlog owns logging config.
+# silent=True: keep coolhand from adding its own log handler or level.
 # ---------------------------------------------------------------------------
 import coolhand
 

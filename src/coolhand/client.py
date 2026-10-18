@@ -294,11 +294,34 @@ class CoolhandClient:
         self._state_lock = threading.Lock()
 
         if not self.config.get("silent"):
-            logging.basicConfig(level=logging.INFO)
+            self._configure_coolhand_logging()
 
         # Ensure queued interactions still get a delivery attempt on normal process
         # exit, even for a bare CoolhandClient() not wrapped by the Coolhand subclass.
         atexit.register(self.shutdown)
+
+    @staticmethod
+    def _configure_coolhand_logging() -> None:
+        """Make non-silent output visible without touching the root logger.
+
+        Only the ``coolhand`` namespace is configured. A handler is attached
+        only when neither it nor the root logger has one, so an app that has
+        already set up logging sees coolhand records through its own handlers
+        instead of getting them printed twice.
+        """
+        pkg_logger = logging.getLogger("coolhand")
+        # Only raise verbosity: leave an explicit level, or a host root level
+        # already at INFO/DEBUG, alone.
+        if (
+            pkg_logger.level == logging.NOTSET
+            and pkg_logger.getEffectiveLevel() > logging.INFO
+        ):
+            pkg_logger.setLevel(logging.INFO)
+        if not pkg_logger.handlers and not logging.getLogger().handlers:
+            handler = logging.StreamHandler()
+            # Same format logging.basicConfig used, so output is unchanged.
+            handler.setFormatter(logging.Formatter(logging.BASIC_FORMAT))
+            pkg_logger.addHandler(handler)
 
     @property
     def session_id(self) -> str:

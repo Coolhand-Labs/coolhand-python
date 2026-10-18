@@ -298,6 +298,7 @@ export COOLHAND_SILENT=false
 - [Dramatiq + pydantic-ai](./docs/dramatiq.md) — task queue integration guide, known gaps, workarounds
 - [Linking Feedback to an Optimization](./docs/feedback-links.md) — link one or many feedbacks to an optimization as evidence, using the private API key
 - [Reading Templates](./docs/templates.md) — search LLM request templates and fetch a single one, prompt patterns included, using the private API key
+- [Examples and live smoke tests](./examples/README.md) — runnable examples, plus `make live-examples` to validate OpenAI and Anthropic calls against real keys
 
 ## Related Packages
 

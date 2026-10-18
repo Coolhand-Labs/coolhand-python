@@ -205,17 +205,30 @@ the same "hand it to a human" rule `/loop-review` uses for stuck findings.
    `uv run python examples/basic_usage.py`,
    `uv run python examples/auto_monitor_example.py`, and
    `uv run python examples/dramatiq_pydantic_ai.py`. Unlike a
-   clean-skip-on-missing-key pattern, these scripts always run to
-   completion — they fall back to a fake `COOLHAND_API_KEY`/provider key
-   (or a fake transport, for `dramatiq_pydantic_ai.py`) when real ones
-   aren't set, rather than exiting early. So treat a **non-zero exit** as
-   the failure signal regardless of which keys are present in the
-   environment; if a real provider key (e.g. `ANTHROPIC_API_KEY`) is set,
-   the run additionally exercises a real intercepted call instead of a
+   clean-skip-on-missing-key pattern (the live scripts below are the
+   exception), these scripts always run to completion — they fall back
+   to a fake `COOLHAND_API_KEY`/provider key (or a fake transport, for
+   `dramatiq_pydantic_ai.py`) when real ones aren't set, rather than
+   exiting early. So treat a **non-zero exit** as the failure signal
+   regardless of which keys are present in the environment; if a real
+   provider key (e.g. `ANTHROPIC_API_KEY`) is set, the run additionally
+   exercises a real intercepted call instead of a
    simulated one, which is a stronger signal but not required for a pass.
    If `COOLHAND_LIVE_BASE_URL` and `COOLHAND_LIVE_API_KEY` are set in the
    environment, also run `make test-live` against the real server.
    Record pass/fail per script (and whether it ran live or simulated).
+
+   Then run `make live-examples` — the real-key check. It runs
+   `examples/live_openai.py` and `examples/live_anthropic.py` concurrently
+   (one real provider call each through the interceptor, confirmed
+   delivered to Coolhand) and prints `PASS` / `SKIP` / `FAIL` per script,
+   exiting non-zero only on `FAIL`. It re-execs under `zsh -ic` so keys
+   exported from `~/.zshrc` are visible even from this non-interactive
+   shell (`COOLHAND_EXAMPLES_NO_ZSH=1` opts out). A `SKIP` is **not** a
+   pass: it means that provider's key (or `COOLHAND_API_KEY`) wasn't
+   visible, so list every skipped provider in the Phase 5 report as
+   unexercised. Per-script logs are in `.context/live-examples/`. See
+   `examples/README.md`.
 
 3. **`examples/band-guesser/` is explicitly in scope — run it, don't just
    note it.** It's a plain FastAPI JSON API (`POST /api/guess-bands`,
@@ -311,10 +324,12 @@ the same "hand it to a human" rule `/loop-review` uses for stuck findings.
    - Docs updated.
    - Red-team findings split into fixed vs. flagged-for-decision.
    - Phase 4's `make verify` result, the example-script results
-     (pass/fail, simulated/live per script), the `make test-live` result
-     if it ran, the `band-guesser` per-mode pass/fail, and both latency
-     checks' numbers (microbenchmark deltas and end-to-end wall-clock
-     per mode) with a call on whether either looks substantive.
+     (pass/fail, simulated/live per script), the `make live-examples`
+     PASS/SKIP/FAIL per provider (skips called out as unexercised), the
+     `make test-live` result if it ran, the `band-guesser` per-mode
+     pass/fail, and both latency checks' numbers (microbenchmark deltas
+     and end-to-end wall-clock per mode) with a call on whether either
+     looks substantive.
 
 ## Safety
 

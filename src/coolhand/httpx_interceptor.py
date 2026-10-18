@@ -513,7 +513,13 @@ def patch() -> bool:
                 is_streaming = False
                 try:
                     content_type = response.headers.get("content-type", "")
-                    is_streaming = _is_streaming_content_type(content_type)
+                    # Touching response.content on a stream=True response would
+                    # buffer the whole body and defeat the caller's streaming.
+                    # Session.send falls back to self.stream when no kwarg is given.
+                    stream_requested = kwargs.get("stream", self.stream)
+                    is_streaming = bool(stream_requested) or _is_streaming_content_type(
+                        content_type
+                    )
                     if is_streaming:
                         res_body = "[streaming]"
                     elif _is_binary_content_type(content_type):

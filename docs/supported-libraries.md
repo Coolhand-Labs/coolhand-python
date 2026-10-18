@@ -108,6 +108,7 @@ Streaming responses (SSE / `text/event-stream` and NDJSON) are captured differen
 - The patched async send wraps the response's async iterator methods (`aiter_bytes`, `aiter_lines`, `aiter_text`, `aiter_raw`) to accumulate chunks as they stream past.
 - Capture and submission happen when the iterator is exhausted — after your code has consumed the full stream.
 - The captured body is the complete concatenated stream content, with `is_streaming: true` in the logged metadata.
+- `requests` calls are the exception: with `stream=True` (passed to `send()`/`request()` or set as `Session.stream`) or an SSE/NDJSON content type, the response is recorded with the placeholder body `"[streaming]"` and `is_streaming: true`. The body is never read, so your code keeps true streaming (no buffering, no added first-byte latency), but the response content is not captured — even for plain JSON responses.
 
 ---
 

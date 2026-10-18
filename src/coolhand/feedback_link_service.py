@@ -15,10 +15,14 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import quote
 from urllib.request import Request
 
-from ._config import _DEFAULT_BASE_URL, _build_opener, _normalize_base_url
+from ._config import (
+    _DEFAULT_BASE_URL,
+    _build_opener,
+    _normalize_base_url,
+    _resolve_request_timeout,
+)
 from .template_service import (
     _MAX_ERROR_BODY_CHARS,
-    DEFAULT_TIMEOUT_SECONDS,
     CoolhandAPIError,
     _error_body,
 )
@@ -68,17 +72,18 @@ class FeedbackLinkService:
 
         Args:
             config: Configuration dictionary. `api_key` must be the **private** key.
-            **kwargs: Override config values (api_key, base_url, silent, timeout).
+            **kwargs: Override config values (api_key, base_url, silent,
+                request_timeout).
         """
         self.config: Config = {
             "api_key": os.getenv("COOLHAND_API_KEY", ""),
             "base_url": os.getenv("COOLHAND_BASE_URL") or _DEFAULT_BASE_URL,
             "silent": os.getenv("COOLHAND_SILENT", "true").lower() == "true",
-            "timeout": DEFAULT_TIMEOUT_SECONDS,
         }
         if config:
             self.config.update(config)
         self.config.update(kwargs)
+        self.config["request_timeout"] = _resolve_request_timeout(self.config)
         self.config["base_url"] = _normalize_base_url(
             self.config.get("base_url", _DEFAULT_BASE_URL)
         )
@@ -101,7 +106,7 @@ class FeedbackLinkService:
     @property
     def timeout(self) -> float:
         """Get the HTTP timeout, in seconds."""
-        return self.config.get("timeout", DEFAULT_TIMEOUT_SECONDS)
+        return self.config["request_timeout"]
 
     def link_feedback(
         self,

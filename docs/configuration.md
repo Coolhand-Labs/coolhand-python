@@ -73,6 +73,37 @@ import coolhand  # picks up COOLHAND_BASE_URL automatically
 
 ---
 
+## Request Timeout
+
+`request_timeout` is the timeout, in seconds, for every call the SDK makes to the Coolhand API: delivering captured interactions, submitting feedback, reading templates and linking feedback. It defaults to `30`. Raise it if a slow self-hosted backend (see above) trips the default:
+
+```python
+from coolhand import Coolhand
+
+coolhand_client = Coolhand(
+    api_key='your-api-key',
+    base_url='https://feedback.example.com',
+    request_timeout=60,
+)
+```
+
+`Coolhand` passes the value to its feedback, template and feedback-link services; a standalone `FeedbackService`, `TemplateService` or `FeedbackLinkService` takes the same `request_timeout=` argument.
+
+**Validation rules:**
+- Must be a finite number greater than zero, at most `2147483647` (2^31-1) seconds. Floats such as `2.5` are fine.
+- `0`, negative numbers, `NaN`, infinity, booleans and non-numbers raise `ValueError` at construction, rather than failing as an opaque network error on the first request.
+
+**Notes:**
+- This is the Python counterpart of coolhand-node's `requestTimeoutMs`. The unit is seconds here, and so fractional values are allowed.
+- The limit is applied to the connection and to each read separately, as with any socket timeout. It is not a cap on the total time of one request, so a server that trickles bytes can run past it.
+- `timeout` is the older spelling and still works; when both are set, `request_timeout` wins.
+- Earlier versions used a fixed 10 seconds for delivering interactions and submitting feedback, and 30 seconds for template and feedback-link calls. All of them now share the 30-second default.
+- coolhand-node keeps a separate, longer limit for file uploads. This SDK has no file upload path to the Coolhand API, so there is no second option.
+- A slow or unreachable backend now ties up the background delivery worker for up to `request_timeout` per interaction, so a high value lets the delivery queue back up longer before it drops items.
+- `shutdown()` still waits at most 5 seconds for in-flight deliveries, whatever `request_timeout` is, so a high value cannot hold up process exit.
+
+---
+
 ## Custom Intercept Addresses
 
 By default Coolhand captures requests to a built-in list of LLM API hosts (OpenAI, Anthropic, Gemini, etc.). To capture a custom endpoint — an internal proxy, a self-hosted model server, or a third-party gateway — pass `intercept_addresses`:

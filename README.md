@@ -73,7 +73,7 @@ coolhand_client = Coolhand(
 )
 ```
 
-For excluding noisy endpoints (health checks, batch jobs) or pointing the SDK at a self-hosted backend, see [Advanced Configuration](./docs/configuration.md).
+For excluding noisy endpoints (health checks, batch jobs), pointing the SDK at a self-hosted backend, or raising the Coolhand API request timeout (`request_timeout`, default 30 seconds), see [Advanced Configuration](./docs/configuration.md).
 
 ## Usage Examples
 

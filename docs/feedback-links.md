@@ -36,8 +36,9 @@ monitoring client.
 - If a batch fails, the call raises and earlier batches stay applied. Repeating the call
   is safe.
 - An empty list or a blank id raises `ValueError` before any request is made.
-- Each batch is a separate request bound by the client-side `timeout` (default 30 seconds;
-  pass `timeout=` to `FeedbackLinkService` to change it).
+- Each batch is a separate request bound by the client-side `request_timeout` (default 30
+  seconds; pass `request_timeout=` to `FeedbackLinkService` to change it, see
+  [Request Timeout](./configuration.md#request-timeout)).
 
 ## Errors
 

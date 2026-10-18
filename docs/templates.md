@@ -184,10 +184,11 @@ by a 10-second statement timeout and returns `504` rather than hanging. Narrow w
 
 Because the server's own budget is 10 seconds, the client-side HTTP timeout defaults to
 30 seconds — a shorter one would abort the connection just before the `504` arrived.
-Override it with `timeout` if your network is slower:
+Override it with `request_timeout` (seconds) if your network is slower; see
+[Request Timeout](./configuration.md#request-timeout):
 
 ```python
-service = TemplateService(api_key="your-private-api-key", timeout=120)
+service = TemplateService(api_key="your-private-api-key", request_timeout=120)
 ```
 
 ## Differences from the MCP tool

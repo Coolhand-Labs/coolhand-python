@@ -18,7 +18,13 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import quote, urlencode
 from urllib.request import Request
 
-from ._config import _DEFAULT_BASE_URL, _build_opener, _normalize_base_url
+from ._config import (
+    _DEFAULT_BASE_URL,
+    DEFAULT_REQUEST_TIMEOUT_SECONDS,
+    _build_opener,
+    _normalize_base_url,
+    _resolve_request_timeout,
+)
 from .types import (
     Config,
     LlmRequestTemplateDetail,
@@ -36,8 +42,9 @@ TEMPLATES_ENDPOINT = "/api/v2/llm_request_templates"
 # Every query behind these endpoints is bounded by a 10-second statement timeout
 # server-side, and answers 504 when it trips. A client timeout at or below that would
 # abort the connection just before the 504 arrived, turning a reportable server answer
-# into an opaque network error.
-DEFAULT_TIMEOUT_SECONDS = 30.0
+# into an opaque network error. Shared with the write paths; see
+# `_config.DEFAULT_REQUEST_TIMEOUT_SECONDS`.
+DEFAULT_TIMEOUT_SECONDS = DEFAULT_REQUEST_TIMEOUT_SECONDS
 
 # DEFAULT_PER_PAGE / MAX_PER_PAGE on the v2 list controller. Mirrored here only to fill
 # in pagination when a header is missing or malformed; when the headers are present —
@@ -162,17 +169,18 @@ class TemplateService:
 
         Args:
             config: Configuration dictionary. `api_key` must be the **private** key.
-            **kwargs: Override config values (api_key, base_url, silent, timeout).
+            **kwargs: Override config values (api_key, base_url, silent,
+                request_timeout).
         """
         self.config: Config = {
             "api_key": os.getenv("COOLHAND_API_KEY", ""),
             "base_url": os.getenv("COOLHAND_BASE_URL") or _DEFAULT_BASE_URL,
             "silent": os.getenv("COOLHAND_SILENT", "true").lower() == "true",
-            "timeout": DEFAULT_TIMEOUT_SECONDS,
         }
         if config:
             self.config.update(config)
         self.config.update(kwargs)
+        self.config["request_timeout"] = _resolve_request_timeout(self.config)
         self.config["base_url"] = _normalize_base_url(
             self.config.get("base_url", _DEFAULT_BASE_URL)
         )
@@ -194,8 +202,8 @@ class TemplateService:
 
     @property
     def timeout(self) -> float:
-        """Get the HTTP timeout, in seconds, used by the read methods."""
-        return self.config.get("timeout", DEFAULT_TIMEOUT_SECONDS)
+        """Get the HTTP timeout, in seconds."""
+        return self.config["request_timeout"]
 
     def search_templates(
         self,

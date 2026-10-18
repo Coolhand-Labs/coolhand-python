@@ -16,9 +16,9 @@ from urllib.request import Request
 
 from ._config import (
     _DEFAULT_BASE_URL,
-    _WRITE_TIMEOUT_SECONDS,
     _build_opener,
     _normalize_base_url,
+    _resolve_request_timeout,
 )
 from .httpx_interceptor import DEFAULT_EXCLUDE_API_PATTERNS
 from .types import Config, RequestData, ResponseData
@@ -271,6 +271,7 @@ class CoolhandClient:
         self.config["base_url"] = _normalize_base_url(
             self.config.get("base_url", _DEFAULT_BASE_URL)
         )
+        self.config["request_timeout"] = _resolve_request_timeout(self.config)
 
         self._queue: list[dict[str, Any]] = []
         self._interaction_count = 0
@@ -388,7 +389,7 @@ class CoolhandClient:
                 method="POST",
             )
 
-            with _opener.open(request, timeout=_WRITE_TIMEOUT_SECONDS) as resp:
+            with _opener.open(request, timeout=self.config["request_timeout"]) as resp:
                 if 200 <= resp.status < 300:
                     if not self.config.get("silent"):
                         method = interaction.get("method", "unknown")
@@ -632,7 +633,7 @@ class CoolhandClient:
                 #   instant.
                 # - Under-counts: qsize() stops counting an item the moment
                 #   the worker dequeues it, so while that item's POST is
-                #   actually in flight (up to _WRITE_TIMEOUT_SECONDS) it's
+                #   actually in flight (up to request_timeout) it's
                 #   reflected nowhere — polling for `pending_delivery == 0`
                 #   is not a reliable "everything is fully delivered"
                 #   signal on its own; shutdown() (which actually waits) is.

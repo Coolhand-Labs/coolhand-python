@@ -36,10 +36,16 @@ class Config(TypedDict, total=False):
     session_id: str | None
     intercept_addresses: list[str] | None
     exclude_api_patterns: list[str] | None
-    # HTTP timeout in seconds for the read methods on TemplateService and every
-    # FeedbackLinkService call. The write paths (CoolhandClient._send_one,
-    # FeedbackService._submit) keep their own fixed _config._WRITE_TIMEOUT_SECONDS and
-    # ignore this.
+    # Timeout in seconds for every call to the Coolhand API: interaction delivery,
+    # feedback submission, templates and feedback links. Defaults to 30. Must be a
+    # finite number greater than zero and at most 2**31 - 1; anything else raises
+    # ValueError at construction.
+    # Applies to the connection and to each read, not to the whole request. Mirrors
+    # coolhand-node's `requestTimeoutMs`.
+    request_timeout: float
+    # Older spelling of `request_timeout`, kept for backward compatibility. Ignored
+    # when `request_timeout` is also set. Only read as input: the services resolve it
+    # into `config["request_timeout"]` and no longer populate `config["timeout"]`.
     timeout: float
 
 

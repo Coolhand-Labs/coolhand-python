@@ -154,11 +154,13 @@ traffic and logs it to Coolhand, so hunt specifically for:
   query param slipping past the redaction list).
 - **SSRF / address matching**: `DEFAULT_INTERCEPT_ADDRESSES` in
   `src/coolhand/httpx_interceptor.py` and the deny-list in
-  `src/coolhand/default_exclude_api_patterns.json` are plain substring
-  matches, not regex (so there's no ReDoS surface here) — but that means a
-  crafted URL whose path or query string happens to contain one of these
-  substrings could be mis-captured or mis-excluded. Check whether that's
-  exploitable for the addresses/patterns currently in the lists.
+  `src/coolhand/default_exclude_api_patterns.json` are matched against the
+  parsed URL (host, port, percent-decoded path) by `_compile_entry` and its
+  hand-written glob matchers, not as substrings of the raw URL. Check those for
+  bypasses (userinfo, trailing dots, lookalike hosts, percent-encoding, port
+  normalisation, empty entries), for over-capture from entries that are too
+  broad for the addresses/patterns currently in the lists, and for
+  super-linear glob matching on long URLs.
 - **Thread safety**: `flush()` hands interactions off to a bounded
   background dispatch queue drained by a worker thread (added to fix a
   prior event-loop-stall bug) — look for unsynchronized shared mutable

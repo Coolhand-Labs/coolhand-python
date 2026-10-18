@@ -17,7 +17,7 @@ coolhand_client = Coolhand(
 )
 ```
 
-Any request whose URL contains one of the listed substrings is passed through without logging. The default list (`DEFAULT_EXCLUDE_API_PATTERNS`) excludes non-inference management endpoints for Vertex AI, Azure OpenAI and Cohere, such as `/batchPredictionJobs/`, `/openai/fine_tuning` and `api.cohere.com/v1/embed-jobs` (which would otherwise match the Cohere `/v1/embed` allow-list entry); setting `exclude_api_patterns` **replaces** the default entirely.
+Any request whose URL matches one of the listed patterns is passed through without logging. Patterns use the [entry syntax](#entry-syntax) below; a bare `/path` fragment is matched against the URL path only, never the query string. The default list (`DEFAULT_EXCLUDE_API_PATTERNS`) excludes non-inference management endpoints for Vertex AI, Azure OpenAI and Cohere, such as `/batchPredictionJobs/`, `/openai/fine_tuning` and `api.cohere.com/v1/embed-jobs` (which would otherwise match the Cohere `/v1/embed` allow-list entry); setting `exclude_api_patterns` **replaces** the default entirely.
 
 `exclude_api_patterns` and `intercept_addresses` must be lists of strings; anything else logs a warning when `Coolhand(...)` is constructed. If matching still fails at request time (for example a non-string entry), the request is not captured — it is treated as excluded for `exclude_api_patterns` and as not matching for `intercept_addresses`. Fix the list to restore capture.
 
@@ -136,4 +136,21 @@ Passing an empty list disables capture entirely — it does **not** fall back to
 Coolhand(api_key='your-api-key', intercept_addresses=[])  # captures nothing
 ```
 
-Omit `intercept_addresses` altogether to get the built-in list. Entries are matched as plain substrings against the full request URL, so a path fragment such as `'my-host.example.com/v1/chat'` works as well as a bare hostname.
+Omit `intercept_addresses` altogether to get the built-in list.
+
+### Entry syntax
+
+`intercept_addresses` and `exclude_api_patterns` entries are matched against the *parsed* URL (host, port and path), not the raw string, so query text, userinfo (`https://api.openai.com@evil.com`) and lookalike hosts (`api.openai.com.evil.com`) cannot match. A leading `https://` or `//` on an entry is ignored. Hosts are case-insensitive, paths are case-sensitive and percent-decoded before matching, and an explicit default port (`:443` on `https`) matches the implied one. Entries cannot carry a query string (they would never match).
+
+| Entry | Matches |
+|---|---|
+| `my-llm-proxy.internal` | that host and its subdomains |
+| `my-host.example.com/v1/chat` | that host, with a path starting `/v1/chat` |
+| `my-host.example.com:8443` | that host on that port |
+| `:11434/api/chat` | any host on port 11434, path starting `/api/chat` |
+| `/v1/inference` | any host, path containing `/v1/inference` |
+| `googleapis.com/*:predict` | `*` is a glob; a globbed path must match the whole path |
+| `bedrock-runtime.*.amazonaws.com` | `*` in a host matches one label (never a `.`); a globbed host is exact, with no implicit subdomains |
+| `[2001:db8::1]:11434` | IPv6 hosts need brackets |
+
+**Migration:** earlier versions matched entries as plain substrings of the full URL, and skipped any URL whose authority merely *contained* `localhost`. Loopback is now decided from the parsed host alone, so `localhost.example.com` or `user:localhost@host` are no longer skipped, while all of `127.0.0.0/8` and `*.localhost` now are. Entries that are a host, `host/path`, or a `/path` fragment keep working. An arbitrary fragment from the middle of a URL (for example `'openai'`, or a host-less `':predict'`) no longer matches; rewrite it with one of the forms above. The built-in Vertex AI / Gemini `:generateContent`, `:predict` etc. entries are now restricted to `googleapis.com` hosts (Vertex dedicated endpoints on `prediction.vertexai.goog` are matched by host; a custom domain or proxy in front of Vertex needs its own entry), and the Bedrock entries are listed by host (`bedrock-runtime.*.amazonaws.com`, `.amazonaws.com.cn`, `.api.aws`, plus FIPS variants).

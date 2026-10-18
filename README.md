@@ -273,6 +273,20 @@ Or via environment variable:
 export COOLHAND_SILENT=false
 ```
 
+### Verify Interception in Your Tests
+
+A client that captured a reference to `httpx.Client.send` or `requests.Session.send` before `import coolhand` is silently not monitored. Catch it in your own tests:
+
+```python
+from coolhand.testing import assert_interception_occurred, capture_interception_snapshot
+
+before = capture_interception_snapshot()
+client.chat.completions.create(...)
+assert_interception_occurred(before, "openai client bypassed Coolhand")
+```
+
+See [Verifying Interception in Your Tests](./docs/testing.md) for what it catches and its limits.
+
 ## API Key
 
 **Sign up for free** at [coolhandlabs.com](https://coolhandlabs.com/) to get your API key and start monitoring your LLM usage.
@@ -295,6 +309,7 @@ export COOLHAND_SILENT=false
 - [Advanced Configuration](./docs/configuration.md) — exclude patterns, self-hosted deployments, custom intercept addresses
 - [Feedback API](./docs/feedback.md) — full field reference, matching strategies, sentiment values, async usage
 - [Supported Libraries](./docs/supported-libraries.md) — interception mechanisms, streaming, thread/process safety, delivery model
+- [Verifying Interception in Your Tests](./docs/testing.md) — assert in your own tests/CI that a request was actually intercepted
 - [Dramatiq + pydantic-ai](./docs/dramatiq.md) — task queue integration guide, known gaps, workarounds
 - [Linking Feedback to an Optimization](./docs/feedback-links.md) — link one or many feedbacks to an optimization as evidence, using the private API key
 - [Reading Templates](./docs/templates.md) — search LLM request templates and fetch a single one, prompt patterns included, using the private API key

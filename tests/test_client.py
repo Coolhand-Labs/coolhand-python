@@ -1,5 +1,8 @@
 """Tests for coolhand.client module."""
 
+import contextlib
+import json
+import logging
 import threading
 
 import pytest
@@ -10,6 +13,7 @@ from coolhand.client import (
     _get_default_config,
     _mask_value,
     _parse_body,
+    _sanitize_body,
     _sanitize_headers,
     _sanitize_url,
     _to_iso8601,
@@ -49,6 +53,18 @@ class TestSanitizeHeaders:
         result = _sanitize_headers(headers)
         assert result["Authorization"] != "Bearer sk-secret-key-12345678"
         assert "****" in result["Authorization"]
+
+    def test_masks_azure_subscription_key_header(self):
+        """Azure AI Services' Ocp-Apim-Subscription-Key is masked.
+
+        "api-key" is not a substring of "ocp-apim-subscription-key", so this
+        needs its own entry rather than riding on the generic one.
+        """
+        secret = "abcd1234567890secret"
+        for header in ("Ocp-Apim-Subscription-Key", "subscription-key"):
+            result = _sanitize_headers({header: secret})
+            assert result[header] != secret
+            assert "****" in result[header]
 
     def test_masks_api_key_header(self):
         """API key headers are masked."""
@@ -133,12 +149,24 @@ class TestSanitizeUrl:
         """Empty string returns empty string."""
         assert _sanitize_url("") == ""
 
-    def test_params_are_case_sensitive(self):
-        """Query params are case-sensitive per URL spec."""
+    def test_redacts_differently_cased_param(self):
+        """Query param matching is case-insensitive, like header matching.
+
+        Query param names have no fixed casing convention the way HTTP
+        header names do, so a caller sending ?API_KEY=... instead of
+        ?api_key=... must not bypass redaction.
+        """
         url = "https://api.example.com/v1?KEY=value123"
         result = _sanitize_url(url)
-        # "KEY" != "key", so it should NOT be redacted
-        assert "value123" in result
+        assert "value123" not in result
+        assert "KEY=%5BREDACTED%5D" in result
+
+    def test_redacts_mixed_case_param_preserving_original_key(self):
+        """The original mixed-case param name is preserved, only the value redacted."""
+        url = "https://api.example.com/v1?Api_Key=value123"
+        result = _sanitize_url(url)
+        assert "value123" not in result
+        assert "Api_Key=%5BREDACTED%5D" in result
 
     def test_fails_closed_on_internal_error(self):
         """If redaction breaks internally, the query string is dropped, not leaked."""
@@ -149,6 +177,204 @@ class TestSanitizeUrl:
             result = _sanitize_url(url)
         assert "secret123" not in result
         assert result == "https://api.example.com/v1"
+
+
+class TestSanitizeRedTeamGaps:
+    """Redaction gaps found in the v0.7.2 whole-package review."""
+
+    @pytest.mark.parametrize(
+        "header",
+        [
+            "apikey",
+            "api_key",
+            "X-Auth-Token",
+            "X-Api-Token",
+            "X-Access-Token",
+            "x-functions-key",
+            "X-Amz-Credential",
+        ],
+    )
+    def test_masks_additional_credential_headers(self, header):
+        secret = "abcd1234567890secret"
+        assert _sanitize_headers({header: secret})[header] != secret
+
+    def test_does_not_mask_ratelimit_token_headers(self):
+        """Bare "token" is not a header marker: rate-limit telemetry stays readable."""
+        headers = {"x-ratelimit-remaining-tokens": "39999"}
+        assert _sanitize_headers(headers) == headers
+
+    @pytest.mark.parametrize(
+        "param",
+        [
+            "sig",
+            "Signature",
+            "X-Amz-Signature",
+            "X-Amz-Credential",
+            "api-key",
+            "client_secret",
+            "refresh_token",
+            "id_token",
+            "password",
+        ],
+    )
+    def test_redacts_additional_query_params(self, param):
+        result = _sanitize_url(
+            f"https://api.openai.com/v1/x?{param}=SECRETVALUE&keep=1"
+        )
+        assert "SECRETVALUE" not in result
+        assert "keep=1" in result
+
+    def test_strips_userinfo_with_query(self):
+        result = _sanitize_url("https://user:hunter2@api.openai.com/v1/x?a=1")
+        assert "hunter2" not in result
+        assert "user" not in result
+        assert result == "https://api.openai.com/v1/x?a=1"
+
+    def test_strips_userinfo_without_query(self):
+        assert (
+            _sanitize_url("https://user:hunter2@api.openai.com:443/v1/x")
+            == "https://api.openai.com:443/v1/x"
+        )
+
+    def test_url_without_userinfo_or_secrets_unchanged(self):
+        url = "https://api.openai.com/v1/x?a=1"
+        assert _sanitize_url(url) == url
+
+
+class TestSanitizeBody:
+    """Tests for _sanitize_body — Azure OpenAI "On Your Data" credentials."""
+
+    def test_redacts_data_source_authentication_key(self):
+        """The Azure AI Search key in data_sources is redacted."""
+        body = {
+            "messages": [{"role": "user", "content": "hi"}],
+            "data_sources": [
+                {
+                    "type": "azure_search",
+                    "parameters": {
+                        "endpoint": "https://x.search.windows.net",
+                        "index_name": "idx",
+                        "authentication": {
+                            "type": "api_key",
+                            "key": "super-secret-search-key",
+                        },
+                    },
+                }
+            ],
+        }
+        result = _sanitize_body(body)
+
+        auth = result["data_sources"][0]["parameters"]["authentication"]
+        assert auth["key"] == "[REDACTED]"
+        assert "super-secret-search-key" not in json.dumps(result)
+        # Non-secret config and message content survive intact.
+        assert result["data_sources"][0]["parameters"]["index_name"] == "idx"
+        assert result["messages"] == [{"role": "user", "content": "hi"}]
+
+    def test_redacts_legacy_data_sources_and_embedding_key(self):
+        """The legacy camelCase /extensions shape is redacted too."""
+        body = {
+            "dataSources": [
+                {
+                    "type": "AzureCognitiveSearch",
+                    "parameters": {
+                        "endpoint": "https://x.search.windows.net",
+                        "key": "legacy-admin-key",
+                        "embeddingKey": "legacy-embedding-key",
+                    },
+                }
+            ]
+        }
+        result = _sanitize_body(body)
+
+        params = result["dataSources"][0]["parameters"]
+        assert params["key"] == "[REDACTED]"
+        assert params["embeddingKey"] == "[REDACTED]"
+        assert params["endpoint"] == "https://x.search.windows.net"
+
+    def test_redacts_embedding_dependency_credentials(self):
+        """Nested embedding_dependency credentials are reached by the recursion."""
+        body = {
+            "data_sources": [
+                {
+                    "parameters": {
+                        "embedding_dependency": {
+                            "type": "endpoint",
+                            "authentication": {"key": "embedding-secret"},
+                        },
+                        "authentication": {"connection_string": "conn-secret"},
+                    }
+                }
+            ]
+        }
+        result = _sanitize_body(body)
+
+        assert "embedding-secret" not in json.dumps(result)
+        assert "conn-secret" not in json.dumps(result)
+
+    def test_leaves_ordinary_bodies_untouched(self):
+        """A body with no data-source config is returned unchanged."""
+        body = {
+            "model": "gpt-4o",
+            "messages": [{"role": "user", "content": "what is my api key?"}],
+            "tools": [{"function": {"parameters": {"properties": {"key": {}}}}}],
+        }
+        assert _sanitize_body(body) is body
+
+    def test_non_dict_bodies_pass_through(self):
+        """Strings and None are not dicts and pass through unchanged."""
+        assert _sanitize_body("plain text") == "plain text"
+        assert _sanitize_body(None) is None
+
+    def test_redacts_elasticsearch_encoded_api_key(self):
+        """Key names are matched as substrings, so new auth shapes are covered."""
+        body = {
+            "data_sources": [
+                {
+                    "type": "elasticsearch",
+                    "parameters": {
+                        "authentication": {
+                            "type": "encoded_api_key",
+                            "encoded_api_key": "super-secret-es-key",
+                        }
+                    },
+                }
+            ]
+        }
+        result = _sanitize_body(body)
+
+        assert "super-secret-es-key" not in json.dumps(result)
+
+    def test_redacts_camelcase_connection_string(self):
+        """Separator-insensitive matching covers the legacy camelCase spelling."""
+        body = {
+            "dataSources": [
+                {
+                    "type": "AzureCosmosDB",
+                    "parameters": {
+                        "connectionString": (
+                            "AccountEndpoint=https://x;AccountKey=super-secret;"
+                        ),
+                        "databaseName": "db",
+                    },
+                }
+            ]
+        }
+        result = _sanitize_body(body)
+
+        params = result["dataSources"][0]["parameters"]
+        assert params["connectionString"] == "[REDACTED]"
+        assert "super-secret" not in json.dumps(result)
+        assert params["databaseName"] == "db"
+
+    def test_fails_closed_when_redaction_raises(self):
+        """If redaction breaks, drop the config rather than forward a secret."""
+        # A non-string key makes the recursive walk raise on ``k.lower()``.
+        body = {"data_sources": {1: "super-secret"}}
+        result = _sanitize_body(body)
+
+        assert result["data_sources"] == "[REDACTED]"
+        assert "super-secret" not in json.dumps(result)
 
 
 class TestParseBody:
@@ -286,6 +512,38 @@ class TestCoolhandClient:
         assert "duration_ms" in interaction
         assert "completed_at" in interaction
         assert "is_streaming" in interaction
+
+    def test_log_interaction_redacts_data_source_credentials(
+        self, mock_response_data, reset_global_instance
+    ):
+        """log_interaction routes bodies through _sanitize_body, not just parsing."""
+        client = CoolhandClient(auto_submit=False)
+        request = {
+            "method": "POST",
+            "url": "https://my-resource.openai.azure.com/openai/v1/chat/completions",
+            "headers": {},
+            "body": json.dumps(
+                {
+                    "messages": [{"role": "user", "content": "hi"}],
+                    "data_sources": [
+                        {
+                            "parameters": {
+                                "authentication": {"key": "super-secret-search-key"}
+                            }
+                        }
+                    ],
+                }
+            ),
+            "timestamp": 1700000000.0,
+        }
+        client.log_interaction(request, mock_response_data)
+
+        interaction = client._queue[0]
+        assert "super-secret-search-key" not in json.dumps(interaction)
+        auth = interaction["request_body"]["data_sources"][0]["parameters"][
+            "authentication"
+        ]
+        assert auth["key"] == "[REDACTED]"
 
     def test_log_interaction_generates_uuid(
         self, mock_request_data, mock_response_data, reset_global_instance
@@ -456,6 +714,116 @@ class TestLogInteractionEdgeCases:
 
         assert "Captured:" in caplog.text
         assert "POST" in caplog.text or "post" in caplog.text
+
+
+@contextlib.contextmanager
+def _root_handlers(*handlers):
+    """Temporarily replace the root logger's handlers (pytest's logging plugin
+    keeps its own capture handlers there, so root is never empty by default)."""
+    root = logging.getLogger()
+    saved = root.handlers[:]
+    root.handlers = list(handlers)
+    try:
+        yield root
+    finally:
+        root.handlers = saved
+
+
+class TestLoggingConfiguration:
+    """A non-silent client may configure only the ``coolhand`` logger, never
+    the host application's root logger."""
+
+    @pytest.fixture
+    def pkg_logger(self):
+        # The autouse restore_coolhand_logger fixture undoes these changes.
+        pkg = logging.getLogger("coolhand")
+        root = logging.getLogger()
+        root_level = root.level
+        pkg.handlers = []
+        pkg.setLevel(logging.NOTSET)
+        root.setLevel(logging.WARNING)
+        yield pkg
+        root.setLevel(root_level)
+
+    def test_non_silent_client_leaves_root_logger_unchanged(
+        self, pkg_logger, reset_global_instance
+    ):
+        # basicConfig is a no-op unless root is unconfigured, so clear it.
+        with _root_handlers() as root:
+            CoolhandClient(auto_submit=False, silent=False)
+
+            assert root.handlers == []
+            assert root.level == logging.WARNING
+
+    def test_non_silent_client_attaches_single_handler_to_coolhand_logger(
+        self, pkg_logger, reset_global_instance
+    ):
+        with _root_handlers():
+            CoolhandClient(auto_submit=False, silent=False)
+            CoolhandClient(auto_submit=False, silent=False)
+
+        assert len(pkg_logger.handlers) == 1
+        assert pkg_logger.level == logging.INFO
+
+    def test_non_silent_output_keeps_basicconfig_format(
+        self,
+        pkg_logger,
+        reset_global_instance,
+        mock_request_data,
+        mock_response_data,
+        capsys,
+    ):
+        with _root_handlers():
+            client = CoolhandClient(auto_submit=False, silent=False)
+            client.log_interaction(mock_request_data, mock_response_data)
+
+        assert "INFO:coolhand.client:Captured:" in capsys.readouterr().err
+
+    def test_existing_root_handler_means_no_coolhand_handler(
+        self, pkg_logger, reset_global_instance
+    ):
+        pkg_logger.setLevel(logging.WARNING)
+
+        with _root_handlers(logging.NullHandler()):
+            CoolhandClient(auto_submit=False, silent=False)
+
+        assert pkg_logger.handlers == []
+        assert pkg_logger.level == logging.WARNING
+
+    def test_host_debug_root_level_is_not_raised_to_info(
+        self, pkg_logger, reset_global_instance
+    ):
+        logging.getLogger().setLevel(logging.DEBUG)
+
+        with _root_handlers(logging.NullHandler()):
+            CoolhandClient(auto_submit=False, silent=False)
+
+        assert pkg_logger.level == logging.NOTSET
+        assert pkg_logger.getEffectiveLevel() == logging.DEBUG
+
+    def test_existing_coolhand_handler_is_not_duplicated(
+        self, pkg_logger, reset_global_instance
+    ):
+        own_handler = logging.NullHandler()
+        pkg_logger.addHandler(own_handler)
+        pkg_logger.setLevel(logging.DEBUG)
+
+        with _root_handlers():
+            CoolhandClient(auto_submit=False, silent=False)
+
+        assert pkg_logger.handlers == [own_handler]
+        assert pkg_logger.level == logging.DEBUG
+
+    def test_silent_client_does_not_configure_any_logger(
+        self, pkg_logger, reset_global_instance
+    ):
+        with _root_handlers() as root:
+            CoolhandClient(auto_submit=False, silent=True)
+
+            assert root.handlers == []
+            assert root.level == logging.WARNING
+        assert pkg_logger.handlers == []
+        assert pkg_logger.level == logging.NOTSET
 
 
 class TestSendOne:
@@ -1721,3 +2089,23 @@ class TestBaseUrlConfig:
         call_args = mock_open.call_args
         request = call_args[0][0]
         assert "self-hosted.example.com" in request.full_url
+
+
+class TestApiKeyWhitespace:
+    def test_send_one_strips_trailing_newline_from_key(
+        self, reset_global_instance, mock_urlopen
+    ):
+        """A key loaded with a trailing newline must not reach the header raw:
+        http.client would reject it and the error message would contain the key."""
+        client = CoolhandClient(auto_submit=False, api_key="real-api-key-12345\n")
+        interaction = {
+            "id": "test-id",
+            "method": "post",
+            "url": "https://api.openai.com/v1/chat",
+            "timestamp": "2024-01-01T00:00:00Z",
+        }
+
+        assert client._send_one(interaction) is True
+        request = mock_urlopen.call_args[0][0]
+        headers = {k.lower(): v for k, v in request.header_items()}
+        assert headers["x-api-key"] == "real-api-key-12345"

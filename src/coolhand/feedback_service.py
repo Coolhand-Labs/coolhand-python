@@ -11,9 +11,9 @@ from urllib.request import Request
 
 from ._config import (
     _DEFAULT_BASE_URL,
-    _WRITE_TIMEOUT_SECONDS,
     _build_opener,
     _normalize_base_url,
+    _resolve_request_timeout,
 )
 from .types import Config, FeedbackData, FeedbackResponse
 from .version import __version__
@@ -50,7 +50,7 @@ class FeedbackService:
 
         Args:
             config: Configuration dictionary with api_key and optional settings.
-            **kwargs: Override config values (api_key, silent).
+            **kwargs: Override config values (api_key, silent, request_timeout).
         """
         self.config: Config = {
             "api_key": os.getenv("COOLHAND_API_KEY", ""),
@@ -63,16 +63,22 @@ class FeedbackService:
         self.config["base_url"] = _normalize_base_url(
             self.config.get("base_url", _DEFAULT_BASE_URL)
         )
+        self.config["request_timeout"] = _resolve_request_timeout(self.config)
 
     @property
     def api_key(self) -> str:
         """Get the configured API key."""
-        return self.config.get("api_key", "")
+        return (self.config.get("api_key") or "").strip()
 
     @property
     def silent(self) -> bool:
         """Check if silent mode is enabled."""
         return self.config.get("silent", True)
+
+    @property
+    def request_timeout(self) -> float:
+        """Get the HTTP timeout, in seconds."""
+        return self.config["request_timeout"]
 
     def _get_collector_string(self) -> str:
         """Get the collector identifier string."""
@@ -231,7 +237,7 @@ class FeedbackService:
                 method="POST",
             )
 
-            with _opener.open(request, timeout=_WRITE_TIMEOUT_SECONDS) as resp:
+            with _opener.open(request, timeout=self.request_timeout) as resp:
                 if 200 <= resp.status < 300:
                     body = resp.read()
                     # A 2xx with no body (e.g. 204) has nothing to parse —
@@ -260,7 +266,9 @@ class FeedbackService:
             logger.warning(f"Feedback API returned an unparsable response: {e}")
             return None
         except Exception as e:
-            logger.warning(f"Unexpected error submitting feedback: {e}")
+            # Type only: the message of a malformed-header ValueError embeds the
+            # offending value, which can be the API key.
+            logger.warning("Unexpected error submitting feedback: %s", type(e).__name__)
             return None
 
     def _log_feedback_info(self, feedback: FeedbackData) -> None:

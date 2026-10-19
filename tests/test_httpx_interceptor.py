@@ -1,5 +1,6 @@
 """Tests for coolhand.httpx_interceptor module."""
 
+import logging
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -13,6 +14,7 @@ from coolhand.httpx_interceptor import (
     _is_localhost,
     _is_streaming_content_type,
     _read_response_body,
+    _should_capture_url,
     is_patched,
     set_exclude_api_patterns,
     set_handler,
@@ -70,6 +72,104 @@ class TestIsLlmApi:
             _is_llm_api("https://models.inference.ai.azure.com/chat/completions")
             is True
         )
+
+    def test_azure_openai_openai_azure_com(self):
+        """Detects Azure OpenAI resource on openai.azure.com."""
+        url = (
+            "https://my-resource.openai.azure.com/openai/deployments/gpt-4"
+            "/chat/completions?api-version=2024-02-15-preview"
+        )
+        assert _is_llm_api(url) is True
+
+    def test_azure_openai_cognitiveservices_azure_com(self):
+        """Detects Azure OpenAI resource on cognitiveservices.azure.com."""
+        url = (
+            "https://my-resource.cognitiveservices.azure.com/openai/deployments/gpt-4"
+            "/chat/completions?api-version=2024-02-15-preview"
+        )
+        assert _is_llm_api(url) is True
+
+    def test_azure_cognitiveservices_non_openai_not_matched(self):
+        """Non-OpenAI Cognitive Services traffic on the same host is not captured."""
+        url = "https://my-resource.cognitiveservices.azure.com/speechtotext/v3.1/transcriptions"
+        assert _is_llm_api(url) is False
+
+    def test_azure_openai_v1_api_path(self):
+        """Detects the Azure OpenAI v1 API path, not just /openai/deployments."""
+        url = (
+            "https://my-resource.cognitiveservices.azure.com/openai/v1/responses"
+            "?api-version=preview"
+        )
+        assert _is_llm_api(url) is True
+
+    def test_azure_foundry_model_inference(self):
+        """Detects the Foundry model inference API on services.ai.azure.com."""
+        url = (
+            "https://my-resource.services.ai.azure.com/models/chat/completions"
+            "?api-version=2024-05-01-preview"
+        )
+        assert _is_llm_api(url) is True
+
+    def test_azure_model_inference_on_cognitiveservices_host(self):
+        """An AI Services resource is reachable on its cognitiveservices FQDN too."""
+        url = (
+            "https://my-resource.cognitiveservices.azure.com/models/chat/completions"
+            "?api-version=2024-05-01-preview"
+        )
+        assert _is_llm_api(url) is True
+
+    def test_azure_foundry_openai_deployment(self):
+        """Detects Azure OpenAI deployments hosted on a Foundry resource."""
+        url = (
+            "https://my-resource.services.ai.azure.com/openai/deployments/gpt-4o"
+            "/chat/completions?api-version=2024-02-15-preview"
+        )
+        assert _is_llm_api(url) is True
+
+    def test_azure_serverless_inference_endpoint(self):
+        """Detects serverless (MaaS) deployments on inference.ai.azure.com."""
+        url = (
+            "https://mistral-large-abcde.eastus2.inference.ai.azure.com"
+            "/v1/chat/completions"
+        )
+        assert _is_llm_api(url) is True
+
+    def test_azure_serverless_models_endpoint(self):
+        """Detects serverless API deployments on models.ai.azure.com."""
+        url = "https://my-deployment.eastus2.models.ai.azure.com/chat/completions"
+        assert _is_llm_api(url) is True
+
+    def test_azure_ml_managed_online_endpoint(self):
+        """Detects Azure ML managed online endpoints on inference.ml.azure.com."""
+        url = "https://my-endpoint.eastus2.inference.ml.azure.com/score"
+        assert _is_llm_api(url) is True
+
+    def test_azure_openai_us_government_cloud(self):
+        """Detects Azure OpenAI in the US Government cloud (.azure.us)."""
+        url = "https://my-resource.openai.azure.us/openai/v1/chat/completions"
+        assert _is_llm_api(url) is True
+
+    def test_azure_openai_china_cloud(self):
+        """Detects Azure OpenAI in the China / 21Vianet cloud (.azure.cn)."""
+        url = "https://my-resource.openai.azure.cn/openai/v1/chat/completions"
+        assert _is_llm_api(url) is True
+
+    def test_azure_foundry_non_inference_not_matched(self):
+        """Non-inference Foundry traffic on the shared host is not captured."""
+        assert (
+            _is_llm_api("https://my-resource.services.ai.azure.com/speech/recognize")
+            is False
+        )
+        assert (
+            _is_llm_api(
+                "https://my-resource.services.ai.azure.com/contentsafety/text:analyze"
+            )
+            is False
+        )
+
+    def test_azure_foundry_portal_not_matched(self):
+        """The Foundry portal domain itself is not captured."""
+        assert _is_llm_api("https://ai.azure.com/build/overview") is False
 
     def test_non_llm_api(self):
         """Rejects non-LLM API URLs."""
@@ -182,14 +282,366 @@ class TestIsLlmApi:
         url = "https://opencode.ai/zen/v1/chat/completions"
         assert _is_llm_api(url) is True
 
+    @pytest.mark.parametrize(
+        "url",
+        [
+            "https://api.deepseek.com/chat/completions",
+            "https://api.mistral.ai/v1/chat/completions",
+            "https://api.perplexity.ai/chat/completions",
+            "https://api.x.ai/v1/chat/completions",
+        ],
+    )
+    def test_openai_compatible_providers(self, url):
+        """Detects DeepSeek, Mistral, Perplexity and xAI."""
+        assert _should_capture_url(url) is True
+
+    @pytest.mark.parametrize(
+        "url",
+        [
+            "https://api.cohere.com/v2/chat",
+            "https://api.cohere.ai/v2/chat",
+            "https://api.cohere.com/v1/embed",
+            "https://api.cohere.ai/v1/embed",
+            "https://api.cohere.com/v2/embed",
+            "https://api.cohere.ai/v2/embed",
+        ],
+    )
+    def test_cohere_supported_paths(self, url):
+        """Detects the Cohere endpoints the server ingests."""
+        assert _should_capture_url(url) is True
+
+    @pytest.mark.parametrize(
+        "url",
+        [
+            "https://api.cohere.com/v1/chat",
+            "https://api.cohere.ai/v1/chat",
+            "https://api.cohere.com/v2/rerank",
+            "https://api.cohere.com/v1/tokenize",
+            "https://api.cohere.com/v1/classify",
+            "https://api.cohere.com/v1/embed-jobs",
+            "https://api.cohere.ai/v1/embed-jobs",
+            "https://api.cohere.com/",
+        ],
+    )
+    def test_cohere_unsupported_paths_not_captured(self, url):
+        """Cohere is path-scoped, not host-wide."""
+        assert _should_capture_url(url) is False
+
+    def test_typesafe_jev(self):
+        """Detects TypeSafe Jev (System One)."""
+        assert _should_capture_url("https://api.typesafe.ai/v1/systemone") is True
+
+    def test_typesafe_other_paths_not_captured(self):
+        """TypeSafe is path-scoped to /v1/systemone."""
+        assert _should_capture_url("https://api.typesafe.ai/v1/models") is False
+        assert _should_capture_url("https://api.typesafe.ai/") is False
+
+    @pytest.mark.parametrize(
+        "url",
+        [
+            "https://bedrock-runtime.us-east-1.amazonaws.com/model/foo/converse",
+            "https://bedrock-runtime.eu-west-2.amazonaws.com/model/foo/invoke",
+            "https://bedrock-runtime-fips.us-gov-west-1.amazonaws.com/model/foo/converse",
+        ],
+    )
+    def test_bedrock_runtime(self, url):
+        """Detects Bedrock runtime hosts in any region."""
+        assert _should_capture_url(url) is True
+
+    def test_bedrock_other_services_not_captured(self):
+        """Bedrock control-plane and agent hosts are not the runtime host."""
+        assert (
+            _should_capture_url(
+                "https://bedrock.us-east-1.amazonaws.com/foundation-models"
+            )
+            is False
+        )
+        assert (
+            _should_capture_url(
+                "https://bedrock-agent-runtime.us-east-1.amazonaws.com/agents"
+            )
+            is False
+        )
+
+    @pytest.mark.parametrize(
+        "path", ["/api/chat", "/api/generate", "/api/embed", "/api/embeddings"]
+    )
+    def test_ollama_on_default_port(self, path):
+        """Detects Ollama paths on its default port for non-localhost hosts."""
+        assert _should_capture_url("http://ollama:11434" + path) is True
+        assert _should_capture_url("http://gpu-box.lan:11434" + path) is True
+
+    def test_ollama_path_without_port_not_captured(self):
+        """A bare /api/chat on an unrelated host is never captured."""
+        assert _should_capture_url("https://example.com/api/chat") is False
+        assert _should_capture_url("https://app.internal:8080/api/generate") is False
+        assert _should_capture_url("https://example.com/api/embed") is False
+
+    def test_ollama_other_paths_on_default_port_not_captured(self):
+        """Only the four inference paths match, not the rest of Ollama's API."""
+        assert _should_capture_url("http://ollama:11434/api/tags") is False
+        assert _should_capture_url("http://ollama:11434/api/pull") is False
+
+    def test_ollama_localhost_still_skipped(self):
+        """Bare localhost stays uncaptured; the localhost guard is unchanged."""
+        assert _should_capture_url("http://localhost:11434/api/chat") is False
+
     def test_all_default_addresses(self):
         """All default intercept addresses are detected."""
         for addr in DEFAULT_INTERCEPT_ADDRESSES:
             if addr.startswith(":"):
-                url = "https://example.googleapis.com/v1/models/gemini" + addr
+                url = "http://ollama" + addr
+            elif "/" in addr:
+                # host/path entries; "*" stands in for a label or a path segment
+                url = "https://" + addr.replace("*", "x")
             else:
-                url = "https://" + addr + "/v1/test"
+                url = "https://" + addr.replace("*", "x") + "/v1/test"
             assert _is_llm_api(url) is True, f"Failed for {addr}"
+
+
+class TestUrlAnchoring:
+    """Issue #172: matching is anchored to host, port and path, not the raw URL."""
+
+    @pytest.mark.parametrize(
+        "url",
+        [
+            "https://tf-serving.internal/v1/models/foo:predict",
+            "https://tf-serving.internal/v1/models/foo:generateContent",
+            "https://example.com/redirect?to=https://api.openai.com",
+            "https://example.com/v1?host=api.anthropic.com",
+            "https://api.openai.com@evil.com/v1/chat/completions",
+            "https://api.openai.com.evil.com/v1/chat/completions",
+            "https://notopencode.ai/zen/v1/chat/completions",
+            "https://evil.com/bedrock-runtime.us-east-1.amazonaws.com",
+            "https://evil.com/api/chat?x=:11434/api/chat",
+            "https://example.com/openai.azure.com",
+            "https://bedrock-runtime.evil.s3.amazonaws.com/x",
+            "https://bedrock-runtime.us-east-1.evil.com/x",
+        ],
+    )
+    def test_not_captured(self, url):
+        assert _should_capture_url(url) is False
+
+    @pytest.mark.parametrize(
+        "url",
+        [
+            "https://generativelanguage.googleapis.com/v1beta/models/g:generateContent",
+            "https://us-central1-aiplatform.googleapis.com/v1/x/endpoints/1:predict",
+            "https://aiplatform.googleapis.com/v1/x/models/g:streamGenerateContent?alt=sse",
+            "https://aiplatform-psc.p.googleapis.com/v1/x/endpoints/1:streamRawPredict",
+            "https://bedrock-runtime.us-east-1.amazonaws.com/model/m/converse",
+            "https://bedrock-runtime.cn-north-1.amazonaws.com.cn/model/m/converse",
+            "https://bedrock-runtime-fips.us-gov-west-1.amazonaws.com/model/m/converse",
+            "https://bedrock-runtime.us-east-1.api.aws/model/m/converse",
+            "https://aiplatform.mtls.googleapis.com/v1/x/endpoints/1:predict",
+            "https://1234.us-central1-567.prediction.vertexai.goog/v1/p/endpoints/1:predict",
+            "wss://api.openai.com/v1/realtime",
+            "https://API.OpenAI.com./v1/chat/completions",
+            "https://my-res.services.ai.azure.com/openai/deployments/d",
+            "https://api.cohere.com/v2/chat",
+            "http://gpu-box.lan:11434/api/chat",
+        ],
+    )
+    def test_captured(self, url):
+        assert _should_capture_url(url) is True
+
+    def test_other_cohere_paths_and_ports_not_captured(self):
+        assert _should_capture_url("https://api.cohere.com/v2/rerank") is False
+        assert _should_capture_url("http://ollama:8080/api/chat") is False
+        assert _should_capture_url("http://ollama:11434/api/tags") is False
+
+
+class TestDenyListAnchoring:
+    """Deny-list fragments match the path only; host-qualified ones need the host."""
+
+    def test_query_string_does_not_exclude(self, reset_global_instance):
+        url = "https://api.openai.com/v1/chat/completions?x=/batchPredictionJobs/"
+        assert _is_excluded(url) is False
+        assert _should_capture_url(url) is True
+
+    def test_path_fragment_excludes(self, reset_global_instance):
+        url = "https://aiplatform.googleapis.com/v1/p/batchPredictionJobs/1"
+        assert _is_excluded(url) is True
+
+    def test_host_qualified_pattern_needs_host(self, reset_global_instance):
+        assert _is_excluded("https://api.cohere.com/v1/embed-jobs/1") is True
+        assert _is_excluded("https://example.com/v1/embed-jobs/1") is False
+        assert (
+            _is_excluded("https://example.com/?u=api.cohere.com/v1/embed-jobs") is False
+        )
+        assert _should_capture_url("https://api.cohere.com/v1/embed") is True
+
+
+class TestEntryGrammar:
+    """Custom entries: bare host, host/path, :port/path, /fragment, globs, scheme."""
+
+    @pytest.mark.parametrize(
+        ("entry", "url", "expected"),
+        [
+            ("my-proxy.internal", "https://my-proxy.internal/x", True),
+            ("my-proxy.internal", "https://a.my-proxy.internal/x", True),
+            ("my-proxy.internal", "https://xmy-proxy.internal/x", False),
+            ("my-proxy.internal", "https://e.com/my-proxy.internal", False),
+            ("my-proxy.internal/v1/chat", "https://my-proxy.internal/v1/chat/x", True),
+            ("my-proxy.internal/v1/chat", "https://my-proxy.internal/v2/chat", False),
+            ("my-proxy.internal:8443", "https://my-proxy.internal:8443/x", True),
+            ("my-proxy.internal:8443", "https://my-proxy.internal/x", False),
+            (":9000/gen", "http://box:9000/gen", True),
+            (":9000/gen", "http://box:9001/gen", False),
+            ("/v1/inference", "https://any.host/v1/inference", True),
+            ("/v1/inference", "https://any.host/a/v1/inference/b", True),
+            ("/v1/inference", "https://any.host/x?p=/v1/inference", False),
+            ("*.corp.example/*:run", "https://a.corp.example/m:run", True),
+            ("*.corp.example/*:run", "https://other.example/m:run", False),
+            ("https://my-proxy.internal", "https://my-proxy.internal/x", True),
+            # explicit and implied default ports
+            ("my-proxy.internal:443", "https://my-proxy.internal/x", True),
+            ("my-proxy.internal:443", "http://my-proxy.internal/x", False),
+            ("my-proxy.internal:80", "http://my-proxy.internal/x", True),
+            ("my-proxy.internal:8443", "https://my-proxy.internal:8443/x", True),
+            # IPv6 literals need brackets in the entry
+            ("[2001:db8::1]:11434", "http://[2001:db8::1]:11434/x", True),
+            ("[2001:db8::1]", "http://[2001:db8::2]/x", False),
+            # "*" in a host is one label; globbed paths match the whole path
+            ("api.*.example", "https://api.eu.example/x", True),
+            ("api.*.example", "https://api.eu.west.example/x", False),
+            (
+                "my-proxy.internal/v1/*/chat",
+                "https://my-proxy.internal/v1/x/chat",
+                True,
+            ),
+            (
+                "my-proxy.internal/v1/*/chat",
+                "https://my-proxy.internal/v1/x/chat/y",
+                False,
+            ),
+            # "?" and "[" are literal in globs
+            ("my-proxy.internal/v1/?*", "https://my-proxy.internal/v1/a", False),
+            ("my-proxy.internal/v1/?*", "https://my-proxy.internal/v1/%3Fa", True),
+            # percent-encoded paths are decoded before matching; host is case-folded
+            (
+                "/batchPredictionJobs/",
+                "https://h.example/p/%62atchPredictionJobs/1",
+                True,
+            ),
+            ("My-Proxy.Internal", "https://my-proxy.INTERNAL/x", True),
+            # paths are case-sensitive
+            ("my-proxy.internal/V1", "https://my-proxy.internal/v1", False),
+            # a globbed host is exact: no implicit subdomains, unlike a bare host
+            ("*.amazonaws.com", "https://x.amazonaws.com/p", True),
+            ("*.amazonaws.com", "https://x.y.amazonaws.com/p", False),
+            ("api.*", "https://api.com/p", True),
+            ("api.*", "https://api.eu.com/p", False),
+            # several stars and adjacent stars
+            ("a*b*c.example", "https://aXbYc.example/p", True),
+            ("a*b*c.example", "https://aXbY.example/p", False),
+            ("h.example/a**b*c", "https://h.example/aXXbYc", True),
+            ("h.example/a**b*c", "https://h.example/acb", False),
+            ("h.example/*a*a/*", "https://h.example/a-a/", True),
+            # a query string in an entry never matches
+            ("my-proxy.internal/v1?x=1", "https://my-proxy.internal/v1?x=1", False),
+            # malformed URLs fall through without matching
+            ("my-proxy.internal", "http://[::1/", False),
+        ],
+    )
+    def test_entries(self, reset_global_instance, entry, url, expected):
+        set_intercept_addresses([entry])
+        assert _is_llm_api(url) is expected
+
+    def test_many_stars_do_not_backtrack_catastrophically(self, reset_global_instance):
+        """Entries with many "*" stay fast against long, adversarial URLs."""
+        import time
+
+        set_intercept_addresses(
+            ["/*a*a*a*a*a*b", "h.example/*a*a*a*a*a*b", "*a*a*a*a*a*a*a*b.example"]
+        )
+        start = time.perf_counter()
+        assert _is_llm_api("https://h.example/" + "a" * 20_000) is False
+        assert _is_llm_api("https://" + "a" * 250 + ".example/x") is False
+        # Backtracking regexes took minutes here; the bound is deliberately loose.
+        assert time.perf_counter() - start < 10.0
+
+    @pytest.mark.parametrize("entry", ["", " ", ".", "[]", "//", "https://"])
+    def test_empty_entry_matches_nothing(self, reset_global_instance, entry):
+        set_intercept_addresses([entry])
+        assert _is_llm_api("https://example.com/x") is False
+        set_exclude_api_patterns([entry])
+        assert _is_excluded("https://example.com/x") is False
+
+    def test_glob_matchers_agree_with_regex_reference(self):
+        """Exhaustive small-alphabet differential test of the hand-written globs."""
+        import itertools
+        import re
+
+        from coolhand.httpx_interceptor import _glob_host_match, _glob_path_match
+
+        def strings(alphabet, max_len):
+            for n in range(max_len + 1):
+                for combo in itertools.product(alphabet, repeat=n):
+                    yield "".join(combo)
+
+        for sep, matcher, star in (
+            (".", _glob_host_match, "[^.]*"),
+            ("/", _glob_path_match, ".*"),
+        ):
+            for pattern in strings(("a", sep, "*"), 5):
+                if matcher is _glob_path_match and "*" not in pattern:
+                    continue  # callers only use _glob_path_match for globs
+                regex = re.compile(
+                    "".join(star if c == "*" else re.escape(c) for c in pattern)
+                )
+                for text in strings(("a", sep), 5):
+                    assert matcher(pattern, text) == bool(regex.fullmatch(text)), (
+                        pattern,
+                        text,
+                    )
+
+    def test_exclude_patterns_use_same_grammar(self, reset_global_instance):
+        set_exclude_api_patterns(["my-proxy.internal:8443/admin", ":9000/health"])
+        assert _is_excluded("https://my-proxy.internal:8443/admin/x") is True
+        assert _is_excluded("https://my-proxy.internal/admin/x") is False
+        assert _is_excluded("http://other:9000/health") is True
+        assert _is_excluded("http://other:9001/health") is False
+
+    def test_non_str_entry_fails_without_raising(self, reset_global_instance):
+        set_exclude_api_patterns([42])  # type: ignore[list-item]
+        # The deny-list fails closed: a matching error means "do not capture".
+        assert _is_excluded("https://api.openai.com/v1/chat/completions") is True
+
+
+class TestIsLocalhostAnchoring:
+    @pytest.mark.parametrize(
+        "url",
+        [
+            "http://localhost:8000/",
+            "http://foo.localhost/",
+            "http://127.0.0.1:3000/",
+            "http://127.0.0.2/",
+            "http://0.0.0.0:8080/",
+            "http://[::1]:8000/",
+            "http://localhost.:11434/api/chat",
+            "http://[::ffff:127.0.0.1]/",
+            "http://[::ffff:0.0.0.0]/",
+        ],
+    )
+    def test_loopback(self, url):
+        assert _is_localhost(url) is True
+
+    @pytest.mark.parametrize(
+        "url",
+        [
+            "https://localhost.example.com/",
+            "https://user:localhost@api.openai.com/v1",
+            "https://notlocalhost/",
+            "https://api.openai.com/localhost",
+            "https://api.openai.com/?u=127.0.0.1",
+            "https://127.0.0.1.example.com/",
+            "http://[::1/",
+            "",
+        ],
+    )
+    def test_not_loopback(self, url):
+        assert _is_localhost(url) is False
 
 
 class TestCustomInterceptAddresses:
@@ -207,14 +659,34 @@ class TestCustomInterceptAddresses:
         assert _is_llm_api("https://api.anthropic.com/v1/messages") is False
 
     def test_default_restored_after_reset(self, reset_global_instance):
-        """Resetting _intercept_addresses to None restores defaults."""
-        from coolhand import httpx_interceptor
-
+        """Passing None back to the setter restores the defaults."""
         set_intercept_addresses(["api.custom-llm.com"])
         assert _is_llm_api("https://api.openai.com/v1/chat/completions") is False
 
-        httpx_interceptor._intercept_addresses = None
+        set_intercept_addresses(None)
         assert _is_llm_api("https://api.openai.com/v1/chat/completions") is True
+
+    def test_malformed_list_matches_nothing_and_logs(
+        self, caplog, reset_global_instance
+    ):
+        """A non-str entry can't silently disable matching without a trace.
+
+        ``any()`` short-circuits, so a malformed entry only bites once matching
+        reaches it — put it first to exercise the failure path.
+        """
+
+        with caplog.at_level(logging.DEBUG, logger="coolhand.httpx_interceptor"):
+            set_intercept_addresses([None, "api.openai.com"])  # type: ignore[list-item]
+            assert _is_llm_api("https://api.openai.com/v1/chat/completions") is False
+
+        assert "Failed to match URL against pattern list" in caplog.text
+        assert "Invalid intercept_addresses entries" in caplog.text
+
+    def test_empty_list_matches_nothing(self, reset_global_instance):
+        """Explicit empty list means capture nothing, not defaults."""
+        set_intercept_addresses([])
+        assert _is_llm_api("https://api.openai.com/v1/chat/completions") is False
+        assert _is_llm_api("https://api.anthropic.com/v1/messages") is False
 
 
 class TestIsStreamingContentType:
@@ -255,6 +727,10 @@ class TestIsBinaryContentType:
     def test_octet_stream(self):
         """Detects application/octet-stream."""
         assert _is_binary_content_type("application/octet-stream") is True
+
+    def test_bedrock_eventstream(self):
+        """Bedrock binary event-stream frames are not decodable as text."""
+        assert _is_binary_content_type("application/vnd.amazon.eventstream") is True
 
     def test_case_insensitive(self):
         """Content-Type matching is case-insensitive."""
@@ -431,6 +907,87 @@ class TestSyncRequestCapture:
             unpatch()
 
 
+class TestUnreadableRequestBody:
+    """Streamed/multipart request bodies must not break the host's call."""
+
+    def test_streamed_request_body_does_not_raise(self, reset_global_instance):
+        import httpx
+
+        from coolhand import httpx_interceptor
+
+        captured = []
+        set_handler(lambda req, res, err: captured.append((req, res, err)))
+        patch_httpx()
+        try:
+
+            def gen():
+                yield b"chunk"
+
+            # A generator body: request.content raises httpx.RequestNotRead
+            request = httpx.Request(
+                "POST", "https://api.openai.com/v1/audio/transcriptions", content=gen()
+            )
+            with pytest.raises(httpx.RequestNotRead):
+                request.content  # noqa: B018 - confirms the precondition
+
+            mock_response = MagicMock()
+            mock_response.status_code = 200
+            mock_response.headers = {"content-type": "application/json"}
+            mock_response._content = b"{}"
+            mock_response.content = b"{}"
+            original = httpx_interceptor._original_send
+            httpx_interceptor._original_send = MagicMock(return_value=mock_response)
+            try:
+                response = httpx.Client.send(httpx.Client(), request)
+            finally:
+                httpx_interceptor._original_send = original
+
+            assert response is mock_response
+            assert len(captured) == 1
+            assert captured[0][0]["body"] == "[unreadable body]"
+        finally:
+            unpatch()
+
+    @pytest.mark.asyncio
+    async def test_streamed_request_body_does_not_raise_async(
+        self, reset_global_instance
+    ):
+        import httpx
+
+        from coolhand import httpx_interceptor
+
+        captured = []
+        set_handler(lambda req, res, err: captured.append((req, res, err)))
+        patch_httpx()
+        try:
+
+            async def agen():
+                yield b"chunk"
+
+            request = httpx.Request(
+                "POST", "https://api.openai.com/v1/audio/transcriptions", content=agen()
+            )
+            mock_response = MagicMock()
+            mock_response.status_code = 200
+            mock_response.headers = {"content-type": "application/json"}
+            mock_response._content = b"{}"
+            mock_response.content = b"{}"
+            original = httpx_interceptor._original_async_send
+            httpx_interceptor._original_async_send = AsyncMock(
+                return_value=mock_response
+            )
+            try:
+                async with httpx.AsyncClient() as client:
+                    response = await httpx.AsyncClient.send(client, request)
+            finally:
+                httpx_interceptor._original_async_send = original
+
+            assert response is mock_response
+            assert captured[0][0]["body"] == "[unreadable body]"
+        finally:
+            unpatch()
+
+
 class TestAsyncRequestCapture:
     """Tests for asynchronous request capture."""
 
@@ -502,6 +1059,7 @@ class TestErrorHandling:
             from coolhand import httpx_interceptor
 
             # Mock original send to raise an exception
+            real_original_send = httpx_interceptor._original_send
             httpx_interceptor._original_send = MagicMock(
                 side_effect=Exception("Connection failed")
             )
@@ -524,6 +1082,9 @@ class TestErrorHandling:
             assert err == "Connection failed"
 
         finally:
+            # unpatch() restores httpx.Client.send from this global; leaving the
+            # mock here would leave a MagicMock installed for every later test.
+            httpx_interceptor._original_send = real_original_send
             unpatch()
 
 
@@ -602,7 +1163,7 @@ class TestAsyncStreamingCapture:
             mock_response.aiter_raw = None
 
             # Mock the original async send
-            original_original = httpx_interceptor._original_async_send
+            saved_original_async_send = httpx_interceptor._original_async_send
             httpx_interceptor._original_async_send = AsyncMock(
                 return_value=mock_response
             )
@@ -619,12 +1180,147 @@ class TestAsyncStreamingCapture:
                 async for _ in response.aiter_lines():
                     pass
 
-            httpx_interceptor._original_async_send = original_original
+            httpx_interceptor._original_async_send = saved_original_async_send
 
             # Should have captured the streaming response
             assert len(captured_requests) == 1
             req, res, err = captured_requests[0]
             assert res["is_streaming"] is True
+            assert res["body"] == 'data: {"chunk": 1}\ndata: {"chunk": 2}\n'
+
+        finally:
+            unpatch()
+
+    @pytest.mark.parametrize(
+        ("attr_name", "takes_chunk_size", "chunks"),
+        [
+            ("aiter_bytes", True, [b"chunk1", b"chunk2"]),
+            ("aiter_text", False, ["chunk1", "chunk2"]),
+            ("aiter_raw", True, [b"chunk1", b"chunk2"]),
+        ],
+    )
+    @pytest.mark.asyncio
+    async def test_async_streaming_captures_via_aiter_variant(
+        self, reset_global_instance, attr_name, takes_chunk_size, chunks
+    ):
+        """Async streaming is captured regardless of which aiter_* method is drained."""
+        captured_requests = []
+
+        def capture_handler(req, res, err):
+            captured_requests.append((req, res, err))
+
+        set_handler(capture_handler)
+        patch_httpx()
+
+        try:
+            import httpx
+
+            from coolhand import httpx_interceptor
+
+            # Create mock streaming response
+            mock_response = MagicMock()
+            mock_response.status_code = 200
+            mock_response.headers = {"content-type": "text/event-stream"}
+
+            if takes_chunk_size:
+
+                async def mock_aiter(chunk_size=1024):
+                    for chunk in chunks:
+                        yield chunk
+            else:
+
+                async def mock_aiter():
+                    for chunk in chunks:
+                        yield chunk
+
+            for name in ("aiter_bytes", "aiter_lines", "aiter_text", "aiter_raw"):
+                setattr(mock_response, name, mock_aiter if name == attr_name else None)
+
+            # Mock the original async send
+            saved_original_async_send = httpx_interceptor._original_async_send
+            httpx_interceptor._original_async_send = AsyncMock(
+                return_value=mock_response
+            )
+
+            mock_request = MagicMock()
+            mock_request.method = "POST"
+            mock_request.url = "https://api.openai.com/v1/chat/completions"
+            mock_request.headers = {"Content-Type": "application/json"}
+            mock_request.content = b'{"stream": true}'
+
+            async with httpx.AsyncClient() as client:
+                response = await httpx.AsyncClient.send(client, mock_request)
+                # Consume the stream via the variant under test
+                async for _ in getattr(response, attr_name)():
+                    pass
+
+            httpx_interceptor._original_async_send = saved_original_async_send
+
+            # Should have captured the streaming response
+            assert len(captured_requests) == 1
+            req, res, err = captured_requests[0]
+            assert res["is_streaming"] is True
+            assert res["body"] == "chunk1chunk2"
+
+        finally:
+            unpatch()
+
+    @pytest.mark.asyncio
+    async def test_async_streaming_empty_chunks_not_captured(
+        self, reset_global_instance
+    ):
+        """An immediately-exhausted stream never fires the handler.
+
+        Documents existing behavior in httpx_interceptor.send_captured(), which
+        only invokes the handler `if not content_sent[0] and captured_chunks`
+        — an empty stream leaves captured_chunks empty, so the request/response
+        pair is silently dropped rather than reported with an empty body.
+        """
+        captured_requests = []
+
+        def capture_handler(req, res, err):
+            captured_requests.append((req, res, err))
+
+        set_handler(capture_handler)
+        patch_httpx()
+
+        try:
+            import httpx
+
+            from coolhand import httpx_interceptor
+
+            mock_response = MagicMock()
+            mock_response.status_code = 200
+            mock_response.headers = {"content-type": "text/event-stream"}
+
+            async def mock_aiter_bytes(chunk_size=1024):
+                for chunk in ():
+                    yield chunk
+
+            mock_response.aiter_bytes = mock_aiter_bytes
+            mock_response.aiter_lines = None
+            mock_response.aiter_text = None
+            mock_response.aiter_raw = None
+
+            saved_original_async_send = httpx_interceptor._original_async_send
+            httpx_interceptor._original_async_send = AsyncMock(
+                return_value=mock_response
+            )
+
+            mock_request = MagicMock()
+            mock_request.method = "POST"
+            mock_request.url = "https://api.openai.com/v1/chat/completions"
+            mock_request.headers = {"Content-Type": "application/json"}
+            mock_request.content = b'{"stream": true}'
+
+            async with httpx.AsyncClient() as client:
+                response = await httpx.AsyncClient.send(client, mock_request)
+                async for _ in response.aiter_bytes():
+                    pass
+
+            httpx_interceptor._original_async_send = saved_original_async_send
+
+            assert captured_requests == []
 
         finally:
             unpatch()
@@ -703,6 +1399,67 @@ class TestReadResponseBodyEdgeCases:
 class TestIsExcluded:
     """Tests for _is_excluded helper function."""
 
+    def test_malformed_pattern_fails_closed(self, caplog, reset_global_instance):
+        """A matching error on the deny-list excludes the request (#174)."""
+
+        with caplog.at_level(logging.WARNING, logger="coolhand.httpx_interceptor"):
+            set_exclude_api_patterns([None, "/files"])  # type: ignore[list-item]
+
+        assert "Invalid exclude_api_patterns entries (expected str, got NoneType)" in (
+            caplog.text
+        )
+        url = "https://api.openai.com/v1/chat/completions"
+        assert _is_excluded(url) is True
+        assert _should_capture_url(url) is False
+
+    def test_valid_entry_before_malformed_one_still_matches(
+        self, reset_global_instance
+    ):
+        """any() short-circuits: a match before the bad entry never errors."""
+        set_exclude_api_patterns(["/files", None])  # type: ignore[list-item]
+        assert _is_excluded("https://api.openai.com/v1/files") is True
+
+    @pytest.mark.parametrize("value", [None, [], ["/health"], ("/health",)])
+    def test_valid_patterns_do_not_warn(self, value, caplog, reset_global_instance):
+
+        with caplog.at_level(logging.WARNING, logger="coolhand.httpx_interceptor"):
+            set_exclude_api_patterns(value)
+            set_intercept_addresses(value)
+
+        assert not [r for r in caplog.records if r.name == "coolhand.httpx_interceptor"]
+
+    @pytest.mark.parametrize("value", ["/health", b"/health", 5, iter(["/a"])])
+    def test_non_list_container_warns(self, value, caplog, reset_global_instance):
+
+        with caplog.at_level(logging.WARNING, logger="coolhand.httpx_interceptor"):
+            set_exclude_api_patterns(value)  # type: ignore[arg-type]
+            set_intercept_addresses(value)  # type: ignore[arg-type]
+
+        assert "Invalid exclude_api_patterns: expected a list" in caplog.text
+        assert "Invalid intercept_addresses: expected a list" in caplog.text
+
+    def test_matches_any_on_error_polarity(self):
+        from coolhand.httpx_interceptor import _matches_any
+
+        bad = [None]
+        assert _matches_any("https://x", bad, [], on_error=True) is True  # type: ignore[list-item]
+        assert _matches_any("https://x", bad, [], on_error=False) is False  # type: ignore[list-item]
+
+    def test_coolhand_construction_warns_on_malformed_exclude(
+        self, caplog, reset_global_instance
+    ):
+
+        from coolhand import Coolhand
+
+        client = None
+        try:
+            with caplog.at_level(logging.WARNING, logger="coolhand.httpx_interceptor"):
+                client = Coolhand(api_key="k", exclude_api_patterns=[None])
+            assert "Invalid exclude_api_patterns entries" in caplog.text
+        finally:
+            if client is not None:
+                client.stop_monitoring()
+
     def test_excluded_by_default_pattern(self, reset_global_instance):
         """batchPredictionJobs URLs are excluded by default."""
         url = (
@@ -737,10 +1494,9 @@ class TestIsExcluded:
         assert _is_excluded(url) is False
 
     def test_uses_default_when_none(self, reset_global_instance):
-        """When _exclude_api_patterns is None, DEFAULT_EXCLUDE_API_PATTERNS is used."""
-        from coolhand import httpx_interceptor
-
-        httpx_interceptor._exclude_api_patterns = None
+        """Passing None back to the setter restores DEFAULT_EXCLUDE_API_PATTERNS."""
+        set_exclude_api_patterns(["/somethingElse/"])
+        set_exclude_api_patterns(None)
         url = (
             "https://aiplatform.googleapis.com/v1/projects/my-project"
             "/locations/us-central1/batchPredictionJobs/123"
@@ -767,6 +1523,34 @@ class TestIsExcluded:
         for path in non_llm_paths:
             url = base + path + "123"
             assert _is_excluded(url) is True, f"Expected {path!r} to be excluded"
+
+    def test_default_patterns_exclude_non_inference_azure_openai_paths(
+        self, reset_global_instance
+    ):
+        """Azure OpenAI management paths are excluded, mirroring the Vertex list."""
+        base = "https://my-resource.openai.azure.com"
+        for url in [
+            # Legacy deployments-era paths...
+            f"{base}/openai/files?api-version=2024-10-21",
+            f"{base}/openai/fine_tuning/jobs?api-version=2024-10-21",
+            f"{base}/openai/batches?api-version=2024-10-21",
+            # ...and their v1 API twins, which the legacy patterns do not match.
+            f"{base}/openai/v1/files",
+            f"{base}/openai/v1/fine_tuning/jobs",
+            f"{base}/openai/v1/batches",
+            # Model listing is control plane, not inference.
+            f"{base}/openai/models?api-version=2024-10-21",
+            f"{base}/openai/v1/models",
+        ]:
+            assert _is_excluded(url) is True, f"Expected {url!r} to be excluded"
+
+        # Inference is still captured, on both the dedicated and Foundry hosts.
+        for inference in [
+            f"{base}/openai/v1/chat/completions",
+            "https://my-resource.services.ai.azure.com/models/chat/completions",
+        ]:
+            assert _is_llm_api(inference) is True
+            assert _is_excluded(inference) is False
 
 
 class TestExcludeIntegration:
@@ -1000,3 +1784,56 @@ class TestReentrancyGuard:
             assert result is mock_response
         finally:
             unpatch()
+
+
+class TestNewProviderSenderBehavior:
+    """Sender-level behaviour for the DeepSeek/Cohere/Bedrock/Ollama additions."""
+
+    def test_bedrock_eventstream_recorded_as_binary_sync(self, reset_global_instance):
+        """A Bedrock eventstream response reaches the handler as "[binary]"."""
+        captured = []
+        set_handler(lambda req, res, err: captured.append(res))
+        patch_httpx()
+
+        try:
+            import httpx
+
+            from coolhand import httpx_interceptor
+
+            mock_response = MagicMock()
+            mock_response.status_code = 200
+            mock_response.headers = {
+                "content-type": "application/vnd.amazon.eventstream"
+            }
+            mock_response._content = b"\x00\x00\x00\x2a\x00\x00\x00\x1dframed"
+            mock_response.content = mock_response._content
+
+            original_send = httpx_interceptor._original_send
+            httpx_interceptor._original_send = MagicMock(return_value=mock_response)
+            try:
+                mock_request = MagicMock()
+                mock_request.method = "POST"
+                mock_request.url = (
+                    "https://bedrock-runtime.us-east-1.amazonaws.com"
+                    "/model/anthropic.claude/converse-stream"
+                )
+                mock_request.headers = {}
+                mock_request.content = b"{}"
+                httpx.Client.send(httpx.Client(), mock_request)
+            finally:
+                httpx_interceptor._original_send = original_send
+
+            assert len(captured) == 1
+            assert captured[0]["body"] == "[binary]"
+        finally:
+            unpatch()
+
+    def test_overriding_exclude_patterns_recaptures_cohere_embed_jobs(
+        self, reset_global_instance
+    ):
+        """Replacing the deny-list drops the default Cohere embed-jobs guard."""
+        url = "https://api.cohere.com/v1/embed-jobs"
+        assert _should_capture_url(url) is False
+
+        set_exclude_api_patterns([])
+        assert _should_capture_url(url) is True

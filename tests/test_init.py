@@ -1,5 +1,8 @@
 """Tests for coolhand public API (__init__.py)."""
 
+import re
+from pathlib import Path
+
 import coolhand
 from coolhand import (
     Config,
@@ -33,9 +36,12 @@ class TestVersion:
         assert parts[0].isdigit()
         assert parts[1].isdigit()
 
-    def test_version_is_0_7_0(self):
-        """Current version is 0.7.0."""
-        assert __version__ == "0.7.0"
+    def test_version_matches_pyproject(self):
+        """__version__ and pyproject.toml's version are bumped in lockstep."""
+        pyproject = Path(__file__).parent.parent / "pyproject.toml"
+        match = re.search(r'^version = "([^"]+)"', pyproject.read_text(), re.M)
+        assert match is not None
+        assert __version__ == match.group(1)
 
 
 class TestExports:
@@ -85,6 +91,39 @@ class TestCoolhandClass:
         instance = Coolhand(config=mock_config)
         assert instance.config["api_key"] == "test-api-key-12345678"
         instance.stop_monitoring()
+
+    def test_empty_intercept_addresses_captures_nothing(self, reset_global_instance):
+        """intercept_addresses=[] in config means capture nothing, not defaults."""
+        from coolhand.httpx_interceptor import _is_llm_api
+
+        instance = Coolhand(config={"intercept_addresses": []})
+        assert _is_llm_api("https://api.openai.com/v1/chat/completions") is False
+        instance.stop_monitoring()
+
+    def test_unset_intercept_addresses_uses_defaults(self, reset_global_instance):
+        """Omitting intercept_addresses from config falls back to the defaults."""
+        from coolhand.httpx_interceptor import _is_llm_api
+
+        instance = Coolhand()
+        assert _is_llm_api("https://api.openai.com/v1/chat/completions") is True
+        instance.stop_monitoring()
+
+    def test_later_instance_does_not_inherit_override(self, reset_global_instance):
+        """A prior instance's override must not leak into a later default one.
+
+        The intercept list is a module-level global shared by every instance in
+        the process, so start_monitoring has to actively restore the defaults
+        rather than leave the previous instance's list in place.
+        """
+        from coolhand.httpx_interceptor import _is_llm_api
+
+        first = Coolhand(config={"intercept_addresses": ["api.custom-llm.com"]})
+        assert _is_llm_api("https://api.openai.com/v1/chat/completions") is False
+        first.stop_monitoring()
+
+        second = Coolhand()
+        assert _is_llm_api("https://api.openai.com/v1/chat/completions") is True
+        second.stop_monitoring()
 
     def test_start_monitoring_method(self, reset_global_instance):
         """start_monitoring method works."""

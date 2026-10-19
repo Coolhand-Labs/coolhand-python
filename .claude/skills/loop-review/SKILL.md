@@ -38,7 +38,7 @@ Run `git diff $(git merge-base origin/main HEAD)` to get the current branch diff
 - Security vulnerabilities introduced by this diff
 - Missing/broken error handling
 - Inefficiencies or unnecessary complexity
-- Violations of project conventions in CLAUDE.md (e.g. `uv run` usage, README/docs split rules, `make verify` as the only gate)
+- Violations of project conventions in AGENTS.md (e.g. `uv run` usage, README/docs split rules, `make verify` as the only gate)
 - DRY violations and non-semantic naming — flag duplicated logic that should reuse an existing helper, and identifiers whose names don't convey intent
 - Test coverage — new or changed behavior must have tests that actually assert on meaningful outcomes (not just "doesn't raise"); flag missing edge cases (error paths, empty/None inputs, type boundaries)
 - PyPI interface stability — does this diff change a public interface (anything importable from `coolhand`, method signatures, field types/names on response models) without a compelling reason? If it does break something:

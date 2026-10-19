@@ -1,5 +1,6 @@
 """Pytest fixtures for Coolhand tests."""
 
+import logging
 import os
 import time
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -19,6 +20,17 @@ import pytest
 # separate opt-in `tests/live/` suite and are untouched here.
 os.environ.pop("COOLHAND_API_KEY", None)
 os.environ.pop("COOLHAND_BASE_URL", None)
+
+
+@pytest.fixture(autouse=True)
+def restore_coolhand_logger():
+    """A non-silent client configures the ``coolhand`` logger's level and may
+    attach a handler; undo that so it can't leak into later tests."""
+    pkg = logging.getLogger("coolhand")
+    handlers, level = pkg.handlers[:], pkg.level
+    yield
+    pkg.handlers = handlers
+    pkg.setLevel(level)
 
 
 @pytest.fixture
@@ -82,6 +94,7 @@ def reset_global_instance():
     original_handler = httpx_interceptor._handler
     original_intercept_addresses = httpx_interceptor._intercept_addresses
     original_exclude_api_patterns = httpx_interceptor._exclude_api_patterns
+    original_max_body_bytes = httpx_interceptor._max_body_bytes
 
     # Reset before test
     client._instance = None
@@ -98,6 +111,7 @@ def reset_global_instance():
     httpx_interceptor._handler = original_handler
     httpx_interceptor._intercept_addresses = original_intercept_addresses
     httpx_interceptor._exclude_api_patterns = original_exclude_api_patterns
+    httpx_interceptor._max_body_bytes = original_max_body_bytes
 
     # Unpatch if patched during test
     if httpx_interceptor._patched:

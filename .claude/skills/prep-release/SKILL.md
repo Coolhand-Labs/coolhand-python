@@ -24,7 +24,7 @@ and everything merged since the last tag, not just one diff. For an
 iterative diff-scoped review during normal development, use
 `/loop-review` instead; this skill is for the release event itself.
 
-Per `CLAUDE.md`, feature/fix branches never touch `CHANGELOG.md`,
+Per `AGENTS.md`, feature/fix branches never touch `CHANGELOG.md`,
 `pyproject.toml`'s `version`, or `src/coolhand/version.py` — this skill is
 the only place those get written. If a chosen PR's diff does touch any of
 them, treat it as a normal part of that PR's diff (don't strip it), but
@@ -115,7 +115,7 @@ never on `main` directly.
      write the entry without one rather than skipping it.
    - `README.md` / `docs/*.md` — any new config option, public method, or
      behavior change needs the relevant section updated. Follow this
-     repo's docs philosophy from `CLAUDE.md`: the README stays a scannable
+     repo's docs philosophy from `AGENTS.md`: the README stays a scannable
      landing page (basic config/feedback snippets only); anything needing
      more than one code block belongs in `docs/`.
 4. **Clean, don't just append.** Look for docs that are now stale,
@@ -123,7 +123,7 @@ never on `main` directly.
    last tag — consolidate/rewrite rather than layering a new paragraph on
    top of an outdated one. Remove docs for anything removed from the
    package.
-5. **Bump the version.** Since `CLAUDE.md` now forbids per-PR bumps, this
+5. **Bump the version.** Since `AGENTS.md` now forbids per-PR bumps, this
    should always be needed — but check `src/coolhand/version.py`'s
    `__version__` and `pyproject.toml`'s `version` against the last tag
    first as a defensive sanity check in case something bumped it out of
@@ -154,11 +154,13 @@ traffic and logs it to Coolhand, so hunt specifically for:
   query param slipping past the redaction list).
 - **SSRF / address matching**: `DEFAULT_INTERCEPT_ADDRESSES` in
   `src/coolhand/httpx_interceptor.py` and the deny-list in
-  `src/coolhand/default_exclude_api_patterns.json` are plain substring
-  matches, not regex (so there's no ReDoS surface here) — but that means a
-  crafted URL whose path or query string happens to contain one of these
-  substrings could be mis-captured or mis-excluded. Check whether that's
-  exploitable for the addresses/patterns currently in the lists.
+  `src/coolhand/default_exclude_api_patterns.json` are matched against the
+  parsed URL (host, port, percent-decoded path) by `_compile_entry` and its
+  hand-written glob matchers, not as substrings of the raw URL. Check those for
+  bypasses (userinfo, trailing dots, lookalike hosts, percent-encoding, port
+  normalisation, empty entries), for over-capture from entries that are too
+  broad for the addresses/patterns currently in the lists, and for
+  super-linear glob matching on long URLs.
 - **Thread safety**: `flush()` hands interactions off to a bounded
   background dispatch queue drained by a worker thread (added to fix a
   prior event-loop-stall bug) — look for unsynchronized shared mutable
@@ -186,7 +188,7 @@ the same "hand it to a human" rule `/loop-review` uses for stuck findings.
 ## Phase 4: Validate the release branch
 
 1. Run `make verify` (ruff lint, ruff format check, pytest — this repo's
-   single gate per `CLAUDE.md`; never invoke the tools individually) on
+   single gate per `AGENTS.md`; never invoke the tools individually) on
    `release/vX.Y.Z`. Everything must pass before continuing — a release
    doesn't ship on a red build. If it fails, stop here and report the
    failures; fixing genuine bugs takes priority over the rest of this
@@ -205,17 +207,30 @@ the same "hand it to a human" rule `/loop-review` uses for stuck findings.
    `uv run python examples/basic_usage.py`,
    `uv run python examples/auto_monitor_example.py`, and
    `uv run python examples/dramatiq_pydantic_ai.py`. Unlike a
-   clean-skip-on-missing-key pattern, these scripts always run to
-   completion — they fall back to a fake `COOLHAND_API_KEY`/provider key
-   (or a fake transport, for `dramatiq_pydantic_ai.py`) when real ones
-   aren't set, rather than exiting early. So treat a **non-zero exit** as
-   the failure signal regardless of which keys are present in the
-   environment; if a real provider key (e.g. `ANTHROPIC_API_KEY`) is set,
-   the run additionally exercises a real intercepted call instead of a
+   clean-skip-on-missing-key pattern (the live scripts below are the
+   exception), these scripts always run to completion — they fall back
+   to a fake `COOLHAND_API_KEY`/provider key (or a fake transport, for
+   `dramatiq_pydantic_ai.py`) when real ones aren't set, rather than
+   exiting early. So treat a **non-zero exit** as the failure signal
+   regardless of which keys are present in the environment; if a real
+   provider key (e.g. `ANTHROPIC_API_KEY`) is set, the run additionally
+   exercises a real intercepted call instead of a
    simulated one, which is a stronger signal but not required for a pass.
    If `COOLHAND_LIVE_BASE_URL` and `COOLHAND_LIVE_API_KEY` are set in the
    environment, also run `make test-live` against the real server.
    Record pass/fail per script (and whether it ran live or simulated).
+
+   Then run `make live-examples` — the real-key check. It runs
+   `examples/live_openai.py` and `examples/live_anthropic.py` concurrently
+   (one real provider call each through the interceptor, confirmed
+   delivered to Coolhand) and prints `PASS` / `SKIP` / `FAIL` per script,
+   exiting non-zero only on `FAIL`. It re-execs under `zsh -ic` so keys
+   exported from `~/.zshrc` are visible even from this non-interactive
+   shell (`COOLHAND_EXAMPLES_NO_ZSH=1` opts out). A `SKIP` is **not** a
+   pass: it means that provider's key (or `COOLHAND_API_KEY`) wasn't
+   visible, so list every skipped provider in the Phase 5 report as
+   unexercised. Per-script logs are in `.context/live-examples/`. See
+   `examples/README.md`.
 
 3. **`examples/band-guesser/` is explicitly in scope — run it, don't just
    note it.** It's a plain FastAPI JSON API (`POST /api/guess-bands`,
@@ -237,11 +252,21 @@ the same "hand it to a human" rule `/loop-review` uses for stuck findings.
      installs a global tool on the machine, not just a repo dependency,
      so it's a one-time setup cost worth calling out in the Phase 5
      report the first time it happens.
+   - The `azure` and `azure-sdk` modes no longer use GitHub Models
+     (retired 2026-07-30); they call a Microsoft Foundry / Azure OpenAI
+     deployment configured by `AZURE_INFERENCE_ENDPOINT`,
+     `AZURE_INFERENCE_KEY` and (optionally) `AZURE_INFERENCE_MODEL` in
+     the example's `.env` or the process environment (`load_dotenv()` reads
+     both). `.env` is gitignored, so a fresh release worktree won't have it:
+     copy it from the primary checkout or export the vars. If those
+     aren't set, the modes return `501` — report them as "skipped — no Azure creds" in Phase 5 (loss of
+     `azure-core`/`requests` pathway coverage), never as passing, and
+     don't count the 501 as a Phase 4 failure.
    - Start the server in the background on a scratch port (e.g.
      `uvicorn main:app --port 8188`), poll `GET /` until it responds,
      then `POST /api/guess-bands` once per `mode` (`copilot`, `azure`,
      `azure-sdk`) with a fixed test sentence and empty `github_token`
-     (so it falls through to the `gh auth token` path), and
+     (so `copilot` falls through to the `gh auth token` path), and
      `POST /api/submit-feedback` with the returned `raw_response` to
      exercise the feedback path too. A 429 (rate limit) on any mode is a
      transient condition, not a failure — retry once before giving up on
@@ -301,10 +326,12 @@ the same "hand it to a human" rule `/loop-review` uses for stuck findings.
    - Docs updated.
    - Red-team findings split into fixed vs. flagged-for-decision.
    - Phase 4's `make verify` result, the example-script results
-     (pass/fail, simulated/live per script), the `make test-live` result
-     if it ran, the `band-guesser` per-mode pass/fail, and both latency
-     checks' numbers (microbenchmark deltas and end-to-end wall-clock
-     per mode) with a call on whether either looks substantive.
+     (pass/fail, simulated/live per script), the `make live-examples`
+     PASS/SKIP/FAIL per provider (skips called out as unexercised), the
+     `make test-live` result if it ran, the `band-guesser` per-mode
+     pass/fail, and both latency checks' numbers (microbenchmark deltas
+     and end-to-end wall-clock per mode) with a call on whether either
+     looks substantive.
 
 ## Safety
 

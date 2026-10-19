@@ -149,3 +149,6 @@ Thumbs.db
 coolhand.log
 *.coolhand.log
 .pypirc
+
+# Agent/workspace scratch (also holds scripts/live-examples.sh logs)
+.context/

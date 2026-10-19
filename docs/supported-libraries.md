@@ -4,29 +4,32 @@ Coolhand intercepts LLM API calls through three mechanisms. Together they cover 
 
 ## Interception Mechanisms
 
-### httpx patching
+### httpx and httpx2 patching
 
-Patches `httpx.Client.send` and `httpx.AsyncClient.send` at the class level. Covers any library that uses httpx internally — which includes the official SDKs for all major providers:
+Patches `httpx.Client.send` and `httpx.AsyncClient.send` at the class level, and the same two methods on `httpx2` when it is installed. `httpx2` is a separate package (not the same module as `httpx`): recent releases of the OpenAI, Anthropic and pydantic-ai SDKs are built on it, and a client from one package never goes through the other's `send`, so both must be patched. Both are covered with the same capture, redaction and allow/deny-list logic. Covers any library that uses httpx or httpx2 internally — which includes the official SDKs for all major providers:
 
 - **OpenAI Python SDK** (`openai`)
 - **Anthropic Python SDK** (`anthropic`)
 - **Google Gemini** (`google-generativeai` / `google-genai`)
-- **GitHub Models** via `models.github.ai` or the legacy `models.inference.ai.azure.com`
+- **GitHub Models** via `models.github.ai` or the legacy `models.inference.ai.azure.com` (GitHub retired the hosted service on 2026-07-30; the addresses remain intercepted)
 - **Vertex AI** inference endpoints (`aiplatform.googleapis.com`)
 - **Cloudflare AI Gateway** (`gateway.ai.cloudflare.com`)
 - **OpenRouter** (`openrouter.ai`)
 - **OpenCode** (`opencode.ai`)
 - **ElevenLabs** (`api.elevenlabs.io`)
 - **pydantic-ai** (via its underlying provider SDK)
-- Any other library that makes HTTP requests using httpx
+- Any other library that makes HTTP requests using httpx or httpx2
 
 ### requests patching
 
 Patches `requests.Session.send`. Only applied if the `requests` package is installed — skipped silently if not. Covers libraries that use `requests` rather than httpx:
 
-- **Azure AI Inference** (`azure-ai-inference`)
-- **Azure OpenAI** via `azure-core`
+- **Azure AI Inference** (`azure-ai-inference`) — Azure AI Foundry Models on `services.ai.azure.com/models` and serverless deployments
+- **Azure OpenAI** via `azure-core` — both the `/openai/deployments/...` and the newer `/openai/v1/...` API paths, on `openai.azure.com` and on Foundry/AI Services resources
+- **Azure Machine Learning** managed online endpoints (`inference.ml.azure.com` / `.us`)
 - Any other library using the `requests` library
+
+> **Sync transport only.** `azure-core`'s *async* pipeline defaults to `AioHttpTransport`, and Coolhand does not patch aiohttp, so calls made through `azure.ai.inference.aio` (or any other async `azure-core` pipeline) are not captured. The `openai` SDK's own `AzureOpenAI` / `AsyncAzureOpenAI` clients are httpx-based and are captured on both the sync and async paths. To check that a given client is actually intercepted, see [Verifying Interception in Your Tests](./testing.md).
 
 ### JSON-RPC patching
 
@@ -38,7 +41,7 @@ Directly patches `JsonRpcClient.request` in the GitHub Copilot SDK. Used because
 
 ## How It Works
 
-1. Importing `coolhand` patches `httpx.Client.send`, `httpx.AsyncClient.send`, `requests.Session.send` (if installed), and the GitHub Copilot `JsonRpcClient` — all at the class level, so every instance created after the patch is automatically covered.
+1. Importing `coolhand` patches `httpx.Client.send`, `httpx.AsyncClient.send`, the same methods on `httpx2` (if installed), `requests.Session.send` (if installed), and the GitHub Copilot `JsonRpcClient` — all at the class level, so every instance created after the patch is automatically covered.
 2. Each patched method checks the request URL against the intercept allow-list and the exclude deny-list. Non-LLM requests pass through with zero overhead.
 3. For matching requests, the request and response data are captured (with credentials redacted from headers and URL parameters) and queued for submission.
 4. With `auto_submit=True` (the default), each interaction is handed off after capture to a bounded background dispatch queue, drained by a single worker thread that performs the actual `urllib` POST — never on your thread. See [Delivery is asynchronous and best-effort](#delivery-is-asynchronous-and-best-effort) below.
@@ -48,19 +51,51 @@ Directly patches `JsonRpcClient.request` in the GitHub Copilot SDK. Used because
 
 ## URL Matching
 
-The intercept allow-list is a list of substrings matched against the full request URL. A request is captured if the URL contains any entry in the list **and** does not contain any entry in the exclude deny-list.
+The intercept allow-list is a list of host, host/path and `/path` entries matched against the parsed request URL (see [entry syntax](./configuration.md#entry-syntax)). A request is captured if the URL matches any entry in the list, is not to a loopback host, **and** does not match any entry in the exclude deny-list.
 
-**Default allow-list** (domains and path fragments):
+**Default allow-list** (domains and path fragments). The list in the source is authoritative — print it rather than relying on a copy:
 
 ```python
-from coolhand.httpx_interceptor import DEFAULT_INTERCEPT_ADDRESSES
-# ['api.openai.com', 'api.anthropic.com', 'api.elevenlabs.io',
-#  'generativelanguage.googleapis.com', 'aiplatform.googleapis.com',
-#  'gateway.ai.cloudflare.com', 'models.github.ai',
-#  'models.inference.ai.azure.com', 'openrouter.ai', 'opencode.ai',
-#  'api.opencode.ai', ':generateContent', ':streamGenerateContent',
-#  ':predict', ':streamRawPredict']
+from coolhand import DEFAULT_INTERCEPT_ADDRESSES
+print("\n".join(DEFAULT_INTERCEPT_ADDRESSES))
 ```
+
+It covers:
+
+- **OpenAI** — `api.openai.com`
+- **Anthropic** — `api.anthropic.com`
+- **Google Gemini** — `generativelanguage.googleapis.com`, plus the `:generateContent` / `:streamGenerateContent` methods on any `googleapis.com` host
+- **Vertex AI** — `aiplatform.googleapis.com` and its regional `<region>-aiplatform.googleapis.com` hosts, dedicated endpoints on `prediction.vertexai.goog`, plus the `:predict` / `:streamRawPredict` methods on any `googleapis.com` host. Vertex AI behind your own proxy or custom domain needs its address added via `intercept_addresses`
+- **Azure** — Azure OpenAI (`openai.azure.com` / `.us` / `.cn`), Azure AI Foundry and AI Services (`services.ai.azure.com` / `.us`, `cognitiveservices.azure.com` / `.us` / `.cn`), serverless deployments (`inference.ai.azure.com`, `models.ai.azure.com`) and Azure Machine Learning managed online endpoints (`inference.ml.azure.com` / `.us`)
+- **GitHub Models** — `models.github.ai` and the legacy `models.inference.ai.azure.com` (the hosted service was retired on 2026-07-30; these addresses remain intercepted)
+- **Cloudflare AI Gateway** — `gateway.ai.cloudflare.com`
+- **OpenRouter** — `openrouter.ai`
+- **OpenCode** — `opencode.ai`, `api.opencode.ai`
+- **ElevenLabs** — `api.elevenlabs.io`
+- **DeepSeek, Mistral, Perplexity, xAI** — `api.deepseek.com`, `api.mistral.ai`, `api.perplexity.ai`, `api.x.ai`
+- **Cohere** — `/v2/chat`, `/v1/embed` and `/v2/embed` on `api.cohere.com` and `api.cohere.ai`. Path-anchored, not host-wide: other Cohere endpoints (v1 chat, rerank, tokenize, classify) are not supported, and `/v1/embed-jobs` is in the default deny-list.
+- **TypeSafe Jev (System One)** — `api.typesafe.ai/v1/systemone`
+- **Amazon Bedrock** — `bedrock-runtime.<region>.amazonaws.com` (also `.amazonaws.com.cn` and `.api.aws`) and the `bedrock-runtime-fips.<region>` variants on `amazonaws.com` and `api.aws`, any region, reached through httpx or requests-based clients (for example the Anthropic Bedrock SDK or LiteLLM). Plain boto3 uses urllib3 and is not captured, and VPC interface endpoint hosts (`vpce-….bedrock-runtime.…`) need adding via `intercept_addresses`. Streaming responses use AWS binary event-stream framing and are recorded with a `[binary]` body (and `is_streaming` false) rather than parsed.
+- **Ollama** — `:11434/api/chat`, `:11434/api/generate`, `:11434/api/embed`, `:11434/api/embeddings`. Ollama has no fixed host, so these are anchored to its default port; a bare `/api/chat` would capture unrelated apps. Requests whose host is `localhost`, a `*.localhost` name, or a loopback or unspecified address (`127.0.0.0/8`, `::1`, `0.0.0.0`, `::`) are never captured, whatever the allow-list says, so this covers remote, LAN and Docker Compose hosts such as `http://ollama:11434`. Only the native `/api/*` paths are captured, not Ollama's OpenAI-compatible `/v1/chat/completions`. For an Ollama on another port, add its address via `intercept_addresses`.
+
+The Azure AI Services and Foundry hosts are multi-service: the same hostname serves Speech, Vision, Language and Content Safety alongside model inference. Those entries are therefore anchored to the inference paths (`/openai/`, `/models/`) so non-LLM traffic on the same host is not captured. The Foundry portal domain `ai.azure.com` is deliberately not in the list.
+
+Two Azure hosts serve non-LLM workloads and still could not be path-anchored: `inference.ml.azure.com` and its Azure Government twin `inference.ml.azure.us` (Azure Machine Learning managed online endpoints). Those endpoints all score at `/score` regardless of what model is deployed behind them, so no path distinguishes an LLM deployment from a tabular or vision one. Dedicated hosts such as `openai.azure.com` need no anchor because they only ever serve model inference. If you run non-LLM models on managed online endpoints and don't want them captured, extend the deny-list (setting `exclude_api_patterns` *replaces* the defaults, so add to them rather than overwriting):
+
+```python
+from coolhand import Coolhand, DEFAULT_EXCLUDE_API_PATTERNS
+
+Coolhand(
+    exclude_api_patterns=DEFAULT_EXCLUDE_API_PATTERNS
+    + ['inference.ml.azure.com', 'inference.ml.azure.us']
+)
+```
+
+See [Excluding API Patterns](./configuration.md#excluding-api-patterns).
+
+Azure OpenAI's [On Your Data](https://learn.microsoft.com/azure/ai-foundry/openai/concepts/use-your-data) feature carries datastore credentials in the request body (`data_sources[*].parameters.authentication.key`) rather than in a header. Those are redacted before capture, scoped to the `data_sources` config subtree so message content is logged verbatim.
+
+Non-inference management traffic is filtered by the deny-list rather than the allow-list. Azure OpenAI's `/openai/files`, `/openai/batches`, `/openai/fine_tuning` and `/openai/models` paths are excluded by default, as are their v1 API twins (`/openai/v1/...`) and the equivalent Vertex AI training, dataset and pipeline paths. Fine-tuning file uploads and `client.models.list()` calls therefore aren't captured.
 
 To override: pass `intercept_addresses=[...]` to `Coolhand()`. See [Advanced Configuration](./configuration.md#custom-intercept-addresses).
 
@@ -73,6 +108,7 @@ Streaming responses (SSE / `text/event-stream` and NDJSON) are captured differen
 - The patched async send wraps the response's async iterator methods (`aiter_bytes`, `aiter_lines`, `aiter_text`, `aiter_raw`) to accumulate chunks as they stream past.
 - Capture and submission happen when the iterator is exhausted — after your code has consumed the full stream.
 - The captured body is the complete concatenated stream content, with `is_streaming: true` in the logged metadata.
+- `requests` calls are the exception: with `stream=True` (passed to `send()`/`request()` or set as `Session.stream`) or an SSE/NDJSON content type, the response is recorded with the placeholder body `"[streaming]"` and `is_streaming: true`. The body is never read, so your code keeps true streaming (no buffering, no added first-byte latency), but the response content is not captured — even for plain JSON responses.
 
 ---
 

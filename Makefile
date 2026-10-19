@@ -1,18 +1,19 @@
-.PHONY: help install test test-live lint format type-check verify check build publish clean
+.PHONY: help install test test-live live-examples lint format type-check verify check build publish clean
 
 help:
 	@echo "Available commands:"
-	@echo "  install      Install all dependencies (dev + test)"
-	@echo "  test         Run tests"
-	@echo "  test-live    Run the opt-in live tests against a real server (see below)"
-	@echo "  lint         Run ruff linter"
-	@echo "  format       Format code with ruff"
-	@echo "  type-check   Run mypy"
-	@echo "  verify       Run all CI checks (lint + format check + tests)"
-	@echo "  check        Alias for verify"
-	@echo "  build        Build package"
-	@echo "  publish      Publish package to PyPI"
-	@echo "  clean        Remove build artifacts"
+	@echo "  install       Install all dependencies (dev + test)"
+	@echo "  test          Run tests"
+	@echo "  test-live     Run the opt-in live tests against a real server (see below)"
+	@echo "  live-examples Run live provider examples (needs real keys)"
+	@echo "  lint          Run ruff linter"
+	@echo "  format        Format code with ruff"
+	@echo "  type-check    Run mypy"
+	@echo "  verify        Run all CI checks (lint + format check + tests)"
+	@echo "  check         Alias for verify"
+	@echo "  build         Build package"
+	@echo "  publish       Publish package to PyPI"
+	@echo "  clean         Remove build artifacts"
 
 install:
 	uv sync --all-extras
@@ -23,8 +24,17 @@ test:
 # Real HTTP against a real Coolhand server, no mocks. Deliberately outside `verify` — CI has
 # neither a server nor a private key. Needs both of:
 #   COOLHAND_LIVE_BASE_URL=http://127.0.0.1:3111 COOLHAND_LIVE_API_KEY=<private key> make test-live
+# The feedback link live tests also need COOLHAND_LIVE_OPTIMIZATION_ID and
+# COOLHAND_LIVE_FEEDBACK_IDS (comma-separated, 2+); see tests/live/test_feedback_links_live.py.
 test-live:
 	uv run pytest tests/live
+
+# Real OpenAI / Anthropic calls through the interceptor, confirmed delivered to Coolhand.
+# Deliberately outside `verify` — CI has no keys. Needs COOLHAND_API_KEY plus OPENAI_API_KEY
+# and/or ANTHROPIC_API_KEY (a script whose key is missing SKIPs). Re-execs under `zsh -ic`
+# to pick up keys from ~/.zshrc; COOLHAND_EXAMPLES_NO_ZSH=1 opts out. See examples/README.md.
+live-examples:
+	scripts/live-examples.sh
 
 lint:
 	uv run ruff check src tests examples

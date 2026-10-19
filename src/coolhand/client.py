@@ -14,11 +14,12 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import parse_qs, urlencode, urlparse, urlunparse
 from urllib.request import Request
 
+from ._body_limit import DEFAULT_MAX_BODY_BYTES, cap_body
 from ._config import (
     _DEFAULT_BASE_URL,
-    _WRITE_TIMEOUT_SECONDS,
     _build_opener,
     _normalize_base_url,
+    _resolve_request_timeout,
 )
 from .httpx_interceptor import DEFAULT_EXCLUDE_API_PATTERNS
 from .types import Config, RequestData, ResponseData
@@ -50,14 +51,87 @@ SENSITIVE_HEADERS = [
     "openai-api-key",
     "anthropic-api-key",
     "x-goog-api-key",
+    # Azure AI Services / APIM. Deliberately the bare suffix: "api-key" does not
+    # match "ocp-apim-subscription-key", and APIM also accepts "subscription-key".
+    "subscription-key",
     "cookie",
     "set-cookie",
     "proxy-authorization",
     "x-amz-security-token",
     "x-amz-signature",
+    "x-amz-credential",
+    # Common credential header spellings the substrings above miss ("apikey" is
+    # not a substring of "api-key"). Deliberately not bare "token"/"secret", which
+    # would also mask benign headers such as "x-ratelimit-remaining-tokens".
+    "apikey",
+    "api_key",
+    "x-auth-token",
+    "x-api-token",
+    "x-access-token",
+    "x-functions-key",
+    "authentication",
+    "bearer",
+    "x-auth",
+    "session-token",
+    "csrf-token",
 ]
 
-SENSITIVE_QUERY_PARAMS = {"key", "api_key", "apikey", "token", "access_token", "secret"}
+SENSITIVE_QUERY_PARAMS = {
+    "key",
+    "api_key",
+    "apikey",
+    "token",
+    "access_token",
+    "secret",
+    "subscription-key",
+    "api-key",
+    "password",
+    "client_secret",
+    "refresh_token",
+    "id_token",
+    # Pre-signed URL credentials (AWS SigV4 / Azure SAS / GCS signed URLs)
+    "sig",
+    "signature",
+    "x-amz-signature",
+    "x-amz-credential",
+    "x-amz-security-token",
+    "x-goog-api-key",
+    "x-goog-signature",
+    # Credential spellings the header list already treats as sensitive.
+    "x-api-key",
+    "auth",
+    "auth_token",
+    "auth-token",
+    "access-token",
+    "api-token",
+    "api_token",
+    "authorization",
+    "bearer",
+    "x-auth-token",
+    "x-access-token",
+}
+
+# Azure OpenAI "On Your Data" carries datastore credentials in the *request body*
+# (data_sources[*].parameters.authentication.key, and the legacy dataSources[*]
+# .parameters.key / .embeddingKey), where header and query-param redaction never
+# sees them. Redaction is scoped to that config subtree so message content, tool
+# schemas and other legitimate payload fields are logged verbatim.
+# Matched as separator-insensitive substrings, not exact names: Azure keeps
+# adding auth shapes (api_key, encoded_api_key, key_and_key_id, sas_token, ...)
+# and spells them snake_case in the modern `data_sources` shape but camelCase in
+# the legacy `dataSources` one. A miss here forwards a live credential, and
+# over-redacting inside this subtree is harmless — so tokens are written without
+# separators and compared against a key with its separators stripped.
+SENSITIVE_BODY_KEY_TOKENS = (
+    "key",
+    "token",
+    "secret",
+    "password",
+    "connectionstring",
+    "sas",
+)
+
+DATA_SOURCE_FIELDS = ("data_sources", "dataSources")
 
 
 def _get_default_config() -> Config:
@@ -69,6 +143,7 @@ def _get_default_config() -> Config:
         "auto_submit": True,
         "session_id": f"session_{int(time.time() * 1000)}",
         "exclude_api_patterns": list(DEFAULT_EXCLUDE_API_PATTERNS),
+        "max_body_bytes": DEFAULT_MAX_BODY_BYTES,
     }
 
 
@@ -91,24 +166,81 @@ def _sanitize_headers(headers: dict[str, str]) -> dict[str, str]:
 
 
 def _sanitize_url(url: str) -> str:
-    """Redact sensitive query parameters from URLs."""
+    """Redact sensitive query parameters from URLs.
+
+    Matched case-insensitively, like header redaction: a query param's *name*
+    has no fixed casing convention the way HTTP header names do, and a caller
+    sending ``?API_KEY=...`` instead of ``?api_key=...`` should not bypass
+    redaction — over-redacting a coincidentally-named benign param is
+    harmless, missing a differently-cased credential is not.
+    """
     try:
         parsed = urlparse(url)
-        if not parsed.query:
-            return url
-        params = parse_qs(parsed.query, keep_blank_values=True)
-        redacted = False
-        for param in SENSITIVE_QUERY_PARAMS:
-            if param in params:
-                params[param] = ["[REDACTED]"]
+        # Credentials embedded as ``https://user:pass@host/`` are dropped too.
+        host = parsed.netloc.rpartition("@")[2]
+        redacted = host != parsed.netloc
+        if redacted:
+            parsed = parsed._replace(netloc=host)
+        if parsed.query:
+            params = parse_qs(parsed.query, keep_blank_values=True)
+            query_redacted = False
+            # Every spelling is checked: "Key=a&key=b" must redact both, so do not
+            # collapse keys by their lowercased form.
+            for actual_key in params:
+                if actual_key.lower() in SENSITIVE_QUERY_PARAMS:
+                    params[actual_key] = ["[REDACTED]"]
+                    query_redacted = True
+            if query_redacted:
+                parsed = parsed._replace(query=urlencode(params, doseq=True))
                 redacted = True
-        if not redacted:
-            return url
-        return urlunparse(parsed._replace(query=urlencode(params, doseq=True)))
+        return urlunparse(parsed) if redacted else url
     except Exception:
         # Fail closed: if redaction itself breaks, drop the query string rather
         # than risk forwarding an unredacted secret in it.
         return url.split("?", 1)[0]
+
+
+def _is_sensitive_body_key(key: str) -> bool:
+    """Whether a body field name looks like it holds a credential.
+
+    Separators are stripped before matching so ``connection_string``,
+    ``connectionString`` and ``connection-string`` all resolve alike.
+    """
+    normalized = key.lower().replace("-", "").replace("_", "")
+    return any(token in normalized for token in SENSITIVE_BODY_KEY_TOKENS)
+
+
+def _redact_secret_keys(value: Any) -> Any:
+    """Recursively redact secret-bearing keys inside a config subtree."""
+    if isinstance(value, dict):
+        return {
+            k: ("[REDACTED]" if _is_sensitive_body_key(k) else _redact_secret_keys(v))
+            for k, v in value.items()
+        }
+    if isinstance(value, list):
+        return [_redact_secret_keys(v) for v in value]
+    return value
+
+
+def _sanitize_body(body: str | dict | None) -> str | dict | None:
+    """Redact credentials embedded in a parsed JSON body."""
+    if not isinstance(body, dict):
+        return body
+    present = [f for f in DATA_SOURCE_FIELDS if f in body]
+    if not present:
+        return body
+    try:
+        sanitized = dict(body)
+        for field in present:
+            sanitized[field] = _redact_secret_keys(body[field])
+        return sanitized
+    except Exception:
+        # Fail closed: if redaction itself breaks, drop the whole data-source
+        # config rather than risk forwarding an unredacted datastore key.
+        sanitized = dict(body)
+        for field in present:
+            sanitized[field] = "[REDACTED]"
+        return sanitized
 
 
 def _parse_body(body: str | bytes | dict | None) -> str | dict | None:
@@ -146,6 +278,20 @@ def _to_iso8601(timestamp: float) -> str:
     )
 
 
+def _log_response_warnings(resp: Any) -> None:
+    """Log any `warnings` the server attached to an accepted log. Never raises."""
+    try:
+        warnings = json.loads(resp.read()).get("warnings")
+        if isinstance(warnings, list):
+            for warning in warnings:
+                # %r: a newline in server text must not forge extra log lines.
+                logger.warning("Coolhand warning: %r", warning)
+    except Exception:
+        logger.debug(
+            "Could not read warnings from the submission response", exc_info=True
+        )
+
+
 class CoolhandClient:
     """Simple client for submitting interactions to Coolhand."""
 
@@ -158,6 +304,7 @@ class CoolhandClient:
         self.config["base_url"] = _normalize_base_url(
             self.config.get("base_url", _DEFAULT_BASE_URL)
         )
+        self.config["request_timeout"] = _resolve_request_timeout(self.config)
 
         self._queue: list[dict[str, Any]] = []
         self._interaction_count = 0
@@ -180,11 +327,34 @@ class CoolhandClient:
         self._state_lock = threading.Lock()
 
         if not self.config.get("silent"):
-            logging.basicConfig(level=logging.INFO)
+            self._configure_coolhand_logging()
 
         # Ensure queued interactions still get a delivery attempt on normal process
         # exit, even for a bare CoolhandClient() not wrapped by the Coolhand subclass.
         atexit.register(self.shutdown)
+
+    @staticmethod
+    def _configure_coolhand_logging() -> None:
+        """Make non-silent output visible without touching the root logger.
+
+        Only the ``coolhand`` namespace is configured. A handler is attached
+        only when neither it nor the root logger has one, so an app that has
+        already set up logging sees coolhand records through its own handlers
+        instead of getting them printed twice.
+        """
+        pkg_logger = logging.getLogger("coolhand")
+        # Only raise verbosity: leave an explicit level, or a host root level
+        # already at INFO/DEBUG, alone.
+        if (
+            pkg_logger.level == logging.NOTSET
+            and pkg_logger.getEffectiveLevel() > logging.INFO
+        ):
+            pkg_logger.setLevel(logging.INFO)
+        if not pkg_logger.handlers and not logging.getLogger().handlers:
+            handler = logging.StreamHandler()
+            # Same format logging.basicConfig used, so output is unchanged.
+            handler.setFormatter(logging.Formatter(logging.BASIC_FORMAT))
+            pkg_logger.addHandler(handler)
 
     @property
     def session_id(self) -> str:
@@ -204,6 +374,8 @@ class CoolhandClient:
         )
         duration_seconds = response.get("duration", 0.0) if response else 0.0
 
+        max_body_bytes = self.config.get("max_body_bytes")
+
         # Build flat interaction data (matching Ruby/Node format)
         interaction = {
             "id": str(uuid.uuid4()),
@@ -211,16 +383,31 @@ class CoolhandClient:
             "method": request.get("method", "").lower(),
             "url": _sanitize_url(request.get("url", "")),
             "headers": _sanitize_headers(request.get("headers", {})),
-            "request_body": _parse_body(request.get("body")),
+            "request_body": cap_body(
+                _sanitize_body(_parse_body(request.get("body"))), max_body_bytes
+            ),
             "response_headers": (
                 _sanitize_headers(response.get("headers", {})) if response else {}
             ),
-            "response_body": _parse_body(response.get("body")) if response else None,
+            "response_body": (
+                cap_body(
+                    _sanitize_body(_parse_body(response.get("body"))),
+                    None if response.get("body_truncated") else max_body_bytes,
+                )
+                if response
+                else None
+            ),
             "status_code": response.get("status_code", 0) if response else 0,
             "duration_ms": round(duration_seconds * 1000, 2),
             "completed_at": _to_iso8601(res_timestamp),
             "is_streaming": response.get("is_streaming", False) if response else False,
         }
+
+        # The declaration was snapshotted on the caller's context when the call was
+        # made. It is not part of raw_request: _send_one lifts it out to sit beside it.
+        declared = request.get("declared")
+        if declared:
+            interaction["_declared"] = declared
 
         # Debug output when not silent
         if not self.config.get("silent"):
@@ -247,17 +434,23 @@ class CoolhandClient:
     def _send_one(self, interaction: dict[str, Any]) -> bool:
         """POST a single interaction to the Coolhand API. Blocking; runs on the
         worker thread (or, in tests, is called directly)."""
-        api_key = self.config.get("api_key")
+        # Stripped: a trailing newline (common in env files / k8s secrets) makes
+        # http.client reject the header, and the resulting ValueError message
+        # contains the full key.
+        api_key = (self.config.get("api_key") or "").strip()
         if not api_key:
             return False
 
         try:
-            payload = {
-                "llm_request_log": {
-                    "raw_request": interaction,
-                    "collector": f"coolhand-python-{__version__}-auto-monitor",
-                }
+            interaction = dict(interaction)
+            declared = interaction.pop("_declared", None)
+            llm_request_log: dict[str, Any] = {
+                "raw_request": interaction,
+                "collector": f"coolhand-python-{__version__}-auto-monitor",
             }
+            if declared:
+                llm_request_log["declared"] = declared
+            payload = {"llm_request_log": llm_request_log}
 
             request = Request(
                 url=f"{self.config['base_url']}/api/v2/llm_request_logs",
@@ -270,8 +463,12 @@ class CoolhandClient:
                 method="POST",
             )
 
-            with _opener.open(request, timeout=_WRITE_TIMEOUT_SECONDS) as resp:
+            with _opener.open(request, timeout=self.config["request_timeout"]) as resp:
                 if 200 <= resp.status < 300:
+                    if declared:
+                        # Warnings (e.g. a declaration ignored over the public-key
+                        # cap) only concern logs that carried a declaration.
+                        _log_response_warnings(resp)
                     if not self.config.get("silent"):
                         method = interaction.get("method", "unknown")
                         url = interaction.get("url", "unknown")
@@ -289,7 +486,11 @@ class CoolhandClient:
             logger.warning(f"Failed to submit interaction: {e}")
             return False
         except Exception as e:
-            logger.warning(f"Unexpected error submitting interaction: {e}")
+            # Type only: the message of a malformed-header ValueError embeds the
+            # offending value, which can be the API key.
+            logger.warning(
+                "Unexpected error submitting interaction: %s", type(e).__name__
+            )
             return False
 
     def _ensure_worker(self) -> bool:
@@ -470,8 +671,7 @@ class CoolhandClient:
         try:
             from . import httpx_interceptor
 
-            if httpx_interceptor.is_patched():
-                patched_libs += ["httpx.Client.send", "httpx.AsyncClient.send"]
+            patched_libs += httpx_interceptor.patched_targets()
         except Exception:
             pass
         try:
@@ -514,7 +714,7 @@ class CoolhandClient:
                 #   instant.
                 # - Under-counts: qsize() stops counting an item the moment
                 #   the worker dequeues it, so while that item's POST is
-                #   actually in flight (up to _WRITE_TIMEOUT_SECONDS) it's
+                #   actually in flight (up to request_timeout) it's
                 #   reflected nowhere — polling for `pending_delivery == 0`
                 #   is not a reliable "everything is fully delivered"
                 #   signal on its own; shutdown() (which actually waits) is.

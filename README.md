@@ -2,7 +2,7 @@
 
 [![PyPI version](https://badge.fury.io/py/coolhand.svg)](https://badge.fury.io/py/coolhand)
 
-Monitor and log LLM API calls from OpenAI, Anthropic, Google Gemini, GitHub Copilot, Vertex AI, OpenRouter, OpenCode, Cloudflare AI Gateway, ElevenLabs, and more — including pydantic-ai and Dramatiq — to the Coolhand analytics platform.
+Monitor and log LLM API calls from OpenAI, Anthropic, Google Gemini, GitHub Copilot, Vertex AI, OpenRouter, OpenCode, Cloudflare AI Gateway, ElevenLabs, DeepSeek, Mistral, Perplexity, xAI, Cohere, Amazon Bedrock, Ollama, and more — including pydantic-ai and Dramatiq — to the Coolhand analytics platform.
 
 > **Python 3.8 and 3.9 support deprecated**: As of v0.4.0, coolhand requires Python 3.10 or later. Python 3.8 reached end-of-life in October 2024 and 3.9 in October 2025. If you are on an older Python version, pin to `coolhand<0.4.0`.
 
@@ -33,7 +33,7 @@ import coolhand  # Auto-initializes and starts monitoring
 # ✅ Anthropic API calls
 # ✅ Google Gemini API calls
 # ✅ GitHub Copilot SDK calls
-# ✅ ANY library making AI API calls via httpx
+# ✅ ANY library making AI API calls via httpx or httpx2
 
 # Your existing code works unchanged:
 from openai import OpenAI
@@ -47,7 +47,7 @@ response = client.chat.completions.create(
 
 **Why Automatic Monitoring:**
 - **Zero refactoring** - No code changes to existing services
-- **Complete coverage** - Monitors all AI libraries using httpx automatically
+- **Complete coverage** - Monitors all AI libraries using httpx or httpx2 automatically
 - **Security built-in** - Automatic credential sanitization
 - **Performance optimized** - Negligible overhead via async logging
 - **Future-proof** - Automatically captures new AI calls added by your team
@@ -73,7 +73,7 @@ coolhand_client = Coolhand(
 )
 ```
 
-For excluding noisy endpoints (health checks, batch jobs) or pointing the SDK at a self-hosted backend, see [Advanced Configuration](./docs/configuration.md).
+For excluding noisy endpoints (health checks, batch jobs), pointing the SDK at a self-hosted backend, or raising the Coolhand API request timeout (`request_timeout`, default 30 seconds), see [Advanced Configuration](./docs/configuration.md).
 
 ## Usage Examples
 
@@ -157,16 +157,18 @@ The monitor captures:
 - **Timing**: Request timestamp, response timestamp, duration
 - **LLM-Specific**: Model used, token counts, streaming status
 
-Headers containing API keys are automatically sanitized for security.
+Headers containing API keys, sensitive URL query parameters, and datastore credentials embedded in request bodies (such as Azure OpenAI On Your Data) are automatically redacted. See [Supported Libraries](./docs/supported-libraries.md) for the exact scope.
 
 ## Supported Libraries
 
-Coolhand works with any library that uses httpx, requests, or the GitHub Copilot SDK:
+Coolhand works with any library that uses httpx, httpx2, requests, or the GitHub Copilot SDK:
 
 - OpenAI Python SDK
 - Anthropic Python SDK
 - Google Gemini (`google-generativeai` / `google-genai`)
-- Azure AI Inference (`azure-ai-inference`)
+- Azure OpenAI (including Azure Government and Azure China endpoints)
+- Azure AI Foundry / Azure AI Inference (`azure-ai-inference`)
+- Azure Machine Learning managed online endpoints
 - GitHub Models
 - GitHub Copilot SDK
 - Vertex AI
@@ -174,14 +176,22 @@ Coolhand works with any library that uses httpx, requests, or the GitHub Copilot
 - OpenRouter
 - OpenCode
 - ElevenLabs
+- DeepSeek
+- Mistral
+- Perplexity
+- xAI
+- Cohere (v2 chat, v1/v2 embed)
+- Amazon Bedrock
+- TypeSafe Jev (System One)
+- Ollama (non-localhost hosts on the default port, e.g. `http://ollama:11434`)
 - pydantic-ai
-- Any other library using httpx or requests
+- Any other library using httpx, httpx2 or requests
 
 See [Supported Libraries](./docs/supported-libraries.md) for the full interception mechanism breakdown and streaming details.
 
 ## How It Works
 
-Importing `coolhand` patches `httpx`, `requests`, and the GitHub Copilot `JsonRpcClient` at the class level. Requests to LLM APIs are intercepted, credentials are redacted, and data is submitted to Coolhand. Non-LLM requests pass through unchanged.
+Importing `coolhand` patches `httpx`, `httpx2`, `requests`, and the GitHub Copilot `JsonRpcClient` at the class level. Requests to LLM APIs are intercepted, credentials are redacted, and data is submitted to Coolhand. Non-LLM requests pass through unchanged.
 
 ## Integrations
 
@@ -240,6 +250,42 @@ These are read methods, so they **raise** `CoolhandAPIError` (carrying the HTTP 
 
 For the full filter reference, pagination, and error handling, see [Reading Templates](./docs/templates.md).
 
+## Declaring Workloads and Templates
+
+If you already know which workload and template an LLM call belongs to, declare it with `with_context` and the server skips template matching for those calls:
+
+```python
+from coolhand import with_context
+
+with with_context(workload={"key": "Parser#call"}, template={"key": "Parser#call/squish:L2"}):
+    client.chat.completions.create(...)
+```
+
+Invalid declarations raise `ValueError` before your code runs. `WorkloadService.upsert` and `TemplateService.upsert` create or rename workloads and templates explicitly (private API key). See [Declared Workloads and Templates](./docs/declared-workloads.md).
+
+## Reading Workloads and Cost Metrics
+
+`search_workloads` lists your workloads, and `include_metrics` adds the dashboard's cost and performance numbers to workloads and templates, over a rolling `days_back` window or an explicit `since`/`until` one. `search_logs` returns a per-log `cost` and can filter and sort on it. All need your **private** API key:
+
+```python
+from datetime import datetime, timezone
+
+workloads = ch.search_workloads(include_metrics=True, days_back=30)['workloads']
+workloads[0]['metrics']['total_cost']
+
+logs = ch.search_logs(
+    since=datetime(2026, 9, 1, tzinfo=timezone.utc),
+    min_cost=0.5,
+    order='cost_desc',
+)['logs']
+```
+
+See [Reading Workloads](./docs/workloads.md) for the workload reference, [Reading Templates](./docs/templates.md#metrics) for the `metrics` fields and window rules, and [Reading Logs](./docs/logs.md) for log search and `get_log`.
+
+## Linking Feedback to an Optimization
+
+`link_feedback`, `bulk_link_feedback` (batches of 100) and `unlink_feedback` attach feedback to an optimization as evidence. Private API key required; errors raise `CoolhandAPIError`. See [Linking Feedback](./docs/feedback-links.md).
+
 ## Troubleshooting
 
 ### Enable Debug Output
@@ -259,6 +305,20 @@ Or via environment variable:
 export COOLHAND_SILENT=false
 ```
 
+### Verify Interception in Your Tests
+
+A client that captured a reference to `httpx.Client.send`, `httpx2.Client.send` or `requests.Session.send` before `import coolhand` is silently not monitored. Catch it in your own tests:
+
+```python
+from coolhand.testing import assert_interception_occurred, capture_interception_snapshot
+
+before = capture_interception_snapshot()
+client.chat.completions.create(...)
+assert_interception_occurred(before, "openai client bypassed Coolhand")
+```
+
+See [Verifying Interception in Your Tests](./docs/testing.md) for what it catches and its limits.
+
 ## API Key
 
 **Sign up for free** at [coolhandlabs.com](https://coolhandlabs.com/) to get your API key and start monitoring your LLM usage.
@@ -272,6 +332,7 @@ export COOLHAND_SILENT=false
 
 - API keys in request headers are automatically redacted
 - Sensitive URL query parameters (`key`, `api_key`, `token`, etc.) are automatically redacted
+- Datastore credentials embedded in request bodies (e.g. Azure OpenAI On Your Data) are automatically redacted
 - No sensitive data is exposed in logs
 - All data is sent via HTTPS to Coolhand servers
 
@@ -280,8 +341,14 @@ export COOLHAND_SILENT=false
 - [Advanced Configuration](./docs/configuration.md) — exclude patterns, self-hosted deployments, custom intercept addresses
 - [Feedback API](./docs/feedback.md) — full field reference, matching strategies, sentiment values, async usage
 - [Supported Libraries](./docs/supported-libraries.md) — interception mechanisms, streaming, thread/process safety, delivery model
+- [Verifying Interception in Your Tests](./docs/testing.md) — assert in your own tests/CI that a request was actually intercepted
 - [Dramatiq + pydantic-ai](./docs/dramatiq.md) — task queue integration guide, known gaps, workarounds
+- [Linking Feedback to an Optimization](./docs/feedback-links.md) — link one or many feedbacks to an optimization as evidence, using the private API key
 - [Reading Templates](./docs/templates.md) — search LLM request templates and fetch a single one, prompt patterns included, using the private API key
+- [Declared Workloads and Templates](./docs/declared-workloads.md) — declare the workload/template of captured calls with `with_context`, and create or rename them with `upsert` (private API key)
+- [Examples and live smoke tests](./examples/README.md) — runnable examples, plus `make live-examples` to validate OpenAI and Anthropic calls against real keys
+- [Reading Workloads](./docs/workloads.md) — list workloads with cost and performance metrics over a rolling or explicit window
+- [Reading Logs](./docs/logs.md) — search logs by cost, time window and more, and fetch one log's content and cost breakdown
 
 ## Related Packages
 

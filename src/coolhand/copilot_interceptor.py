@@ -1,5 +1,6 @@
 """JSON-RPC interceptor for github-copilot-sdk — patches JsonRpcClient."""
 
+import asyncio
 import itertools
 import logging
 import threading
@@ -7,11 +8,17 @@ import time
 from collections.abc import Callable
 from typing import Any
 
+from .client import _is_sensitive_body_key, _sanitize_url
+from .declared_context import attach_snapshot
 from .types import RequestData, ResponseData
 
 logger = logging.getLogger(__name__)
 
 COPILOT_INTERCEPTOR_PENDING_TTL_SECONDS = 300
+# How long to wait for an assistant.message notification after the session.send
+# RPC ack before logging the interaction as an error.  Covers cases where the
+# copilot model rejects or drops the request without emitting a notification.
+COPILOT_INTERCEPTOR_FALLBACK_TIMEOUT = 60.0
 
 _patched = False
 _original_request: Callable | None = None
@@ -67,6 +74,54 @@ def _promote_system_prompt(body: dict[str, Any]) -> None:
         body["system"] = content
 
 
+# session.create params carry credentials in the *body* — a top-level gitHubToken,
+# BYOK provider apiKey/bearerToken/headers, and MCP server env/headers — which are
+# merged into the captured session.send body and would reach Coolhand in cleartext.
+# Redaction is scoped to these fields so prompts and other payload stay verbatim.
+_SESSION_SECRET_FIELDS = ("gitHubToken",)
+_SESSION_CONFIG_FIELDS = ("provider", "mcpServers", "customAgents")
+# Maps of credential-bearing values whose names (e.g. "Authorization") don't look
+# sensitive, so every value in them is masked.
+_SECRET_VALUE_MAPS = ("headers", "env", "environment")
+_URL_FIELDS = ("url", "baseUrl")
+
+
+def _redact_session_config(value: Any) -> Any:
+    """Recursively redact credentials inside a Copilot session config subtree."""
+    if isinstance(value, dict):
+        redacted: dict[str, Any] = {}
+        for k, v in value.items():
+            if k in _SECRET_VALUE_MAPS and isinstance(v, dict):
+                redacted[k] = {name: "[REDACTED]" for name in v}
+            elif _is_sensitive_body_key(k):
+                redacted[k] = "[REDACTED]"
+            elif k in _URL_FIELDS and isinstance(v, str):
+                redacted[k] = _sanitize_url(v)
+            else:
+                redacted[k] = _redact_session_config(v)
+        return redacted
+    if isinstance(value, list):
+        return [_redact_session_config(v) for v in value]
+    return value
+
+
+def _sanitize_session_body(body: dict[str, Any]) -> dict[str, Any]:
+    """Redact credentials from a merged session.create/session.send body."""
+    sanitized = dict(body)
+    for field in _SESSION_SECRET_FIELDS:
+        if field in sanitized:
+            sanitized[field] = "[REDACTED]"
+    for field in _SESSION_CONFIG_FIELDS:
+        if field in sanitized:
+            try:
+                sanitized[field] = _redact_session_config(sanitized[field])
+            except Exception:
+                # Fail closed, like client._sanitize_body: drop the whole subtree
+                # rather than risk forwarding an unredacted credential.
+                sanitized[field] = "[REDACTED]"
+    return sanitized
+
+
 def _remove_from_pre_pending(session_id: str | None, entry: dict[str, Any]) -> bool:
     """Remove entry from _pre_pending by object identity. Returns True if removed.
 
@@ -88,17 +143,18 @@ def _sweep_stale() -> None:
     Cleans _pre_pending, _session_params, _session_models, and _session_usage.
     Runs unconditionally on every _handle_message call so entries are cleaned up
     even when a session terminates without emitting another assistant.message.
+    Stale pre-pending entries are logged via the handler so requests that never
+    received an assistant.message notification are not silently dropped.
     """
     now = time.time()
+    stale_entries: list[dict[str, Any]] = []
     with _lock:
-        stale_pre_sessions = []
         for sid, queue in list(_pre_pending.items()):
             while (
                 queue
                 and now - queue[0]["start"] > COPILOT_INTERCEPTOR_PENDING_TTL_SECONDS
             ):
-                queue.pop(0)
-                stale_pre_sessions.append(sid)
+                stale_entries.append(queue.pop(0))
             if not queue:
                 del _pre_pending[sid]
 
@@ -126,15 +182,72 @@ def _sweep_stale() -> None:
         for k in stale_usage:
             del _session_usage[k]
 
-    if stale_pre_sessions or stale_sessions or stale_models or stale_usage:
+    for entry in stale_entries:
+        if not entry.get("logged"):
+            entry["logged"] = True
+            _log_no_response(entry)
+
+    if stale_entries or stale_sessions or stale_models or stale_usage:
         logger.debug(
             "Copilot interceptor: evicted %d stale pre-pending,"
             " %d stale session entries, %d stale model entries, %d stale usage entries",
-            len(stale_pre_sessions),
+            len(stale_entries),
             len(stale_sessions),
             len(stale_models),
             len(stale_usage),
         )
+
+
+def _log_no_response(entry: dict[str, Any]) -> None:
+    """Report a pre-pending entry whose assistant.message never (yet) arrived.
+
+    Shared by _sweep_stale and _fallback_log so the error string and
+    handler-call/exception-guard aren't duplicated between the two callers.
+    """
+    if not _handler:
+        return
+    try:
+        _handler(entry["req_data"], None, "no assistant.message event received")
+    except Exception as e:
+        logger.warning("Copilot handler error on stale entry: %s", e)
+
+
+def _cancel_timer(entry: dict[str, Any]) -> None:
+    """Best-effort cancellation of a pre-pending entry's fallback timer.
+
+    Uses call_soon_threadsafe because the caller (patched_handle_message, or
+    unpatch()) may run on the SDK's reader thread rather than the event-loop
+    thread that owns the TimerHandle. A closed loop (RuntimeError) is treated
+    as a no-op — if the fallback still fires, _fallback_log's identity/logged
+    check makes it harmless.
+    """
+    timer = entry.get("timer")
+    timer_loop = entry.get("loop")
+    if timer is not None and timer_loop is not None:
+        try:
+            timer_loop.call_soon_threadsafe(timer.cancel)
+        except RuntimeError:
+            pass
+
+
+def _fallback_log(session_id: str | None, entry: dict[str, Any]) -> None:
+    """Scheduled by call_later after COPILOT_INTERCEPTOR_FALLBACK_TIMEOUT seconds.
+
+    Unlike _sweep_stale, this does NOT evict the entry from _pre_pending: the
+    real assistant.message may still be a legitimately slow response that
+    arrives after this fires, and _handle_message must still be able to find
+    and deliver it (see the "assistant.message" branch below, which cancels
+    this entry's timer and pops it normally whenever it does arrive). This
+    only reports the not-yet-answered request as an error; entry["logged"]
+    guards against _sweep_stale reporting the same entry again later.
+    """
+    with _lock:
+        queue = _pre_pending.get(session_id, [])
+        still_pending = any(e is entry for e in queue) and not entry.get("logged")
+        if still_pending:
+            entry["logged"] = True
+    if still_pending:
+        _log_no_response(entry)
 
 
 def set_handler(
@@ -228,21 +341,31 @@ def patch() -> bool:
         session_id = p.get("sessionId")
         with _lock:
             session_ctx = dict(_session_params.get(session_id, {}).get("params", {}))
-        body = {**session_ctx, **dict(p)}
+        body = {
+            k: v for k, v in {**session_ctx, **dict(p)}.items() if k != "requestHeaders"
+        }
         _promote_system_prompt(body)
         req_data: RequestData = {
             "method": "POST",
             "url": "copilot://session.send",
             "headers": p.get("requestHeaders") or {},
-            "body": body,
+            # requestHeaders is already carried (and masked) in "headers"; leaving
+            # it in the body would ship Authorization/X-API-Key values unmasked.
+            "body": _sanitize_session_body(body),
             "timestamp": start,
         }
+        attach_snapshot(req_data)
 
         # Push to _pre_pending BEFORE the await.  The reader thread can call
         # _handle_message synchronously between resolving the send-response
         # Future and the event loop scheduling this coroutine's resumption.
         # Storing here ensures _handle_message finds the entry at that moment.
-        entry: dict[str, Any] = {"req_data": req_data, "start": start}
+        entry: dict[str, Any] = {
+            "req_data": req_data,
+            "start": start,
+            "timer": None,
+            "logged": False,
+        }
         with _lock:
             _pre_pending.setdefault(session_id, []).append(entry)
 
@@ -252,8 +375,33 @@ def patch() -> bool:
             with _lock:
                 still_owned = _remove_from_pre_pending(session_id, entry)
             if still_owned:
-                _handler(req_data, None, str(e))
+                try:
+                    _handler(req_data, None, str(e))
+                except Exception:
+                    logger.debug("Copilot handler error on error path", exc_info=True)
             raise
+
+        # Schedule a fallback in case assistant.message never arrives (e.g. the
+        # model rejected the request silently) — unless the reader thread
+        # already delivered it via _handle_message while this coroutine was
+        # suspended in the await above (the same pre-existing race the
+        # exception branch above guards against with _remove_from_pre_pending).
+        with _lock:
+            still_pending = any(e is entry for e in _pre_pending.get(session_id, []))
+        if still_pending:
+            # patched_request only runs as an awaited coroutine, so a running
+            # loop is always present here. The loop is stashed on the entry
+            # too, since _handle_message may cancel the timer from the SDK's
+            # reader thread and TimerHandle.cancel() is only safe to call from
+            # the loop's own thread.
+            loop = asyncio.get_running_loop()
+            entry["loop"] = loop
+            entry["timer"] = loop.call_later(
+                COPILOT_INTERCEPTOR_FALLBACK_TIMEOUT,
+                _fallback_log,
+                session_id,
+                entry,
+            )
 
         return result
 
@@ -261,7 +409,10 @@ def patch() -> bool:
         _original_handle_message(self, message)
         if not _handler:
             return
-        _sweep_stale()
+        try:
+            _sweep_stale()
+        except Exception:
+            logger.debug("Copilot stale sweep failed", exc_info=True)
         try:
             if (
                 "method" in message
@@ -314,6 +465,7 @@ def patch() -> bool:
                             "data", {}
                         )
                     if pending:
+                        _cancel_timer(pending)
                         end = time.time()
                         res_data: ResponseData = {
                             "status_code": 200,
@@ -364,6 +516,9 @@ def unpatch() -> None:
             JsonRpcClient._handle_message = _original_handle_message
 
     with _lock:
+        for queue in _pre_pending.values():
+            for entry in queue:
+                _cancel_timer(entry)
         _pre_pending.clear()
         _session_params.clear()
         _session_models.clear()

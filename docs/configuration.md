@@ -44,6 +44,25 @@ These are excluded because they're management operations — Vertex AI training,
 
 ---
 
+## Limiting Captured Body Size
+
+Request and response bodies are captured in full by default, which can be large when prompts carry base64 images or audio. To keep memory bounded, each captured body is capped at `max_body_bytes` (default **1 MiB**, measured in UTF-8 bytes):
+
+```python
+from coolhand import Coolhand
+
+coolhand_client = Coolhand(
+    api_key='your-api-key',
+    max_body_bytes=256 * 1024,  # 256 KiB
+)
+```
+
+A body over the limit is cut to the first `max_body_bytes` bytes and ends with a marker, for example `[truncated: 5242880 bytes, kept first 1048576]`, where the first number is the original size. It is sent as a plain string rather than parsed JSON, so it will not be structured in the Coolhand dashboard. The cap applies to request bodies, response bodies and streaming responses (the stream accumulator stops buffering once the limit is reached). Credentials in Azure OpenAI `data_sources` are still redacted before truncation.
+
+Set `max_body_bytes=None` (or `0`) to disable the cap and log bodies in full.
+
+---
+
 ## Self-Hosted Deployments
 
 If you run your own Coolhand-compatible backend (e.g. for compliance or data-residency requirements), point the SDK at your host with `base_url`:

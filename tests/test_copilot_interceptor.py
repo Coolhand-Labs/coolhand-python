@@ -276,6 +276,34 @@ class TestRequestInterception:
         assert len(pushed_before_await[0]) == 1
 
     @pytest.mark.asyncio
+    async def test_snapshots_declared_context_at_request_time(self, handler):
+        from coolhand import copilot_interceptor, with_context
+
+        cls = _inject_fake_sdk()
+        copilot_interceptor.set_handler(handler)
+        copilot_interceptor.patch()
+
+        instance = cls()
+        with with_context(workload={"key": "Copilot#chat"}):
+            await instance.request("session.send", {"sessionId": "s9", "prompt": "hi"})
+
+        # The entry outlives the block; its declaration must not depend on it.
+        entry = copilot_interceptor._pre_pending["s9"][0]
+        assert entry["req_data"]["declared"] == {"workload": {"key": "Copilot#chat"}}
+
+    @pytest.mark.asyncio
+    async def test_no_declared_key_without_context(self, handler):
+        from coolhand import copilot_interceptor
+
+        cls = _inject_fake_sdk()
+        copilot_interceptor.set_handler(handler)
+        copilot_interceptor.patch()
+
+        await cls().request("session.send", {"sessionId": "s8", "prompt": "hi"})
+
+        assert "declared" not in copilot_interceptor._pre_pending["s8"][0]["req_data"]
+
+    @pytest.mark.asyncio
     async def test_stores_pending_entry_for_session_send(self, handler):
         from coolhand import copilot_interceptor
 

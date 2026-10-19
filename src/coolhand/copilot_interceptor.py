@@ -8,6 +8,7 @@ from collections.abc import Callable
 from typing import Any
 
 from .client import _is_sensitive_body_key, _sanitize_url
+from .declared_context import attach_snapshot
 from .types import RequestData, ResponseData
 
 logger = logging.getLogger(__name__)
@@ -316,6 +317,7 @@ def patch() -> bool:
             ),
             "timestamp": start,
         }
+        attach_snapshot(req_data)
 
         # Push to _pre_pending BEFORE the await.  The reader thread can call
         # _handle_message synchronously between resolving the send-response

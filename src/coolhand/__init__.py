@@ -12,6 +12,7 @@ import logging
 
 from . import copilot_interceptor, httpx_interceptor
 from .client import CoolhandClient, get_instance, initialize, set_instance
+from .declared_context import with_context
 from .feedback_link_service import FeedbackLinkService
 from .feedback_service import (
     FeedbackService,
@@ -36,6 +37,7 @@ from .types import (
     SearchTemplatesResponse,
 )
 from .version import __version__
+from .workload_service import WorkloadService
 
 logger = logging.getLogger(__name__)
 
@@ -52,6 +54,7 @@ class Coolhand(CoolhandClient):
         # Initialize feedback and template services with same config
         self._feedback_service = FeedbackService(self.config)
         self._template_service = TemplateService(self.config)
+        self._workload_service = WorkloadService(self.config)
         self._feedback_link_service = FeedbackLinkService(self.config)
 
         # Start monitoring
@@ -131,6 +134,11 @@ class Coolhand(CoolhandClient):
     def template_service(self) -> TemplateService:
         """Get the template service instance."""
         return self._template_service
+
+    @property
+    def workload_service(self) -> WorkloadService:
+        """Get the workload service instance."""
+        return self._workload_service
 
     def search_templates(
         self,
@@ -317,6 +325,8 @@ __all__ = [
     "SearchTemplatesResponse",
     "TemplateService",
     "get_template_service",
+    "WorkloadService",
+    "with_context",
     "initialize",
     "get_instance",
     "get_global_instance",

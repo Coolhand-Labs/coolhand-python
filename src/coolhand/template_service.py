@@ -1,22 +1,26 @@
-"""Read-only access to the LLM request template endpoints.
+"""Read and upsert access to the LLM request template endpoints.
 
 Wraps `GET /api/v2/llm_request_templates` (list + search) and
 `GET /api/v2/llm_request_templates/{id}` (show). Both require the client's **private**
 API key — the public key is write-only on this API and is rejected exactly like an
 invalid one.
 
-Template *mutation* stays on the MCP surface: this REST surface is read-only, with no
-create/update/deprecate and no version-history sub-resource.
+Beyond those reads, `upsert` wraps `PUT /api/v2/llm_request_templates/by_key/{key}`
+(find-or-create by a stable key). Deprecating a template and its version history stay on
+the MCP surface.
 """
 
+import asyncio
+import http.client
 import json
 import logging
 import os
+from collections.abc import Mapping
 from email.message import Message
 from typing import Any, cast
 from urllib.error import HTTPError, URLError
 from urllib.parse import quote, urlencode
-from urllib.request import Request
+from urllib.request import OpenerDirector, Request
 
 from ._config import (
     _DEFAULT_BASE_URL,
@@ -25,6 +29,7 @@ from ._config import (
     _normalize_base_url,
     _resolve_request_timeout,
 )
+from .declared_context import optional_reporter, optional_text, validate_key
 from .types import (
     Config,
     LlmRequestTemplateDetail,
@@ -152,6 +157,88 @@ def _error_body(error: HTTPError) -> str:
         return error.read().decode("utf-8", errors="replace")[:_MAX_ERROR_BODY_CHARS]
     except Exception:
         return ""
+
+
+def _by_key_url(base_url: str, endpoint: str, key: str, label: str) -> str:
+    """Build `<base><endpoint>/by_key/<key>`; the route is a glob over the key.
+
+    Each `/`-separated segment is percent-encoded (`#` -> `%23`, `:` -> `%3A`) and the
+    segments are rejoined with a literal `/`, which the glob needs to see. Blank keys
+    and `.`, `..` or empty segments are rejected up front: `quote` leaves dots alone, so
+    they would be resolved away as path segments and retarget the request.
+    """
+    key = validate_key(key, f"{label}: key")
+    segments = key.split("/")
+    if any(segment in {".", ".."} for segment in segments):
+        raise ValueError(f"{label}: key must not contain '.' or '..' path segments")
+    encoded = "/".join(quote(segment, safe="") for segment in segments)
+    return f"{base_url}{endpoint}/by_key/{encoded}"
+
+
+def _put_json(
+    opener: OpenerDirector,
+    url: str,
+    payload: dict[str, Any],
+    *,
+    api_key: str,
+    timeout: float,
+    label: str,
+) -> tuple[int, dict[str, Any]]:
+    """PUT `payload` as JSON; return `(status, body)` or raise `CoolhandAPIError`."""
+    request = Request(
+        url=url,
+        data=json.dumps(payload).encode("utf-8"),
+        headers={
+            "Accept": "application/json",
+            "Content-Type": "application/json",
+            "X-API-Key": api_key,
+            "User-Agent": f"coolhand-python/{__version__}",
+        },
+        method="PUT",
+    )
+    try:
+        with opener.open(request, timeout=timeout) as response:
+            status = response.status
+            raw = response.read().decode("utf-8")
+    except HTTPError as error:
+        raise CoolhandAPIError(
+            f"{label} request failed ({error.code}): {_error_body(error)}",
+            status=error.code,
+        ) from error
+    except URLError as error:
+        raise CoolhandAPIError(f"{label} request failed: {error.reason}") from error
+    except (OSError, http.client.HTTPException, UnicodeDecodeError) as error:
+        # A read timeout, reset, truncated or undecodable body escapes `open` unwrapped.
+        raise CoolhandAPIError(f"{label} request failed: {error}") from error
+
+    try:
+        body = json.loads(raw)
+    except ValueError as error:
+        raise CoolhandAPIError(
+            f"{label} response was not valid JSON: {raw[:_MAX_ERROR_BODY_CHARS]}",
+            status=status,
+        ) from error
+    if not isinstance(body, dict):
+        raise CoolhandAPIError(
+            f"{label} response was not a JSON object: {raw[:_MAX_ERROR_BODY_CHARS]}",
+            status=status,
+        )
+    return status, body
+
+
+def _flatten_workload(workload: Any, label: str) -> dict[str, str]:
+    """Flatten `{"id": ...}` / `{"key": ...}` to `workload_id` / `workload_key`."""
+    if not isinstance(workload, Mapping):
+        raise ValueError(f"{label}: workload must be a mapping with an 'id' or a 'key'")
+    identifier = workload.get("id")
+    if identifier is not None:
+        if not isinstance(identifier, str):
+            raise ValueError(f"{label}: workload.id must be a string")
+        if identifier.strip():
+            return {"workload_id": identifier.strip()}
+    if workload.get("key") is not None:
+        return {"workload_key": validate_key(workload["key"], f"{label}: workload.key")}
+    raise ValueError(f"{label}: workload needs an 'id' or a 'key'")
 
 
 class TemplateService:
@@ -334,6 +421,76 @@ class TemplateService:
         template = cast(LlmRequestTemplateDetail, body)
         self._log(f"Fetched template {template.get('id', 'unknown')}")
         return template
+
+    def upsert(
+        self,
+        key: str,
+        *,
+        workload: Mapping[str, Any] | None = None,
+        name: str | None = None,
+        reporter: str | None = None,
+    ) -> dict[str, Any]:
+        """Create or update a template by its stable key. Requires the **private** key.
+
+        Only the fields you pass are sent, so an update changes only those. The key is
+        immutable; a new `name` renames the template.
+
+        Args:
+            key: Stable template key, e.g. `"Parser#call/squish:L2"` (<= 255 chars, no
+                control characters, no leading/trailing whitespace or `/`, no `//`).
+            workload: The owning workload, as `{"id": ...}` or `{"key": ...}`. Needed
+                when the template is created; sent flat as `workload_id` /
+                `workload_key`. If both are given, `id` is used.
+            name: Display name.
+            reporter: Name of the system making the declaration.
+
+        Returns:
+            The template record as returned by the server. `201` means it was created
+            and `200` that it was updated; both come back as the record itself.
+
+        Raises:
+            ValueError: If `key` is invalid or has a `.`/`..`/empty path segment, or
+                `workload` is not a mapping with a non-blank `id` or `key`. Raised
+                before any request is made.
+            CoolhandAPIError: On a non-2xx response, with `status` set — `401` for a
+                missing/invalid/public key, and `422` for a taken name, a missing
+                workload on create, a different workload for an existing template, or a
+                key held by a deprecated template.
+        """
+        label = "upsert_template"
+        url = _by_key_url(self.config["base_url"], TEMPLATES_ENDPOINT, key, label)
+
+        payload: dict[str, Any] = {}
+        if workload is not None:
+            payload.update(_flatten_workload(workload, label))
+        if name is not None:
+            payload["name"] = optional_text(name, f"{label}: name")
+        if reporter is not None:
+            payload["reporter"] = optional_reporter(reporter, f"{label}: reporter")
+
+        status, body = _put_json(
+            self._opener,
+            url,
+            payload,
+            api_key=self.api_key,
+            timeout=self.timeout,
+            label="Template",
+        )
+        self._log(f"{'Created' if status == 201 else 'Updated'} template {key}")
+        return body
+
+    async def aupsert(
+        self,
+        key: str,
+        *,
+        workload: Mapping[str, Any] | None = None,
+        name: str | None = None,
+        reporter: str | None = None,
+    ) -> dict[str, Any]:
+        """Async `upsert`, run on a worker thread via `asyncio.to_thread`."""
+        return await asyncio.to_thread(
+            self.upsert, key, workload=workload, name=name, reporter=reporter
+        )
 
     def _get_json(self, url: str) -> tuple[Any, Message]:
         """GET `url` and parse the JSON body, raising `CoolhandAPIError` on failure."""

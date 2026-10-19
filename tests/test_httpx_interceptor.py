@@ -389,15 +389,259 @@ class TestIsLlmApi:
     def test_all_default_addresses(self):
         """All default intercept addresses are detected."""
         for addr in DEFAULT_INTERCEPT_ADDRESSES:
-            if addr.startswith(":1"):
+            if addr.startswith(":"):
                 url = "http://ollama" + addr
-            elif addr.startswith(":"):
-                url = "https://example.googleapis.com/v1/models/gemini" + addr
-            elif addr.startswith("//"):
-                url = "https:" + addr + "us-east-1.amazonaws.com/v1/test"
+            elif "/" in addr:
+                # host/path entries; "*" stands in for a label or a path segment
+                url = "https://" + addr.replace("*", "x")
             else:
-                url = "https://" + addr + "/v1/test"
+                url = "https://" + addr.replace("*", "x") + "/v1/test"
             assert _is_llm_api(url) is True, f"Failed for {addr}"
+
+
+class TestUrlAnchoring:
+    """Issue #172: matching is anchored to host, port and path, not the raw URL."""
+
+    @pytest.mark.parametrize(
+        "url",
+        [
+            "https://tf-serving.internal/v1/models/foo:predict",
+            "https://tf-serving.internal/v1/models/foo:generateContent",
+            "https://example.com/redirect?to=https://api.openai.com",
+            "https://example.com/v1?host=api.anthropic.com",
+            "https://api.openai.com@evil.com/v1/chat/completions",
+            "https://api.openai.com.evil.com/v1/chat/completions",
+            "https://notopencode.ai/zen/v1/chat/completions",
+            "https://evil.com/bedrock-runtime.us-east-1.amazonaws.com",
+            "https://evil.com/api/chat?x=:11434/api/chat",
+            "https://example.com/openai.azure.com",
+            "https://bedrock-runtime.evil.s3.amazonaws.com/x",
+            "https://bedrock-runtime.us-east-1.evil.com/x",
+        ],
+    )
+    def test_not_captured(self, url):
+        assert _should_capture_url(url) is False
+
+    @pytest.mark.parametrize(
+        "url",
+        [
+            "https://generativelanguage.googleapis.com/v1beta/models/g:generateContent",
+            "https://us-central1-aiplatform.googleapis.com/v1/x/endpoints/1:predict",
+            "https://aiplatform.googleapis.com/v1/x/models/g:streamGenerateContent?alt=sse",
+            "https://aiplatform-psc.p.googleapis.com/v1/x/endpoints/1:streamRawPredict",
+            "https://bedrock-runtime.us-east-1.amazonaws.com/model/m/converse",
+            "https://bedrock-runtime.cn-north-1.amazonaws.com.cn/model/m/converse",
+            "https://bedrock-runtime-fips.us-gov-west-1.amazonaws.com/model/m/converse",
+            "https://bedrock-runtime.us-east-1.api.aws/model/m/converse",
+            "https://aiplatform.mtls.googleapis.com/v1/x/endpoints/1:predict",
+            "https://1234.us-central1-567.prediction.vertexai.goog/v1/p/endpoints/1:predict",
+            "wss://api.openai.com/v1/realtime",
+            "https://API.OpenAI.com./v1/chat/completions",
+            "https://my-res.services.ai.azure.com/openai/deployments/d",
+            "https://api.cohere.com/v2/chat",
+            "http://gpu-box.lan:11434/api/chat",
+        ],
+    )
+    def test_captured(self, url):
+        assert _should_capture_url(url) is True
+
+    def test_other_cohere_paths_and_ports_not_captured(self):
+        assert _should_capture_url("https://api.cohere.com/v2/rerank") is False
+        assert _should_capture_url("http://ollama:8080/api/chat") is False
+        assert _should_capture_url("http://ollama:11434/api/tags") is False
+
+
+class TestDenyListAnchoring:
+    """Deny-list fragments match the path only; host-qualified ones need the host."""
+
+    def test_query_string_does_not_exclude(self, reset_global_instance):
+        url = "https://api.openai.com/v1/chat/completions?x=/batchPredictionJobs/"
+        assert _is_excluded(url) is False
+        assert _should_capture_url(url) is True
+
+    def test_path_fragment_excludes(self, reset_global_instance):
+        url = "https://aiplatform.googleapis.com/v1/p/batchPredictionJobs/1"
+        assert _is_excluded(url) is True
+
+    def test_host_qualified_pattern_needs_host(self, reset_global_instance):
+        assert _is_excluded("https://api.cohere.com/v1/embed-jobs/1") is True
+        assert _is_excluded("https://example.com/v1/embed-jobs/1") is False
+        assert (
+            _is_excluded("https://example.com/?u=api.cohere.com/v1/embed-jobs") is False
+        )
+        assert _should_capture_url("https://api.cohere.com/v1/embed") is True
+
+
+class TestEntryGrammar:
+    """Custom entries: bare host, host/path, :port/path, /fragment, globs, scheme."""
+
+    @pytest.mark.parametrize(
+        ("entry", "url", "expected"),
+        [
+            ("my-proxy.internal", "https://my-proxy.internal/x", True),
+            ("my-proxy.internal", "https://a.my-proxy.internal/x", True),
+            ("my-proxy.internal", "https://xmy-proxy.internal/x", False),
+            ("my-proxy.internal", "https://e.com/my-proxy.internal", False),
+            ("my-proxy.internal/v1/chat", "https://my-proxy.internal/v1/chat/x", True),
+            ("my-proxy.internal/v1/chat", "https://my-proxy.internal/v2/chat", False),
+            ("my-proxy.internal:8443", "https://my-proxy.internal:8443/x", True),
+            ("my-proxy.internal:8443", "https://my-proxy.internal/x", False),
+            (":9000/gen", "http://box:9000/gen", True),
+            (":9000/gen", "http://box:9001/gen", False),
+            ("/v1/inference", "https://any.host/v1/inference", True),
+            ("/v1/inference", "https://any.host/a/v1/inference/b", True),
+            ("/v1/inference", "https://any.host/x?p=/v1/inference", False),
+            ("*.corp.example/*:run", "https://a.corp.example/m:run", True),
+            ("*.corp.example/*:run", "https://other.example/m:run", False),
+            ("https://my-proxy.internal", "https://my-proxy.internal/x", True),
+            # explicit and implied default ports
+            ("my-proxy.internal:443", "https://my-proxy.internal/x", True),
+            ("my-proxy.internal:443", "http://my-proxy.internal/x", False),
+            ("my-proxy.internal:80", "http://my-proxy.internal/x", True),
+            ("my-proxy.internal:8443", "https://my-proxy.internal:8443/x", True),
+            # IPv6 literals need brackets in the entry
+            ("[2001:db8::1]:11434", "http://[2001:db8::1]:11434/x", True),
+            ("[2001:db8::1]", "http://[2001:db8::2]/x", False),
+            # "*" in a host is one label; globbed paths match the whole path
+            ("api.*.example", "https://api.eu.example/x", True),
+            ("api.*.example", "https://api.eu.west.example/x", False),
+            (
+                "my-proxy.internal/v1/*/chat",
+                "https://my-proxy.internal/v1/x/chat",
+                True,
+            ),
+            (
+                "my-proxy.internal/v1/*/chat",
+                "https://my-proxy.internal/v1/x/chat/y",
+                False,
+            ),
+            # "?" and "[" are literal in globs
+            ("my-proxy.internal/v1/?*", "https://my-proxy.internal/v1/a", False),
+            ("my-proxy.internal/v1/?*", "https://my-proxy.internal/v1/%3Fa", True),
+            # percent-encoded paths are decoded before matching; host is case-folded
+            (
+                "/batchPredictionJobs/",
+                "https://h.example/p/%62atchPredictionJobs/1",
+                True,
+            ),
+            ("My-Proxy.Internal", "https://my-proxy.INTERNAL/x", True),
+            # paths are case-sensitive
+            ("my-proxy.internal/V1", "https://my-proxy.internal/v1", False),
+            # a globbed host is exact: no implicit subdomains, unlike a bare host
+            ("*.amazonaws.com", "https://x.amazonaws.com/p", True),
+            ("*.amazonaws.com", "https://x.y.amazonaws.com/p", False),
+            ("api.*", "https://api.com/p", True),
+            ("api.*", "https://api.eu.com/p", False),
+            # several stars and adjacent stars
+            ("a*b*c.example", "https://aXbYc.example/p", True),
+            ("a*b*c.example", "https://aXbY.example/p", False),
+            ("h.example/a**b*c", "https://h.example/aXXbYc", True),
+            ("h.example/a**b*c", "https://h.example/acb", False),
+            ("h.example/*a*a/*", "https://h.example/a-a/", True),
+            # a query string in an entry never matches
+            ("my-proxy.internal/v1?x=1", "https://my-proxy.internal/v1?x=1", False),
+            # malformed URLs fall through without matching
+            ("my-proxy.internal", "http://[::1/", False),
+        ],
+    )
+    def test_entries(self, reset_global_instance, entry, url, expected):
+        set_intercept_addresses([entry])
+        assert _is_llm_api(url) is expected
+
+    def test_many_stars_do_not_backtrack_catastrophically(self, reset_global_instance):
+        """Entries with many "*" stay fast against long, adversarial URLs."""
+        import time
+
+        set_intercept_addresses(
+            ["/*a*a*a*a*a*b", "h.example/*a*a*a*a*a*b", "*a*a*a*a*a*a*a*b.example"]
+        )
+        start = time.perf_counter()
+        assert _is_llm_api("https://h.example/" + "a" * 20_000) is False
+        assert _is_llm_api("https://" + "a" * 250 + ".example/x") is False
+        # Backtracking regexes took minutes here; the bound is deliberately loose.
+        assert time.perf_counter() - start < 10.0
+
+    @pytest.mark.parametrize("entry", ["", " ", ".", "[]", "//", "https://"])
+    def test_empty_entry_matches_nothing(self, reset_global_instance, entry):
+        set_intercept_addresses([entry])
+        assert _is_llm_api("https://example.com/x") is False
+        set_exclude_api_patterns([entry])
+        assert _is_excluded("https://example.com/x") is False
+
+    def test_glob_matchers_agree_with_regex_reference(self):
+        """Exhaustive small-alphabet differential test of the hand-written globs."""
+        import itertools
+        import re
+
+        from coolhand.httpx_interceptor import _glob_host_match, _glob_path_match
+
+        def strings(alphabet, max_len):
+            for n in range(max_len + 1):
+                for combo in itertools.product(alphabet, repeat=n):
+                    yield "".join(combo)
+
+        for sep, matcher, star in (
+            (".", _glob_host_match, "[^.]*"),
+            ("/", _glob_path_match, ".*"),
+        ):
+            for pattern in strings(("a", sep, "*"), 5):
+                if matcher is _glob_path_match and "*" not in pattern:
+                    continue  # callers only use _glob_path_match for globs
+                regex = re.compile(
+                    "".join(star if c == "*" else re.escape(c) for c in pattern)
+                )
+                for text in strings(("a", sep), 5):
+                    assert matcher(pattern, text) == bool(regex.fullmatch(text)), (
+                        pattern,
+                        text,
+                    )
+
+    def test_exclude_patterns_use_same_grammar(self, reset_global_instance):
+        set_exclude_api_patterns(["my-proxy.internal:8443/admin", ":9000/health"])
+        assert _is_excluded("https://my-proxy.internal:8443/admin/x") is True
+        assert _is_excluded("https://my-proxy.internal/admin/x") is False
+        assert _is_excluded("http://other:9000/health") is True
+        assert _is_excluded("http://other:9001/health") is False
+
+    def test_non_str_entry_fails_without_raising(self, reset_global_instance):
+        set_exclude_api_patterns([42])  # type: ignore[list-item]
+        # The deny-list fails closed: a matching error means "do not capture".
+        assert _is_excluded("https://api.openai.com/v1/chat/completions") is True
+
+
+class TestIsLocalhostAnchoring:
+    @pytest.mark.parametrize(
+        "url",
+        [
+            "http://localhost:8000/",
+            "http://foo.localhost/",
+            "http://127.0.0.1:3000/",
+            "http://127.0.0.2/",
+            "http://0.0.0.0:8080/",
+            "http://[::1]:8000/",
+            "http://localhost.:11434/api/chat",
+            "http://[::ffff:127.0.0.1]/",
+            "http://[::ffff:0.0.0.0]/",
+        ],
+    )
+    def test_loopback(self, url):
+        assert _is_localhost(url) is True
+
+    @pytest.mark.parametrize(
+        "url",
+        [
+            "https://localhost.example.com/",
+            "https://user:localhost@api.openai.com/v1",
+            "https://notlocalhost/",
+            "https://api.openai.com/localhost",
+            "https://api.openai.com/?u=127.0.0.1",
+            "https://127.0.0.1.example.com/",
+            "http://[::1/",
+            "",
+        ],
+    )
+    def test_not_loopback(self, url):
+        assert _is_localhost(url) is False
 
 
 class TestCustomInterceptAddresses:

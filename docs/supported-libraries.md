@@ -51,7 +51,7 @@ Directly patches `JsonRpcClient.request` in the GitHub Copilot SDK. Used because
 
 ## URL Matching
 
-The intercept allow-list is a list of substrings matched against the full request URL. A request is captured if the URL contains any entry in the list **and** does not contain any entry in the exclude deny-list.
+The intercept allow-list is a list of host, host/path and `/path` entries matched against the parsed request URL (see [entry syntax](./configuration.md#entry-syntax)). A request is captured if the URL matches any entry in the list, is not to a loopback host, **and** does not match any entry in the exclude deny-list.
 
 **Default allow-list** (domains and path fragments). The list in the source is authoritative — print it rather than relying on a copy:
 
@@ -64,8 +64,8 @@ It covers:
 
 - **OpenAI** — `api.openai.com`
 - **Anthropic** — `api.anthropic.com`
-- **Google Gemini** — `generativelanguage.googleapis.com`, plus the `:generateContent` / `:streamGenerateContent` method fragments
-- **Vertex AI** — `aiplatform.googleapis.com`, plus the `:predict` / `:streamRawPredict` method fragments
+- **Google Gemini** — `generativelanguage.googleapis.com`, plus the `:generateContent` / `:streamGenerateContent` methods on any `googleapis.com` host
+- **Vertex AI** — `aiplatform.googleapis.com` and its regional `<region>-aiplatform.googleapis.com` hosts, dedicated endpoints on `prediction.vertexai.goog`, plus the `:predict` / `:streamRawPredict` methods on any `googleapis.com` host. Vertex AI behind your own proxy or custom domain needs its address added via `intercept_addresses`
 - **Azure** — Azure OpenAI (`openai.azure.com` / `.us` / `.cn`), Azure AI Foundry and AI Services (`services.ai.azure.com` / `.us`, `cognitiveservices.azure.com` / `.us` / `.cn`), serverless deployments (`inference.ai.azure.com`, `models.ai.azure.com`) and Azure Machine Learning managed online endpoints (`inference.ml.azure.com` / `.us`)
 - **GitHub Models** — `models.github.ai` and the legacy `models.inference.ai.azure.com` (the hosted service was retired on 2026-07-30; these addresses remain intercepted)
 - **Cloudflare AI Gateway** — `gateway.ai.cloudflare.com`
@@ -75,8 +75,8 @@ It covers:
 - **DeepSeek, Mistral, Perplexity, xAI** — `api.deepseek.com`, `api.mistral.ai`, `api.perplexity.ai`, `api.x.ai`
 - **Cohere** — `/v2/chat`, `/v1/embed` and `/v2/embed` on `api.cohere.com` and `api.cohere.ai`. Path-anchored, not host-wide: other Cohere endpoints (v1 chat, rerank, tokenize, classify) are not supported, and `/v1/embed-jobs` is in the default deny-list.
 - **TypeSafe Jev (System One)** — `api.typesafe.ai/v1/systemone`
-- **Amazon Bedrock** — `bedrock-runtime.` and `bedrock-runtime-fips.` host prefixes (any region), reached through httpx or requests-based clients (for example the Anthropic Bedrock SDK or LiteLLM). Plain boto3 uses urllib3 and is not captured, and VPC interface endpoint hosts (`vpce-….bedrock-runtime.…`) need adding via `intercept_addresses`. Streaming responses use AWS binary event-stream framing and are recorded with a `[binary]` body (and `is_streaming` false) rather than parsed.
-- **Ollama** — `:11434/api/chat`, `:11434/api/generate`, `:11434/api/embed`, `:11434/api/embeddings`. Ollama has no fixed host, so these are anchored to its default port; a bare `/api/chat` would capture unrelated apps. Requests to `localhost`, `127.0.0.1`, `0.0.0.0` and `::1` are never captured, whatever the allow-list says, so this covers remote, LAN and Docker Compose hosts such as `http://ollama:11434`. Only the native `/api/*` paths are captured, not Ollama's OpenAI-compatible `/v1/chat/completions`. For an Ollama on another port, add its address via `intercept_addresses`.
+- **Amazon Bedrock** — `bedrock-runtime.<region>.amazonaws.com` (also `.amazonaws.com.cn` and `.api.aws`) and the `bedrock-runtime-fips.<region>` variants on `amazonaws.com` and `api.aws`, any region, reached through httpx or requests-based clients (for example the Anthropic Bedrock SDK or LiteLLM). Plain boto3 uses urllib3 and is not captured, and VPC interface endpoint hosts (`vpce-….bedrock-runtime.…`) need adding via `intercept_addresses`. Streaming responses use AWS binary event-stream framing and are recorded with a `[binary]` body (and `is_streaming` false) rather than parsed.
+- **Ollama** — `:11434/api/chat`, `:11434/api/generate`, `:11434/api/embed`, `:11434/api/embeddings`. Ollama has no fixed host, so these are anchored to its default port; a bare `/api/chat` would capture unrelated apps. Requests whose host is `localhost`, a `*.localhost` name, or a loopback or unspecified address (`127.0.0.0/8`, `::1`, `0.0.0.0`, `::`) are never captured, whatever the allow-list says, so this covers remote, LAN and Docker Compose hosts such as `http://ollama:11434`. Only the native `/api/*` paths are captured, not Ollama's OpenAI-compatible `/v1/chat/completions`. For an Ollama on another port, add its address via `intercept_addresses`.
 
 The Azure AI Services and Foundry hosts are multi-service: the same hostname serves Speech, Vision, Language and Content Safety alongside model inference. Those entries are therefore anchored to the inference paths (`/openai/`, `/models/`) so non-LLM traffic on the same host is not captured. The Foundry portal domain `ai.azure.com` is deliberately not in the list.
 

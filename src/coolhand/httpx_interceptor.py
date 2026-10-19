@@ -1,14 +1,17 @@
 """httpx interceptor for capturing API calls."""
 
 import contextvars
+import functools
+import ipaddress
 import json
 import logging
+import re
 import threading
 import time
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
-from urllib.parse import urlparse
+from urllib.parse import unquote, urlsplit
 
 from .types import RequestData, ResponseData
 
@@ -53,7 +56,9 @@ def get_intercept_count() -> int:
         return _intercept_count
 
 
-# Default intercept addresses (domains and path substrings)
+# Default intercept addresses. Entries are matched against the parsed URL, never
+# the raw string: bare host, host/path-prefix, :port/path-prefix, or a /path
+# fragment (see _compile_entry for the grammar).
 DEFAULT_INTERCEPT_ADDRESSES = [
     "api.openai.com",
     "api.anthropic.com",
@@ -108,10 +113,18 @@ DEFAULT_INTERCEPT_ADDRESSES = [
     "api.cohere.ai/v2/embed",
     # TypeSafe Jev (System One). Path-anchored: the server routes only this path.
     "api.typesafe.ai/v1/systemone",
-    # Amazon Bedrock. Plain substring matching has no wildcard for the region
-    # label, so match the "//bedrock-runtime." host prefix (and its FIPS variant).
-    "//bedrock-runtime.",
-    "//bedrock-runtime-fips.",
+    # Amazon Bedrock. The region label is a host wildcard (commercial, GovCloud
+    # and China partitions), plus the FIPS variants.
+    # "*" in a host is a single label, so "bedrock-runtime.evil.s3.amazonaws.com"
+    # (an S3 bucket named "bedrock-runtime.evil") does not match.
+    "bedrock-runtime.*.amazonaws.com",
+    "bedrock-runtime.*.amazonaws.com.cn",
+    "bedrock-runtime-fips.*.amazonaws.com",
+    "bedrock-runtime.*.api.aws",
+    "bedrock-runtime-fips.*.api.aws",
+    # Vertex AI regional hosts are "<region>-aiplatform.googleapis.com", a hyphen
+    # rather than a dot subdomain, so the bare entry above does not cover them.
+    "*-aiplatform.googleapis.com",
     # Self-hosted Ollama has no fixed host, so only path identifies it, and a
     # bare "/api/chat" would capture any app's own unrelated route. Anchor to
     # Ollama's default port as well. Bare localhost is skipped by
@@ -121,10 +134,16 @@ DEFAULT_INTERCEPT_ADDRESSES = [
     ":11434/api/generate",
     ":11434/api/embed",
     ":11434/api/embeddings",
-    ":generateContent",
-    ":streamGenerateContent",
-    ":predict",
-    ":streamRawPredict",
+    # Google RPC-style verbs behind googleapis.com (Vertex private/PSC/mTLS
+    # hosts too). A bare host also matches every subdomain, so these are
+    # constrained to Google hosts: an unrelated app calling e.g. TensorFlow
+    # Serving's "/v1/models/foo:predict" is not captured.
+    "googleapis.com/*:generateContent",
+    "googleapis.com/*:streamGenerateContent",
+    "googleapis.com/*:predict",
+    "googleapis.com/*:streamRawPredict",
+    # Vertex AI dedicated endpoints: <id>.<region>-<project>.prediction.vertexai.goog
+    "prediction.vertexai.goog",
 ]
 
 DEFAULT_EXCLUDE_API_PATTERNS: list[str] = json.loads(
@@ -133,7 +152,7 @@ DEFAULT_EXCLUDE_API_PATTERNS: list[str] = json.loads(
 
 
 def set_intercept_addresses(addresses: list[str] | None) -> None:
-    """Set custom intercept addresses (domains and/or path substrings).
+    """Set custom intercept addresses (hosts, host/path prefixes, ``/path`` fragments).
 
     An empty list disables capture entirely; ``None`` restores
     ``DEFAULT_INTERCEPT_ADDRESSES``.
@@ -144,7 +163,10 @@ def set_intercept_addresses(addresses: list[str] | None) -> None:
 
 
 def set_exclude_api_patterns(patterns: list[str] | None) -> None:
-    """Set URL substring patterns to exclude from capture (deny-list).
+    """Set URL patterns to exclude from capture (deny-list).
+
+    Patterns use the same grammar as intercept addresses; a bare ``/path``
+    fragment matches the URL path only, never the query string.
 
     An empty list disables exclusion entirely; ``None`` restores
     ``DEFAULT_EXCLUDE_API_PATTERNS``.
@@ -182,6 +204,130 @@ def _warn_on_invalid_entries(name: str, entries: list[str] | None) -> None:
         )
 
 
+_Matcher = Callable[[str, int | None, str], bool]
+
+_PORT_ONLY = re.compile(r":(\d+)(/.*)?")
+_HOST_PORT = re.compile(r"(.*):(\d+)")
+_DEFAULT_PORTS = {"http": 80, "https": 443}
+
+
+def _glob_host_match(pattern: str, host: str) -> bool:
+    """Match ``host`` against a glob where ``*`` is one label (never a ``.``).
+
+    Tracks the set of reachable pattern positions per character, so cost is
+    O(len(host) * len(pattern)) with no regex backtracking, however many
+    ``*`` an entry has.
+    """
+
+    def skip_stars(positions: set[int]) -> set[int]:
+        out = set(positions)
+        for i in positions:
+            while i < len(pattern) and pattern[i] == "*":
+                i += 1
+                out.add(i)
+        return out
+
+    states = skip_stars({0})
+    for ch in host:
+        states = skip_stars(
+            {
+                i if pattern[i] == "*" else i + 1
+                for i in states
+                if i < len(pattern)
+                and (pattern[i] == ch or (pattern[i] == "*" and ch != "."))
+            }
+        )
+        if not states:
+            return False
+    return len(pattern) in states
+
+
+def _glob_path_match(pattern: str, path: str) -> bool:
+    """Match the whole ``path`` against a glob where ``*`` matches anything.
+
+    Greedy leftmost search of the literal segments between the stars: linear
+    in practice and polynomial at worst, with no regex backtracking.
+    """
+    first, *middle, last = pattern.split("*")  # pattern always contains a "*"
+    end = len(path) - len(last)
+    if end < len(first) or not path.startswith(first) or not path.endswith(last):
+        return False
+    pos = len(first)
+    for segment in middle:
+        found = path.find(segment, pos, end)
+        if found < 0:
+            return False
+        pos = found + len(segment)
+    return True
+
+
+@functools.lru_cache(maxsize=512)
+def _compile_entry(entry: str) -> _Matcher:
+    """Compile an entry into a ``(host, port, path) -> bool`` matcher.
+
+    Shapes: ``host`` (the host or any subdomain), ``host/path`` (path prefix),
+    ``host:8443`` (explicit port, default ports are implied by the scheme),
+    ``:11434/api/chat`` (any host on that port), ``/fragment`` (substring of the
+    path) and ``[::1]:8080`` (IPv6 hosts need brackets). ``*`` is a glob: in a
+    host it matches within one label (never a ``.``), and a globbed host must
+    match the whole host (no implicit subdomains, unlike a bare host); in a
+    path it matches anything, and a globbed path must match the whole path. A
+    leading ``scheme://`` or ``//`` is ignored. Entries cannot carry a query
+    string, and an entry that reduces to nothing (``""``, ``"."``, ``"[]"``)
+    matches nothing rather than everything.
+    """
+    if not isinstance(entry, str):
+        raise TypeError(f"pattern entries must be str, got {type(entry).__name__}")
+    entry = re.sub(r"^(?:[a-zA-Z][a-zA-Z0-9+.-]*:)?//", "", entry.strip())
+    host: str | None = None
+    port: int | None = None
+    path: str | None
+    is_fragment = entry.startswith("/")
+    if is_fragment:
+        path = entry
+    elif m := _PORT_ONLY.fullmatch(entry):
+        port, path = int(m.group(1)), m.group(2)
+    else:
+        host, slash, rest = entry.partition("/")
+        path = slash + rest if slash else None
+        if m := _HOST_PORT.fullmatch(host):
+            host, port = m.group(1), int(m.group(2))
+        host = host.strip("[]").lower().rstrip(".") or None
+
+    if host is None and port is None and path is None:
+        logger.debug("Ignoring empty pattern entry %r", entry)
+        return lambda *_: False
+
+    host_ok: Callable[[str], bool] | None = None
+    if host is not None:
+        if "*" in host:
+            host_glob = host
+            host_ok = lambda h: _glob_host_match(host_glob, h)  # noqa: E731
+        else:
+            suffix = "." + host
+            host_ok = lambda h: h == host or h.endswith(suffix)  # noqa: E731
+
+    path_ok: Callable[[str], bool] | None = None
+    if path is not None:
+        if "*" in path:
+            # A fragment glob is a whole-path glob padded with "*" on both sides.
+            path_glob = f"*{path}*" if is_fragment else path
+            path_ok = lambda p: _glob_path_match(path_glob, p)  # noqa: E731
+        elif is_fragment:
+            path_ok = lambda p: path in p  # noqa: E731
+        else:
+            path_ok = lambda p: p.startswith(path)  # noqa: E731
+
+    def matches(url_host: str, url_port: int | None, url_path: str) -> bool:
+        return (
+            (host_ok is None or (bool(url_host) and host_ok(url_host)))
+            and (port is None or url_port == port)
+            and (path_ok is None or path_ok(url_path))
+        )
+
+    return matches
+
+
 def _matches_any(
     url: str,
     override: list[str] | None,
@@ -189,18 +335,29 @@ def _matches_any(
     *,
     on_error: bool,
 ) -> bool:
-    """Substring-match a URL against an override list, falling back to defaults.
+    """Match a URL's host, port and path against an override list or defaults.
 
-    ``None`` means "no override, use defaults"; an empty list means "match
-    nothing" and is deliberately distinct from ``None``. ``on_error`` is the
-    result when matching raises (e.g. a non-str entry); callers choose the value
-    that means "do not capture" for their list (``False`` for the allow-list,
-    ``True`` for the deny-list). Logged at debug to avoid per-request spam; the
-    user-facing trace is the warning from ``_warn_on_invalid_entries``.
+    Matching runs on the parsed URL (host, port, percent-decoded path), not the
+    raw string, so query text, userinfo and lookalike hosts cannot trigger or
+    dodge an entry. ``None`` means "no override, use defaults"; an empty list
+    means "match nothing" and is deliberately distinct from ``None``.
+    ``on_error`` is the result when matching raises (e.g. a non-str entry);
+    callers choose the value that means "do not capture" for their list
+    (``False`` for the allow-list, ``True`` for the deny-list). Logged at debug
+    to avoid per-request spam; the user-facing trace is the warning from
+    ``_warn_on_invalid_entries``.
     """
     try:
+        parts = urlsplit(url)
+        host = (parts.hostname or "").rstrip(".")
+        try:
+            port = parts.port or _DEFAULT_PORTS.get(parts.scheme)
+        except ValueError:
+            port = None
+        path = unquote(parts.path)
         return any(
-            entry in url for entry in (defaults if override is None else override)
+            _compile_entry(entry)(host, port, path)
+            for entry in (defaults if override is None else override)
         )
     except Exception:
         logger.debug("Failed to match URL against pattern list", exc_info=True)
@@ -208,16 +365,27 @@ def _matches_any(
 
 
 def _is_localhost(url: str) -> bool:
-    """Check if URL is localhost."""
+    """Check if the URL's host (not userinfo, path or lookalike) is loopback."""
     try:
-        host = urlparse(url).netloc.lower()
-        return any(p in host for p in ["localhost", "127.0.0.1", "0.0.0.0", "::1"])
+        host = (urlsplit(url).hostname or "").rstrip(".")
+        if not host:
+            return False
+        if host == "localhost" or host.endswith(".localhost"):
+            return True
+        try:
+            ip = ipaddress.ip_address(host)
+        except ValueError:  # an ordinary hostname, not an IP literal
+            return False
+        # Older CPython does not unwrap IPv4-mapped IPv6 (::ffff:127.0.0.1) itself.
+        if isinstance(ip, ipaddress.IPv6Address) and ip.ipv4_mapped:
+            ip = ip.ipv4_mapped
+        return ip.is_loopback or ip.is_unspecified
     except Exception:
         return False
 
 
 def _is_llm_api(url: str) -> bool:
-    """Check if URL matches any intercept address (substring match)."""
+    """Check if URL matches any intercept address (host/port/path match)."""
     return _matches_any(
         url, _intercept_addresses, DEFAULT_INTERCEPT_ADDRESSES, on_error=False
     )

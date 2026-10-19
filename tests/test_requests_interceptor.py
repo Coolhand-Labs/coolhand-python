@@ -16,6 +16,9 @@ def reset_state():
 
     real_requests_send = requests.Session.send
 
+    # Restore the class-level httpx wrappers a previous test left installed; just
+    # clearing _patched would make the next patch() wrap the wrapper.
+    interceptor.unpatch()
     interceptor._patched = False
     interceptor._original_send = None
     interceptor._original_async_send = None
@@ -23,6 +26,7 @@ def reset_state():
     interceptor._handler = None
     interceptor._intercept_addresses = None
     yield
+    interceptor.unpatch()
     requests.Session.send = real_requests_send
     interceptor._patched = False
     interceptor._original_send = None

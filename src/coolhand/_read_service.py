@@ -355,6 +355,12 @@ class ReadService:
             raise CoolhandAPIError(
                 f"{self._resource_label} request failed: {error.reason}"
             ) from error
+        except (OSError, http.client.HTTPException, UnicodeDecodeError) as error:
+            # A read timeout, reset, truncated or undecodable body escapes `open`
+            # unwrapped; the contract is CoolhandAPIError for every failure.
+            raise CoolhandAPIError(
+                f"{self._resource_label} request failed: {error}"
+            ) from error
 
         try:
             return json.loads(raw), headers

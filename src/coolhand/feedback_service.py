@@ -266,7 +266,9 @@ class FeedbackService:
             logger.warning(f"Feedback API returned an unparsable response: {e}")
             return None
         except Exception as e:
-            logger.warning(f"Unexpected error submitting feedback: {e}")
+            # Type only: the message of a malformed-header ValueError embeds the
+            # offending value, which can be the API key.
+            logger.warning("Unexpected error submitting feedback: %s", type(e).__name__)
             return None
 
     def _log_feedback_info(self, feedback: FeedbackData) -> None:

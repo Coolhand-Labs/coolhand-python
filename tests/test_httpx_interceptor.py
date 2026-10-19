@@ -1059,6 +1059,7 @@ class TestErrorHandling:
             from coolhand import httpx_interceptor
 
             # Mock original send to raise an exception
+            real_original_send = httpx_interceptor._original_send
             httpx_interceptor._original_send = MagicMock(
                 side_effect=Exception("Connection failed")
             )
@@ -1081,6 +1082,9 @@ class TestErrorHandling:
             assert err == "Connection failed"
 
         finally:
+            # unpatch() restores httpx.Client.send from this global; leaving the
+            # mock here would leave a MagicMock installed for every later test.
+            httpx_interceptor._original_send = real_original_send
             unpatch()
 
 

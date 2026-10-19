@@ -533,7 +533,8 @@ def _unwrap(func: Callable) -> Callable:
     That can happen if patch() runs while the class is already patched but the
     module state was reset (a test fixture, or a concurrent race).
     """
-    return getattr(func, "_coolhand_original", func)
+    # Look in __dict__ only: getattr would let a Mock invent the attribute.
+    return getattr(func, "__dict__", {}).get("_coolhand_original", func)
 
 
 def _make_patched_send(get_original: Callable[[], Callable]) -> Callable:

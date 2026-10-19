@@ -149,3 +149,62 @@ class TestPatchLifecycle:
             client.post(LLM_URL, json={})
 
         assert len(captured) == 2
+
+
+class TestHandlerFailuresNeverBreakTheHostCall:
+    """A broken capture handler must not change what the host application sees."""
+
+    @staticmethod
+    def _install_raising_handler():
+        def handler(req, res, err):
+            raise RuntimeError("handler blew up")
+
+        interceptor.set_handler(handler)
+
+    def test_sync_success_path(self, captured):
+        self._install_raising_handler()
+        with httpx2.Client(transport=_json_transport()) as client:
+            assert client.post(LLM_URL, json={}).json() == {"ok": True}
+
+    def test_sync_error_path_reraises_the_original_error(self, captured):
+        self._install_raising_handler()
+
+        def boom(request):
+            raise httpx2.ConnectError("refused", request=request)
+
+        with httpx2.Client(transport=httpx2.MockTransport(boom)) as client:
+            with pytest.raises(httpx2.ConnectError):
+                client.post(LLM_URL, json={})
+
+    @pytest.mark.asyncio
+    async def test_async_success_path(self, captured):
+        self._install_raising_handler()
+        async with httpx2.AsyncClient(transport=_json_transport()) as client:
+            response = await client.post(LLM_URL, json={})
+        assert response.json() == {"ok": True}
+
+    @pytest.mark.asyncio
+    async def test_async_error_path_reraises_the_original_error(self, captured):
+        self._install_raising_handler()
+
+        def boom(request):
+            raise httpx2.ConnectError("refused", request=request)
+
+        async with httpx2.AsyncClient(transport=httpx2.MockTransport(boom)) as client:
+            with pytest.raises(httpx2.ConnectError):
+                await client.post(LLM_URL, json={})
+
+    @pytest.mark.asyncio
+    async def test_async_streaming_path(self, captured):
+        self._install_raising_handler()
+        transport = httpx2.MockTransport(
+            lambda request: httpx2.Response(
+                200,
+                content=b"data: x\n\n",
+                headers={"content-type": "text/event-stream"},
+            )
+        )
+        async with httpx2.AsyncClient(transport=transport) as client:
+            async with client.stream("POST", LLM_URL, json={}) as response:
+                lines = [line async for line in response.aiter_lines() if line]
+        assert lines == ["data: x"]

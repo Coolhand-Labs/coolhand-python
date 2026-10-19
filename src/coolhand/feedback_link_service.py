@@ -310,6 +310,12 @@ class FeedbackLinkService:
             # A read timeout, reset, truncated or undecodable body escapes `urlopen`
             # unwrapped.
             raise CoolhandAPIError(f"Feedback link request failed: {error}") from error
+        except ValueError as error:
+            # Type only: http.client's message for a malformed header quotes the
+            # value, which can be the API key.
+            raise CoolhandAPIError(
+                f"Feedback link request failed: {type(error).__name__}"
+            ) from error
 
     def _log(self, message: str) -> None:
         if not self.silent:

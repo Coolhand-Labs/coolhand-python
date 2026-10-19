@@ -58,7 +58,7 @@ See [`examples/dramatiq_pydantic_ai.py`](../examples/dramatiq_pydantic_ai.py) fo
 
 ### Gap 1 — Process-based Workers
 
-**Problem:** Coolhand's httpx patch lives in the parent process's memory. Worker processes started with a fresh interpreter (e.g. `python -m dramatiq myapp`) begin without the patch applied.
+**Problem:** Coolhand's httpx / httpx2 patch lives in the parent process's memory. Worker processes started with a fresh interpreter (e.g. `python -m dramatiq myapp`) begin without the patch applied.
 
 **Fix:** Add `CoolhandDramatiqMiddleware` to your broker. In Dramatiq's `after_process_boot` lifecycle hook it creates, replaces, or re-patches the Coolhand instance as needed, ensuring monitoring is active — with the right config — in every worker process.
 

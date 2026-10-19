@@ -763,7 +763,10 @@ def _patch_locked() -> bool:
             _make_patched_async_send(lambda: _original_async_send),
             _original_async_send,
         )
-    if httpx2 is not None:
+    if httpx2 is None:
+        # Forget originals saved by an earlier patch() that did see httpx2.
+        _original_httpx2_send = _original_httpx2_async_send = None
+    else:
         _original_httpx2_send = _unwrap(httpx2.Client.send)
         _original_httpx2_async_send = _unwrap(httpx2.AsyncClient.send)
         httpx2.Client.send = _tag(
@@ -923,6 +926,18 @@ def _unpatch_locked() -> None:
 def has_handler() -> bool:
     """Check if a capture handler is set (patched requests pass through without one)."""
     return bool(_handler)
+
+
+def patched_targets() -> list[str]:
+    """Names of the ``send`` methods currently wrapped (for diagnostics)."""
+    if not _patched:
+        return []
+    targets = []
+    if _original_send:
+        targets += ["httpx.Client.send", "httpx.AsyncClient.send"]
+    if _original_httpx2_send:
+        targets += ["httpx2.Client.send", "httpx2.AsyncClient.send"]
+    return targets
 
 
 def is_patched() -> bool:

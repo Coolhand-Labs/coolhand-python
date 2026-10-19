@@ -175,6 +175,55 @@ class TestReadServiceWrapsReadTimeFailures:
         with pytest.raises(CoolhandAPIError):
             service._get_json("https://example.test/x")
 
+    def test_malformed_key_value_error_is_wrapped_without_the_key(self):
+        """A control character in the key makes http.client raise ValueError quoting
+        the whole header value; it must not reach the caller or its traceback text."""
+        service = ReadService(api_key="sk-abc\ndef-SECRET", base_url="https://e.test")
+        service._opener = _FailingOpener(
+            ValueError("Invalid header value b'sk-abc\\ndef-SECRET'")
+        )
+        with pytest.raises(CoolhandAPIError) as excinfo:
+            service._get_json("https://e.test/x")
+        assert "SECRET" not in str(excinfo.value)
+        assert "ValueError" in str(excinfo.value)
+
+
+class TestHttpx2OptionalAndDiagnostics:
+    def test_patching_works_when_httpx2_is_not_installed(self, monkeypatch):
+        import sys
+
+        interceptor.unpatch()
+        real_send = httpx.Client.send
+        monkeypatch.setitem(sys.modules, "httpx2", None)  # makes `import httpx2` fail
+        interceptor.set_handler(lambda *_: None)
+        try:
+            assert interceptor.patch() is True
+            assert httpx.Client.send is not real_send
+            assert interceptor.patched_targets() == [
+                "httpx.Client.send",
+                "httpx.AsyncClient.send",
+            ]
+        finally:
+            interceptor.unpatch()
+            interceptor.set_handler(None)
+        assert httpx.Client.send is real_send
+
+    def test_patched_targets_lists_httpx2_when_installed(self):
+        httpx2 = pytest.importorskip("httpx2")
+        interceptor.unpatch()
+        assert interceptor.patched_targets() == []
+        interceptor.set_handler(lambda *_: None)
+        try:
+            interceptor.patch()
+            targets = interceptor.patched_targets()
+            assert "httpx2.Client.send" in targets
+            assert "httpx2.AsyncClient.send" in targets
+            assert httpx2.Client.send._coolhand_original
+        finally:
+            interceptor.unpatch()
+            interceptor.set_handler(None)
+        assert interceptor.patched_targets() == []
+
 
 class TestGlobCostIsBounded:
     def test_many_consecutive_stars_in_a_host_entry_stay_fast(self):

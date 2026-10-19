@@ -3,9 +3,9 @@
 """
 Dramatiq + pydantic-ai + Coolhand monitoring example.
 
-Coolhand patches httpx.AsyncClient.send at the class level before any workers
-start, so all Dramatiq thread workers automatically capture LLM calls — no
-per-worker initialization needed.
+Coolhand patches httpx.AsyncClient.send (and httpx2.AsyncClient.send, when
+installed) at the class level before any workers start, so all Dramatiq thread
+workers automatically capture LLM calls — no per-worker initialization needed.
 
 Key rule: import coolhand before dramatiq and pydantic-ai so the patch is in
 place before the broker and actors are set up.

@@ -671,8 +671,7 @@ class CoolhandClient:
         try:
             from . import httpx_interceptor
 
-            if httpx_interceptor.is_patched():
-                patched_libs += ["httpx.Client.send", "httpx.AsyncClient.send"]
+            patched_libs += httpx_interceptor.patched_targets()
         except Exception:
             pass
         try:

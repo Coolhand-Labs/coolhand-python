@@ -251,6 +251,12 @@ def _put_json(
     except (OSError, http.client.HTTPException, UnicodeDecodeError) as error:
         # A read timeout, reset, truncated or undecodable body escapes `open` unwrapped.
         raise CoolhandAPIError(f"{label} request failed: {error}") from error
+    except ValueError as error:
+        # Type only: http.client's message for a malformed header quotes the value,
+        # which can be the API key.
+        raise CoolhandAPIError(
+            f"{label} request failed: {type(error).__name__}"
+        ) from error
 
     try:
         body = json.loads(raw)
@@ -360,6 +366,12 @@ class ReadService:
             # unwrapped; the contract is CoolhandAPIError for every failure.
             raise CoolhandAPIError(
                 f"{self._resource_label} request failed: {error}"
+            ) from error
+        except ValueError as error:
+            # Type only: http.client's message for a malformed header quotes the
+            # value, which can be the API key.
+            raise CoolhandAPIError(
+                f"{self._resource_label} request failed: {type(error).__name__}"
             ) from error
 
         try:

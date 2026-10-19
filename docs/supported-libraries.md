@@ -1,6 +1,6 @@
 # Supported Libraries
 
-Coolhand intercepts LLM API calls through four mechanisms. Together they cover virtually any Python library that communicates with an LLM provider.
+Coolhand intercepts LLM API calls through three mechanisms. Together they cover virtually any Python library that communicates with an LLM provider.
 
 ## Interception Mechanisms
 

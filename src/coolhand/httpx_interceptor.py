@@ -23,6 +23,8 @@ logger = logging.getLogger(__name__)
 _patched = False
 _original_send: Callable | None = None
 _original_async_send: Callable | None = None
+_original_httpx2_send: Callable | None = None
+_original_httpx2_async_send: Callable | None = None
 _original_requests_send: Callable | None = None
 _handler: Callable[[RequestData, ResponseData | None, str | None], None] | None = None
 _intercept_addresses: list[str] | None = None
@@ -510,22 +512,8 @@ def set_handler(
     _handler = handler
 
 
-def patch() -> bool:
-    """Patch httpx to intercept requests."""
-    global _patched, _original_send, _original_async_send
-
-    if _patched:
-        return True
-
-    try:
-        import httpx
-    except ImportError:
-        logger.debug("httpx not available")
-        return False
-
-    # Save originals
-    _original_send = httpx.Client.send
-    _original_async_send = httpx.AsyncClient.send
+def _make_patched_send(get_original: Callable[[], Callable]) -> Callable:
+    """Build the sync ``send`` wrapper; ``get_original`` returns the real ``send``."""
 
     def patched_send(self, request, **kwargs):
         """Patched sync send."""
@@ -535,7 +523,7 @@ def patch() -> bool:
         # guard prevents double-logging when the same intercepted call re-enters
         # the public send(), e.g. via a requests→httpx adapter chain).
         if not _should_capture_url(url) or not _handler or _intercepting.get():
-            return _original_send(self, request, **kwargs)
+            return get_original()(self, request, **kwargs)
 
         token = _intercepting.set(True)
         _record_interception()
@@ -551,7 +539,7 @@ def patch() -> bool:
                 "timestamp": start,
             }
             attach_snapshot(req_data)
-            response = _original_send(self, request, **kwargs)
+            response = get_original()(self, request, **kwargs)
             duration = time.time() - start
 
             res_data: ResponseData = {
@@ -578,6 +566,12 @@ def patch() -> bool:
         finally:
             _intercepting.reset(token)
 
+    return patched_send
+
+
+def _make_patched_async_send(get_original: Callable[[], Callable]) -> Callable:
+    """Build the async ``send`` wrapper; ``get_original`` returns the real ``send``."""
+
     async def patched_async_send(self, request, **kwargs):
         """Patched async send."""
         url = str(request.url)
@@ -586,7 +580,7 @@ def patch() -> bool:
         # guard prevents double-logging when the same intercepted call re-enters
         # the public send(), e.g. via a requests→httpx adapter chain).
         if not _should_capture_url(url) or not _handler or _intercepting.get():
-            return await _original_async_send(self, request, **kwargs)
+            return await get_original()(self, request, **kwargs)
 
         token = _intercepting.set(True)
         _record_interception()
@@ -602,7 +596,7 @@ def patch() -> bool:
                 "timestamp": start,
             }
             attach_snapshot(req_data)
-            response = await _original_async_send(self, request, **kwargs)
+            response = await get_original()(self, request, **kwargs)
             duration = time.time() - start
 
             # Check for streaming response
@@ -713,9 +707,45 @@ def patch() -> bool:
         finally:
             _intercepting.reset(token)
 
-    # Apply httpx patches
-    httpx.Client.send = patched_send
-    httpx.AsyncClient.send = patched_async_send
+    return patched_async_send
+
+
+def patch() -> bool:
+    """Patch httpx (and httpx2, when installed) to intercept requests."""
+    global _patched, _original_send, _original_async_send
+    global _original_httpx2_send, _original_httpx2_async_send
+
+    if _patched:
+        return True
+
+    try:
+        import httpx
+    except ImportError:
+        httpx = None
+        logger.debug("httpx not available")
+    try:
+        # The OpenAI / Anthropic / pydantic-ai SDKs moved to this separate fork of
+        # httpx; its clients never touch httpx.Client.send, so it needs its own patch.
+        import httpx2
+    except ImportError:
+        httpx2 = None
+        logger.debug("httpx2 not available")
+
+    if httpx is None and httpx2 is None:
+        return False
+
+    if httpx is not None:
+        _original_send = httpx.Client.send
+        _original_async_send = httpx.AsyncClient.send
+        httpx.Client.send = _make_patched_send(lambda: _original_send)
+        httpx.AsyncClient.send = _make_patched_async_send(lambda: _original_async_send)
+    if httpx2 is not None:
+        _original_httpx2_send = httpx2.Client.send
+        _original_httpx2_async_send = httpx2.AsyncClient.send
+        httpx2.Client.send = _make_patched_send(lambda: _original_httpx2_send)
+        httpx2.AsyncClient.send = _make_patched_async_send(
+            lambda: _original_httpx2_async_send
+        )
 
     # Optionally patch requests.Session.send
     global _original_requests_send
@@ -809,7 +839,7 @@ def patch() -> bool:
 
 
 def unpatch() -> None:
-    """Restore original httpx methods."""
+    """Restore original httpx / httpx2 methods."""
     global _patched, _original_requests_send, _exclude_api_patterns, _max_body_bytes
 
     if not _patched:
@@ -822,6 +852,16 @@ def unpatch() -> None:
             httpx.Client.send = _original_send
         if _original_async_send:
             httpx.AsyncClient.send = _original_async_send
+    except ImportError:
+        pass
+
+    try:
+        import httpx2
+
+        if _original_httpx2_send:
+            httpx2.Client.send = _original_httpx2_send
+        if _original_httpx2_async_send:
+            httpx2.AsyncClient.send = _original_httpx2_async_send
     except ImportError:
         pass
 
@@ -846,5 +886,5 @@ def has_handler() -> bool:
 
 
 def is_patched() -> bool:
-    """Check if httpx is patched."""
+    """Check if httpx / httpx2 are patched."""
     return _patched

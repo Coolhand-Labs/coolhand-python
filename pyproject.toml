@@ -120,6 +120,7 @@ strict_equality = true
 module = [
     "requests.*",
     "httpx.*",
+    "httpx2.*",
     "urllib3.*",
 ]
 ignore_missing_imports = true

@@ -41,6 +41,14 @@ from pydantic_ai.providers.anthropic import AnthropicProvider
 
 from coolhand import httpx_interceptor
 
+# Recent pydantic-ai / anthropic releases build on the separate ``httpx2`` package
+# and reject a plain ``httpx.AsyncClient``; older ones need ``httpx``. Use whichever
+# the installed SDK accepts so the test exercises the real interception path.
+try:
+    import httpx2 as sdk_http
+except ImportError:  # pragma: no cover - older SDKs only
+    sdk_http = httpx  # type: ignore[assignment]
+
 # ---------------------------------------------------------------------------
 # Fake HTTP transport — returns a canned Anthropic response, no network calls
 # ---------------------------------------------------------------------------
@@ -62,6 +70,20 @@ class FakeAnthropicTransport(httpx.AsyncBaseTransport):
 
     async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
         return httpx.Response(
+            200,
+            content=FAKE_RESPONSE_BODY,
+            headers={"content-type": "application/json"},
+            request=request,
+        )
+
+
+class FakeSdkTransport(sdk_http.AsyncBaseTransport):
+    """Same canned response, for whichever HTTP package the SDK is built on."""
+
+    async def handle_async_request(
+        self, request: sdk_http.Request
+    ) -> sdk_http.Response:
+        return sdk_http.Response(
             200,
             content=FAKE_RESPONSE_BODY,
             headers={"content-type": "application/json"},
@@ -141,7 +163,7 @@ def _fake_anthropic_model() -> AnthropicModel:
     """AnthropicModel wired to a fake transport — no network calls needed."""
     provider = AnthropicProvider(
         api_key="test-key",
-        http_client=httpx.AsyncClient(transport=FakeAnthropicTransport()),
+        http_client=sdk_http.AsyncClient(transport=FakeSdkTransport()),
     )
     return AnthropicModel("claude-3-5-haiku-20241022", provider=provider)
 

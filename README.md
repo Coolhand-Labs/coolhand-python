@@ -161,7 +161,7 @@ Headers containing API keys, sensitive URL query parameters, and datastore crede
 
 ## Supported Libraries
 
-Coolhand works with any library that uses httpx, requests, or the GitHub Copilot SDK:
+Coolhand works with any library that uses httpx, httpx2, requests, or the GitHub Copilot SDK:
 
 - OpenAI Python SDK
 - Anthropic Python SDK
@@ -185,13 +185,13 @@ Coolhand works with any library that uses httpx, requests, or the GitHub Copilot
 - TypeSafe Jev (System One)
 - Ollama (non-localhost hosts on the default port, e.g. `http://ollama:11434`)
 - pydantic-ai
-- Any other library using httpx or requests
+- Any other library using httpx, httpx2 or requests
 
 See [Supported Libraries](./docs/supported-libraries.md) for the full interception mechanism breakdown and streaming details.
 
 ## How It Works
 
-Importing `coolhand` patches `httpx`, `requests`, and the GitHub Copilot `JsonRpcClient` at the class level. Requests to LLM APIs are intercepted, credentials are redacted, and data is submitted to Coolhand. Non-LLM requests pass through unchanged.
+Importing `coolhand` patches `httpx`, `httpx2`, `requests`, and the GitHub Copilot `JsonRpcClient` at the class level. Requests to LLM APIs are intercepted, credentials are redacted, and data is submitted to Coolhand. Non-LLM requests pass through unchanged.
 
 ## Integrations
 
@@ -307,7 +307,7 @@ export COOLHAND_SILENT=false
 
 ### Verify Interception in Your Tests
 
-A client that captured a reference to `httpx.Client.send` or `requests.Session.send` before `import coolhand` is silently not monitored. Catch it in your own tests:
+A client that captured a reference to `httpx.Client.send`, `httpx2.Client.send` or `requests.Session.send` before `import coolhand` is silently not monitored. Catch it in your own tests:
 
 ```python
 from coolhand.testing import assert_interception_occurred, capture_interception_snapshot

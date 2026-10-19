@@ -5,8 +5,8 @@ import functools
 import ipaddress
 import json
 import logging
-import threading
 import re
+import threading
 import time
 from collections.abc import Callable
 from pathlib import Path

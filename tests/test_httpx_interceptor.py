@@ -605,7 +605,8 @@ class TestEntryGrammar:
 
     def test_non_str_entry_fails_without_raising(self, reset_global_instance):
         set_exclude_api_patterns([42])  # type: ignore[list-item]
-        assert _is_excluded("https://api.openai.com/v1/chat/completions") is False
+        # The deny-list fails closed: a matching error means "do not capture".
+        assert _is_excluded("https://api.openai.com/v1/chat/completions") is True
 
 
 class TestIsLocalhostAnchoring:

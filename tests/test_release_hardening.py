@@ -175,16 +175,39 @@ class TestReadServiceWrapsReadTimeFailures:
         with pytest.raises(CoolhandAPIError):
             service._get_json("https://example.test/x")
 
-    def test_malformed_key_value_error_is_wrapped_without_the_key(self):
+    @pytest.mark.parametrize("call_site", ["get_json", "put_json", "feedback_link"])
+    def test_malformed_key_value_error_never_reaches_the_traceback(self, call_site):
         """A control character in the key makes http.client raise ValueError quoting
-        the whole header value; it must not reach the caller or its traceback text."""
-        service = ReadService(api_key="sk-abc\ndef-SECRET", base_url="https://e.test")
-        service._opener = _FailingOpener(
-            ValueError("Invalid header value b'sk-abc\\ndef-SECRET'")
-        )
+        the whole header value. The wrapped error must neither carry it in its
+        message nor chain to it, or any logged traceback would print the key."""
+        import traceback
+        from urllib.request import Request
+
+        from coolhand._read_service import _put_json
+        from coolhand.feedback_link_service import FeedbackLinkService
+
+        leaked = ValueError("Invalid header value b'sk-abc\\ndef-SECRET'")
+        opener = _FailingOpener(leaked)
+        url = "https://e.test/x"
+
+        def call():
+            if call_site == "get_json":
+                service = ReadService(api_key="k", base_url="https://e.test")
+                service._opener = opener
+                service._get_json(url)
+            elif call_site == "put_json":
+                _put_json(opener, url, {}, api_key="k", timeout=1, label="Workload")
+            else:
+                service = FeedbackLinkService(api_key="k", base_url="https://e.test")
+                service._opener = opener
+                service._send(Request(url))
+
         with pytest.raises(CoolhandAPIError) as excinfo:
-            service._get_json("https://e.test/x")
-        assert "SECRET" not in str(excinfo.value)
+            call()
+
+        rendered = "".join(traceback.format_exception(excinfo.value))
+        assert "SECRET" not in rendered
+        assert excinfo.value.__cause__ is None
         assert "ValueError" in str(excinfo.value)
 
 

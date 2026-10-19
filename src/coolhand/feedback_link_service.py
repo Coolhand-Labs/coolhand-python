@@ -313,9 +313,11 @@ class FeedbackLinkService:
         except ValueError as error:
             # Type only: http.client's message for a malformed header quotes the
             # value, which can be the API key.
+            # `from None`: the original's message quotes the header value (the API
+            # key) and would otherwise be printed with any traceback of this error.
             raise CoolhandAPIError(
                 f"Feedback link request failed: {type(error).__name__}"
-            ) from error
+            ) from None
 
     def _log(self, message: str) -> None:
         if not self.silent:

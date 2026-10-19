@@ -69,6 +69,11 @@ SENSITIVE_HEADERS = [
     "x-api-token",
     "x-access-token",
     "x-functions-key",
+    "authentication",
+    "bearer",
+    "x-auth",
+    "session-token",
+    "csrf-token",
 ]
 
 SENSITIVE_QUERY_PARAMS = {
@@ -92,6 +97,18 @@ SENSITIVE_QUERY_PARAMS = {
     "x-amz-security-token",
     "x-goog-api-key",
     "x-goog-signature",
+    # Credential spellings the header list already treats as sensitive.
+    "x-api-key",
+    "auth",
+    "auth_token",
+    "auth-token",
+    "access-token",
+    "api-token",
+    "api_token",
+    "authorization",
+    "bearer",
+    "x-auth-token",
+    "x-access-token",
 }
 
 # Azure OpenAI "On Your Data" carries datastore credentials in the *request body*
@@ -166,11 +183,11 @@ def _sanitize_url(url: str) -> str:
             parsed = parsed._replace(netloc=host)
         if parsed.query:
             params = parse_qs(parsed.query, keep_blank_values=True)
-            lowered_keys = {k.lower(): k for k in params}
             query_redacted = False
-            for param in SENSITIVE_QUERY_PARAMS:
-                actual_key = lowered_keys.get(param)
-                if actual_key is not None:
+            # Every spelling is checked: "Key=a&key=b" must redact both, so do not
+            # collapse keys by their lowercased form.
+            for actual_key in params:
+                if actual_key.lower() in SENSITIVE_QUERY_PARAMS:
                     params[actual_key] = ["[REDACTED]"]
                     query_redacted = True
             if query_redacted:
@@ -469,7 +486,11 @@ class CoolhandClient:
             logger.warning(f"Failed to submit interaction: {e}")
             return False
         except Exception as e:
-            logger.warning(f"Unexpected error submitting interaction: {e}")
+            # Type only: the message of a malformed-header ValueError embeds the
+            # offending value, which can be the API key.
+            logger.warning(
+                "Unexpected error submitting interaction: %s", type(e).__name__
+            )
             return False
 
     def _ensure_worker(self) -> bool:
@@ -650,8 +671,7 @@ class CoolhandClient:
         try:
             from . import httpx_interceptor
 
-            if httpx_interceptor.is_patched():
-                patched_libs += ["httpx.Client.send", "httpx.AsyncClient.send"]
+            patched_libs += httpx_interceptor.patched_targets()
         except Exception:
             pass
         try:

@@ -3,9 +3,9 @@
 """
 Dramatiq + pydantic-ai + Coolhand monitoring example.
 
-Coolhand patches httpx.AsyncClient.send at the class level before any workers
-start, so all Dramatiq thread workers automatically capture LLM calls — no
-per-worker initialization needed.
+Coolhand patches httpx.AsyncClient.send (and httpx2.AsyncClient.send, when
+installed) at the class level before any workers start, so all Dramatiq thread
+workers automatically capture LLM calls — no per-worker initialization needed.
 
 Key rule: import coolhand before dramatiq and pydantic-ai so the patch is in
 place before the broker and actors are set up.
@@ -39,6 +39,14 @@ from pydantic_ai.providers.anthropic import AnthropicProvider  # noqa: E402
 
 import coolhand  # noqa: E402
 
+# Recent pydantic-ai / anthropic releases build on the separate ``httpx2`` package
+# and reject a plain ``httpx.AsyncClient``; older ones use ``httpx``. Build the fake
+# client from whichever package the installed SDK accepts.
+try:
+    import httpx2 as sdk_http  # noqa: E402
+except ImportError:
+    sdk_http = httpx
+
 # ---------------------------------------------------------------------------
 # Broker setup — StubBroker runs workers in-process (no Redis/RabbitMQ needed)
 # ---------------------------------------------------------------------------
@@ -49,10 +57,12 @@ dramatiq.set_broker(broker)
 # ---------------------------------------------------------------------------
 # Fake transport — swap for None (auto) when ANTHROPIC_API_KEY is set
 # ---------------------------------------------------------------------------
-class FakeAnthropicTransport(httpx.AsyncBaseTransport):
+class FakeAnthropicTransport(sdk_http.AsyncBaseTransport):
     """Returns a canned Anthropic response without hitting the network."""
 
-    async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
+    async def handle_async_request(
+        self, request: sdk_http.Request
+    ) -> sdk_http.Response:
         body = json.dumps(
             {
                 "id": "msg_demo",
@@ -64,7 +74,7 @@ class FakeAnthropicTransport(httpx.AsyncBaseTransport):
                 "usage": {"input_tokens": 12, "output_tokens": 8},
             }
         ).encode()
-        return httpx.Response(
+        return sdk_http.Response(
             200,
             content=body,
             headers={"content-type": "application/json"},
@@ -79,7 +89,7 @@ def _build_model() -> AnthropicModel:
         provider = AnthropicProvider(api_key=api_key)
     else:
         # Demo mode: fake transport so the example runs without a real key
-        http_client = httpx.AsyncClient(transport=FakeAnthropicTransport())
+        http_client = sdk_http.AsyncClient(transport=FakeAnthropicTransport())
         provider = AnthropicProvider(api_key="demo-key", http_client=http_client)
     return AnthropicModel("claude-3-5-haiku-20241022", provider=provider)
 
@@ -152,6 +162,7 @@ if __name__ == "__main__":
     if not os.getenv("COOLHAND_API_KEY"):
         os.environ["COOLHAND_API_KEY"] = "demo-key"
 
+    exit_code = 0
     try:
         main()
     except Exception as exc:
@@ -159,5 +170,7 @@ if __name__ == "__main__":
         import traceback
 
         traceback.print_exc()
+        exit_code = 1
     finally:
         coolhand.shutdown()
+    sys.exit(exit_code)

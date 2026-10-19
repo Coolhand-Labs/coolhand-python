@@ -4,9 +4,9 @@ Coolhand intercepts LLM API calls through three mechanisms. Together they cover 
 
 ## Interception Mechanisms
 
-### httpx patching
+### httpx and httpx2 patching
 
-Patches `httpx.Client.send` and `httpx.AsyncClient.send` at the class level. Covers any library that uses httpx internally — which includes the official SDKs for all major providers:
+Patches `httpx.Client.send` and `httpx.AsyncClient.send` at the class level, and the same two methods on `httpx2` when it is installed. `httpx2` is a separate package (not the same module as `httpx`): recent releases of the OpenAI, Anthropic and pydantic-ai SDKs are built on it, and a client from one package never goes through the other's `send`, so both must be patched. Both are covered with the same capture, redaction and allow/deny-list logic. Covers any library that uses httpx or httpx2 internally — which includes the official SDKs for all major providers:
 
 - **OpenAI Python SDK** (`openai`)
 - **Anthropic Python SDK** (`anthropic`)
@@ -18,7 +18,7 @@ Patches `httpx.Client.send` and `httpx.AsyncClient.send` at the class level. Cov
 - **OpenCode** (`opencode.ai`)
 - **ElevenLabs** (`api.elevenlabs.io`)
 - **pydantic-ai** (via its underlying provider SDK)
-- Any other library that makes HTTP requests using httpx
+- Any other library that makes HTTP requests using httpx or httpx2
 
 ### requests patching
 
@@ -41,7 +41,7 @@ Directly patches `JsonRpcClient.request` in the GitHub Copilot SDK. Used because
 
 ## How It Works
 
-1. Importing `coolhand` patches `httpx.Client.send`, `httpx.AsyncClient.send`, `requests.Session.send` (if installed), and the GitHub Copilot `JsonRpcClient` — all at the class level, so every instance created after the patch is automatically covered.
+1. Importing `coolhand` patches `httpx.Client.send`, `httpx.AsyncClient.send`, the same methods on `httpx2` (if installed), `requests.Session.send` (if installed), and the GitHub Copilot `JsonRpcClient` — all at the class level, so every instance created after the patch is automatically covered.
 2. Each patched method checks the request URL against the intercept allow-list and the exclude deny-list. Non-LLM requests pass through with zero overhead.
 3. For matching requests, the request and response data are captured (with credentials redacted from headers and URL parameters) and queued for submission.
 4. With `auto_submit=True` (the default), each interaction is handed off after capture to a bounded background dispatch queue, drained by a single worker thread that performs the actual `urllib` POST — never on your thread. See [Delivery is asynchronous and best-effort](#delivery-is-asynchronous-and-best-effort) below.

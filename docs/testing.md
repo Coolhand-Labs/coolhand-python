@@ -1,6 +1,6 @@
 # Verifying Interception in Your Tests
 
-Coolhand patches `httpx.Client.send`, `httpx.AsyncClient.send` and `requests.Session.send` at the class level. A client that captured a reference to one of those functions **before** `import coolhand` (for example `send = httpx.Client().send` at import time of some other module) keeps calling the original, so the app is silently not monitored. No error or warning is raised.
+Coolhand patches `httpx.Client.send`, `httpx.AsyncClient.send`, their `httpx2` equivalents and `requests.Session.send` at the class level. A client that captured a reference to one of those functions **before** `import coolhand` (for example `send = httpx.Client().send` at import time of some other module) keeps calling the original, so the app is silently not monitored. No error or warning is raised.
 
 `coolhand.testing` lets your own tests or CI assert that a request really was intercepted.
 
@@ -37,5 +37,5 @@ A client instance created before Coolhand was imported is **not** a bypass: it l
 - **Process-wide counter.** Concurrent unrelated intercepted traffic (other threads or tasks) can advance the counter and make the assertion pass falsely. Run it on an otherwise quiet process.
 - **Counts interceptions, not delivery.** A request counts when it is captured, whether or not it is later delivered to Coolhand. Use `Coolhand.get_stats()` for delivery counters.
 - **Needs a handler.** Requests made while patched but before any `Coolhand` instance has set a handler pass through uncounted, so the assertion fails; create the instance (or `import coolhand`, which auto-initializes) first.
-- **httpx and `requests` only.** GitHub Copilot JSON-RPC calls are not counted.
+- **httpx, httpx2 and `requests` only.** GitHub Copilot JSON-RPC calls are not counted.
 - **Not per instance.** Patching is process-global in Python, so all `Coolhand` instances share one counter. A request intercepted for any instance advances the same counter. (coolhand-node's `test-utils` does not observe instance-based monitoring; this does.)

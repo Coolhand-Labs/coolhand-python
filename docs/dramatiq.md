@@ -8,7 +8,7 @@ Coolhand works with [Dramatiq](https://dramatiq.io/) task queues and [pydantic-a
 pip install coolhand dramatiq pydantic-ai
 ```
 
-**Import `coolhand` before starting any Dramatiq workers.** Since Coolhand patches `httpx.AsyncClient.send` at the class level, any thread that runs after the patch is applied will have its LLM calls captured automatically.
+**Import `coolhand` before starting any Dramatiq workers.** Since Coolhand patches `httpx.AsyncClient.send` (and `httpx2.AsyncClient.send`) at the class level, any thread that runs after the patch is applied will have its LLM calls captured automatically.
 
 ```python
 import coolhand  # must come before dramatiq workers start
@@ -49,7 +49,7 @@ See [`examples/dramatiq_pydantic_ai.py`](../examples/dramatiq_pydantic_ai.py) fo
 | Thread-based workers (default: Redis, RabbitMQ, StubBroker) | ✅ Works |
 | `asyncio.run()` inside a sync Dramatiq actor | ✅ Works |
 | pydantic-ai via `AnthropicModel` / `OpenAIModel` | ✅ Works |
-| Any httpx-based library (openai, anthropic SDKs) | ✅ Works |
+| Any httpx- or httpx2-based library (openai, anthropic SDKs) | ✅ Works |
 | Streaming responses | ✅ Works |
 | Process-based workers (spawned subprocesses) | ✅ Works with `CoolhandDramatiqMiddleware` |
 | Per-task session correlation in Coolhand | ⚠️ Needs workaround — see below |
@@ -58,7 +58,7 @@ See [`examples/dramatiq_pydantic_ai.py`](../examples/dramatiq_pydantic_ai.py) fo
 
 ### Gap 1 — Process-based Workers
 
-**Problem:** Coolhand's httpx patch lives in the parent process's memory. Worker processes started with a fresh interpreter (e.g. `python -m dramatiq myapp`) begin without the patch applied.
+**Problem:** Coolhand's httpx / httpx2 patch lives in the parent process's memory. Worker processes started with a fresh interpreter (e.g. `python -m dramatiq myapp`) begin without the patch applied.
 
 **Fix:** Add `CoolhandDramatiqMiddleware` to your broker. In Dramatiq's `after_process_boot` lifecycle hook it creates, replaces, or re-patches the Coolhand instance as needed, ensuring monitoring is active — with the right config — in every worker process.
 

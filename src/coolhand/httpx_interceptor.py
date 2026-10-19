@@ -23,6 +23,8 @@ logger = logging.getLogger(__name__)
 _patched = False
 _original_send: Callable | None = None
 _original_async_send: Callable | None = None
+_original_httpx2_send: Callable | None = None
+_original_httpx2_async_send: Callable | None = None
 _original_requests_send: Callable | None = None
 _handler: Callable[[RequestData, ResponseData | None, str | None], None] | None = None
 _intercept_addresses: list[str] | None = None
@@ -44,6 +46,10 @@ _intercepting: contextvars.ContextVar[bool] = contextvars.ContextVar(
 # coolhand.testing). Never reset by unpatch(), so snapshot deltas stay valid
 # across patch cycles.
 _intercept_count = 0
+# Serialises patch()/unpatch(): two threads racing past the "already patched" check
+# would save the first thread's wrapper as the "original", and every call would then
+# recurse into itself.
+_patch_lock = threading.RLock()
 _intercept_count_lock = threading.Lock()
 
 
@@ -342,6 +348,10 @@ def _compile_entry(entry: str) -> _Matcher:
         if m := _HOST_PORT.fullmatch(host):
             host, port = m.group(1), int(m.group(2))
         host = host.strip("[]").lower().rstrip(".") or None
+        if host is not None:
+            # "a**b" matches exactly what "a*b" does; collapsing keeps the glob
+            # matcher linear however many stars an entry has.
+            host = re.sub(r"\*+", "*", host)
 
     if host is None and port is None and path is None:
         logger.debug("Ignoring empty pattern entry %r", entry)
@@ -510,22 +520,25 @@ def set_handler(
     _handler = handler
 
 
-def patch() -> bool:
-    """Patch httpx to intercept requests."""
-    global _patched, _original_send, _original_async_send
+def _tag(wrapper: Callable, original: Callable) -> Callable:
+    """Record the real function behind one of our wrappers."""
+    wrapper._coolhand_original = original  # type: ignore[attr-defined]
+    return wrapper
 
-    if _patched:
-        return True
 
-    try:
-        import httpx
-    except ImportError:
-        logger.debug("httpx not available")
-        return False
+def _unwrap(func: Callable) -> Callable:
+    """Return the real function behind a Coolhand wrapper, or ``func`` itself.
 
-    # Save originals
-    _original_send = httpx.Client.send
-    _original_async_send = httpx.AsyncClient.send
+    Saving one of our own wrappers as the "original" would make it call itself.
+    That can happen if patch() runs while the class is already patched but the
+    module state was reset (a test fixture, or a concurrent race).
+    """
+    # Look in __dict__ only: getattr would let a Mock invent the attribute.
+    return getattr(func, "__dict__", {}).get("_coolhand_original", func)
+
+
+def _make_patched_send(get_original: Callable[[], Callable]) -> Callable:
+    """Build the sync ``send`` wrapper; ``get_original`` returns the real ``send``."""
 
     def patched_send(self, request, **kwargs):
         """Patched sync send."""
@@ -535,7 +548,7 @@ def patch() -> bool:
         # guard prevents double-logging when the same intercepted call re-enters
         # the public send(), e.g. via a requests→httpx adapter chain).
         if not _should_capture_url(url) or not _handler or _intercepting.get():
-            return _original_send(self, request, **kwargs)
+            return get_original()(self, request, **kwargs)
 
         token = _intercepting.set(True)
         _record_interception()
@@ -551,7 +564,7 @@ def patch() -> bool:
                 "timestamp": start,
             }
             attach_snapshot(req_data)
-            response = _original_send(self, request, **kwargs)
+            response = get_original()(self, request, **kwargs)
             duration = time.time() - start
 
             res_data: ResponseData = {
@@ -578,6 +591,12 @@ def patch() -> bool:
         finally:
             _intercepting.reset(token)
 
+    return patched_send
+
+
+def _make_patched_async_send(get_original: Callable[[], Callable]) -> Callable:
+    """Build the async ``send`` wrapper; ``get_original`` returns the real ``send``."""
+
     async def patched_async_send(self, request, **kwargs):
         """Patched async send."""
         url = str(request.url)
@@ -586,7 +605,7 @@ def patch() -> bool:
         # guard prevents double-logging when the same intercepted call re-enters
         # the public send(), e.g. via a requests→httpx adapter chain).
         if not _should_capture_url(url) or not _handler or _intercepting.get():
-            return await _original_async_send(self, request, **kwargs)
+            return await get_original()(self, request, **kwargs)
 
         token = _intercepting.set(True)
         _record_interception()
@@ -602,7 +621,7 @@ def patch() -> bool:
                 "timestamp": start,
             }
             attach_snapshot(req_data)
-            response = await _original_async_send(self, request, **kwargs)
+            response = await get_original()(self, request, **kwargs)
             duration = time.time() - start
 
             # Check for streaming response
@@ -631,61 +650,50 @@ def patch() -> bool:
                         except Exception:
                             logger.debug("Handler error in streaming", exc_info=True)
 
-                # Wrap aiter_bytes
-                if hasattr(response, "aiter_bytes"):
-                    orig_aiter_bytes = response.aiter_bytes
+                # httpx implements aiter_lines on aiter_text on aiter_bytes on
+                # aiter_raw, each looked up on the instance. Wrap them all (a
+                # consumer may call any one) but capture only at the outermost
+                # layer that is running, or every chunk would be recorded once
+                # per layer.
+                capture_active = [False]
 
-                    async def capturing_aiter_bytes(chunk_size=1024):
-                        async for chunk in orig_aiter_bytes(chunk_size):
-                            if chunk:
-                                captured_chunks.append(
-                                    chunk.decode("utf-8", errors="replace")
-                                )
-                            yield chunk
+                def wrap_stream(orig, to_text):
+                    async def capturing(*args, **kwargs):
+                        if capture_active[0]:
+                            async for item in orig(*args, **kwargs):
+                                yield item
+                            return
+                        capture_active[0] = True
+                        try:
+                            async for item in orig(*args, **kwargs):
+                                if item:
+                                    captured_chunks.append(to_text(item))
+                                yield item
+                        finally:
+                            capture_active[0] = False
                         send_captured()
 
-                    response.aiter_bytes = capturing_aiter_bytes
+                    return capturing
 
-                # Wrap aiter_lines (used by OpenAI for SSE)
-                if hasattr(response, "aiter_lines"):
-                    orig_aiter_lines = response.aiter_lines
+                def decode_bytes(chunk):
+                    return chunk.decode("utf-8", errors="replace")
 
-                    async def capturing_aiter_lines():
-                        async for line in orig_aiter_lines():
-                            if line:
-                                captured_chunks.append(line + "\n")
-                            yield line
-                        send_captured()
-
-                    response.aiter_lines = capturing_aiter_lines
-
-                # Wrap aiter_text
-                if hasattr(response, "aiter_text"):
-                    orig_aiter_text = response.aiter_text
-
-                    async def capturing_aiter_text():
-                        async for text in orig_aiter_text():
-                            if text:
-                                captured_chunks.append(text)
-                            yield text
-                        send_captured()
-
-                    response.aiter_text = capturing_aiter_text
-
-                # Wrap aiter_raw (lowest level)
-                if hasattr(response, "aiter_raw"):
-                    orig_aiter_raw = response.aiter_raw
-
-                    async def capturing_aiter_raw(chunk_size=1024):
-                        async for chunk in orig_aiter_raw(chunk_size):
-                            if chunk:
-                                captured_chunks.append(
-                                    chunk.decode("utf-8", errors="replace")
-                                )
-                            yield chunk
-                        send_captured()
-
-                    response.aiter_raw = capturing_aiter_raw
+                # aiter_lines is used by OpenAI for SSE; aiter_raw is the lowest
+                # level. Arguments (e.g. chunk_size) are forwarded untouched so
+                # httpx's own buffering, and the host's streaming latency, is
+                # unchanged.
+                for name, to_text in (
+                    ("aiter_bytes", decode_bytes),
+                    ("aiter_lines", lambda line: line + "\n"),
+                    ("aiter_text", str),
+                    ("aiter_raw", decode_bytes),
+                ):
+                    if hasattr(response, name):
+                        setattr(
+                            response,
+                            name,
+                            wrap_stream(getattr(response, name), to_text),
+                        )
             else:
                 # Non-streaming: send immediately
                 res_data: ResponseData = {
@@ -713,16 +721,76 @@ def patch() -> bool:
         finally:
             _intercepting.reset(token)
 
-    # Apply httpx patches
-    httpx.Client.send = patched_send
-    httpx.AsyncClient.send = patched_async_send
+    return patched_async_send
+
+
+def patch() -> bool:
+    """Patch httpx (and httpx2, when installed) to intercept requests."""
+    with _patch_lock:
+        return _patch_locked()
+
+
+def _patch_locked() -> bool:
+    global _patched, _original_send, _original_async_send
+    global _original_httpx2_send, _original_httpx2_async_send
+
+    if _patched:
+        return True
+
+    try:
+        import httpx
+    except ImportError:
+        httpx = None
+        logger.debug("httpx not available")
+    try:
+        # The OpenAI / Anthropic / pydantic-ai SDKs moved to this separate fork of
+        # httpx; its clients never touch httpx.Client.send, so it needs its own patch.
+        import httpx2
+    except ImportError:
+        httpx2 = None
+        logger.debug("httpx2 not available")
+
+    if httpx is None and httpx2 is None:
+        return False
+
+    if httpx is not None:
+        _original_send = _unwrap(httpx.Client.send)
+        _original_async_send = _unwrap(httpx.AsyncClient.send)
+        httpx.Client.send = _tag(
+            _make_patched_send(lambda: _original_send), _original_send
+        )
+        httpx.AsyncClient.send = _tag(
+            _make_patched_async_send(lambda: _original_async_send),
+            _original_async_send,
+        )
+    if httpx2 is None:
+        # Forget originals saved by an earlier patch() that did see httpx2.
+        _original_httpx2_send = _original_httpx2_async_send = None
+    else:
+        _original_httpx2_send = _unwrap(httpx2.Client.send)
+        _original_httpx2_async_send = _unwrap(httpx2.AsyncClient.send)
+        httpx2.Client.send = _tag(
+            _make_patched_send(lambda: _original_httpx2_send), _original_httpx2_send
+        )
+        httpx2.AsyncClient.send = _tag(
+            _make_patched_async_send(lambda: _original_httpx2_async_send),
+            _original_httpx2_async_send,
+        )
 
     # Optionally patch requests.Session.send
     global _original_requests_send
     try:
         import requests as _requests_lib
 
-        _original_requests_send = _requests_lib.Session.send
+        # Bound locally: unpatch() clears the module global, but a library that
+        # captured this wrapper while it was installed (mock/record tools wrap
+        # Session.send) may still call it afterwards.
+        real_requests_send = _original_requests_send = _unwrap(
+            _requests_lib.Session.send
+        )
+
+        def send_original():
+            return _original_requests_send or real_requests_send
 
         def patched_requests_send(self, request, **kwargs):
             url = str(request.url or "")
@@ -731,7 +799,7 @@ def patch() -> bool:
             # same call re-enters the public send(), e.g. via a requests→httpx
             # adapter chain triggering both this handler and patched_send.
             if not _should_capture_url(url) or not _handler or _intercepting.get():
-                return _original_requests_send(self, request, **kwargs)
+                return send_original()(self, request, **kwargs)
 
             token = _intercepting.set(True)
             _record_interception()
@@ -751,7 +819,7 @@ def patch() -> bool:
                     "timestamp": start,
                 }
                 attach_snapshot(req_data)
-                response = _original_requests_send(self, request, **kwargs)
+                response = send_original()(self, request, **kwargs)
                 duration = time.time() - start
 
                 res_body: Any = None
@@ -798,7 +866,7 @@ def patch() -> bool:
             finally:
                 _intercepting.reset(token)
 
-        _requests_lib.Session.send = patched_requests_send
+        _requests_lib.Session.send = _tag(patched_requests_send, real_requests_send)
     except ImportError:
         pass
 
@@ -809,7 +877,12 @@ def patch() -> bool:
 
 
 def unpatch() -> None:
-    """Restore original httpx methods."""
+    """Restore original httpx / httpx2 methods."""
+    with _patch_lock:
+        _unpatch_locked()
+
+
+def _unpatch_locked() -> None:
     global _patched, _original_requests_send, _exclude_api_patterns, _max_body_bytes
 
     if not _patched:
@@ -822,6 +895,16 @@ def unpatch() -> None:
             httpx.Client.send = _original_send
         if _original_async_send:
             httpx.AsyncClient.send = _original_async_send
+    except ImportError:
+        pass
+
+    try:
+        import httpx2
+
+        if _original_httpx2_send:
+            httpx2.Client.send = _original_httpx2_send
+        if _original_httpx2_async_send:
+            httpx2.AsyncClient.send = _original_httpx2_async_send
     except ImportError:
         pass
 
@@ -845,6 +928,18 @@ def has_handler() -> bool:
     return bool(_handler)
 
 
+def patched_targets() -> list[str]:
+    """Names of the ``send`` methods currently wrapped (for diagnostics)."""
+    if not _patched:
+        return []
+    targets = []
+    if _original_send:
+        targets += ["httpx.Client.send", "httpx.AsyncClient.send"]
+    if _original_httpx2_send:
+        targets += ["httpx2.Client.send", "httpx2.AsyncClient.send"]
+    return targets
+
+
 def is_patched() -> bool:
-    """Check if httpx is patched."""
+    """Check if httpx / httpx2 are patched."""
     return _patched

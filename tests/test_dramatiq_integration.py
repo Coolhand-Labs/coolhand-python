@@ -41,6 +41,14 @@ from pydantic_ai.providers.anthropic import AnthropicProvider
 
 from coolhand import httpx_interceptor
 
+# Recent pydantic-ai / anthropic releases build on the separate ``httpx2`` package
+# and reject a plain ``httpx.AsyncClient``; older ones need ``httpx``. Use whichever
+# the installed SDK accepts so the test exercises the real interception path.
+try:
+    import httpx2 as sdk_http
+except ImportError:  # pragma: no cover - older SDKs only
+    sdk_http = httpx  # type: ignore[assignment]
+
 # ---------------------------------------------------------------------------
 # Fake HTTP transport — returns a canned Anthropic response, no network calls
 # ---------------------------------------------------------------------------
@@ -57,16 +65,25 @@ FAKE_RESPONSE_BODY = json.dumps(
 ).encode()
 
 
-class FakeAnthropicTransport(httpx.AsyncBaseTransport):
-    """Returns a deterministic Anthropic response without hitting the network."""
+def _fake_transport_class(http_module: Any) -> type:
+    """A canned-Anthropic-response transport for one HTTP package (httpx/httpx2)."""
 
-    async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
-        return httpx.Response(
-            200,
-            content=FAKE_RESPONSE_BODY,
-            headers={"content-type": "application/json"},
-            request=request,
-        )
+    class FakeTransport(http_module.AsyncBaseTransport):
+        async def handle_async_request(self, request):
+            return http_module.Response(
+                200,
+                content=FAKE_RESPONSE_BODY,
+                headers={"content-type": "application/json"},
+                request=request,
+            )
+
+    return FakeTransport
+
+
+# Returns a deterministic Anthropic response without hitting the network.
+FakeAnthropicTransport = _fake_transport_class(httpx)
+# The same, for whichever package the installed pydantic-ai/anthropic SDK uses.
+FakeSdkTransport = _fake_transport_class(sdk_http)
 
 
 # ---------------------------------------------------------------------------
@@ -141,7 +158,7 @@ def _fake_anthropic_model() -> AnthropicModel:
     """AnthropicModel wired to a fake transport — no network calls needed."""
     provider = AnthropicProvider(
         api_key="test-key",
-        http_client=httpx.AsyncClient(transport=FakeAnthropicTransport()),
+        http_client=sdk_http.AsyncClient(transport=FakeSdkTransport()),
     )
     return AnthropicModel("claude-3-5-haiku-20241022", provider=provider)
 

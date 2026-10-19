@@ -1,86 +1,120 @@
-"""Create or update workloads by their stable key.
+"""Read and upsert access to the workloads endpoint.
 
-Wraps `PUT /api/v2/workloads/by_key/{key}`. Requires the client's **private** API key.
-Listing and searching workloads is not covered here.
+Wraps `GET /api/v2/workloads` and `PUT /api/v2/workloads/by_key/{key}`. Both require
+the client's **private** API key — the public key is write-only on this API and is
+rejected exactly like an invalid one. There is no per-workload read endpoint.
 """
 
 import asyncio
-import logging
-import os
+from datetime import datetime
 from typing import Any
 
-from ._config import (
-    _DEFAULT_BASE_URL,
-    _build_opener,
-    _normalize_base_url,
-    _resolve_request_timeout,
+from ._read_service import (
+    QueryValue,
+    ReadService,
+    _by_key_url,
+    _pagination_from_headers,
+    _put_json,
+    _window_filters,
+    _with_query,
 )
 from .declared_context import (
     MAX_DESCRIPTION_LENGTH,
     optional_reporter,
     optional_text,
 )
-from .template_service import (
-    _by_key_url,
-    _put_json,
-)
-from .types import Config
-
-logger = logging.getLogger(__name__)
+from .types import SearchWorkloadsResponse, WorkloadSummary
 
 WORKLOADS_ENDPOINT = "/api/v2/workloads"
 
 
-class WorkloadService:
-    """Create or rename the workloads your LLM calls are attributed to.
+class WorkloadService(ReadService):
+    """Read the workloads (groups of prompt templates) your logs belong to.
 
     Example:
         >>> from coolhand import WorkloadService
         >>> service = WorkloadService(api_key="your-private-api-key")
-        >>> service.upsert("Parser#call", name="Parser#call", description="Squishes")
+        >>> result = service.search_workloads(include_metrics=True, days_back=30)
+        >>> result["workloads"][0]["metrics"]["total_cost"]
     """
 
-    def __init__(self, config: Config | None = None, **kwargs: Any) -> None:
-        """Initialize the workload service.
+    _resource_label = "Workload"
+
+    def search_workloads(
+        self,
+        *,
+        search: str | None = None,
+        include_archived: bool | None = None,
+        include_system: bool | None = None,
+        include_templates: bool | None = None,
+        include_metrics: bool | None = None,
+        days_back: int | None = None,
+        since: datetime | str | None = None,
+        until: datetime | str | None = None,
+        page: int | None = None,
+        per: int | None = None,
+    ) -> SearchWorkloadsResponse:
+        """List workloads, optionally with cost and performance metrics.
+
+        There is deliberately no `client_id`: the client is always derived from the
+        authenticating API key and cannot be supplied by the caller.
 
         Args:
-            config: Configuration dictionary. `api_key` must be the **private** key.
-            **kwargs: Override config values (api_key, base_url, silent,
-                request_timeout).
+            search: Case-insensitive substring match against the workload name.
+            include_archived: Include archived workloads. Defaults to false server-side.
+            include_system: Include system workloads such as `Unmatched` and
+                `Embedding Requests`. Defaults to false server-side.
+            include_templates: Add each workload's active templates and their routing
+                patterns as `templates`.
+            include_metrics: Add a `metrics` rollup per workload across all of its
+                templates; the same object `search_templates` returns per template.
+            days_back: Rolling metrics window in days ending now (server default 28,
+                max 365). Ignored when `since` is given.
+            since: Metrics window start, inclusive. A `datetime` (naive means UTC) or an
+                ISO8601 string; a string without an offset is UTC and a date alone is
+                midnight UTC. Overrides `days_back`, which then comes back `None` in
+                `metrics`.
+            until: Metrics window end, exclusive; defaults to now. Same formats as
+                `since`. With only `until`, the window is `days_back` long ending there.
+            page: Page number, 1-based.
+            per: Page size (default 25, max 100, both enforced server-side).
+
+        Returns:
+            A dict with `workloads` (ordered by name) and `pagination`, the latter read
+            from the response headers the endpoint always sends. A workload's `id` is
+            its hashid, a string.
+
+        Raises:
+            ValueError: If `since` or `until` is neither a `datetime` nor a string,
+                before any request is made.
+            CoolhandAPIError: On a non-2xx response, with `status` set — `401` for a
+                missing/invalid/public key, `422` for a bad `days_back` or a malformed,
+                inverted or over-365-day `since`/`until` window (only checked with
+                `include_metrics`), and `504` when an aggregate exceeds the server's
+                statement timeout; a `504` is retryable, so narrow with `search` or a
+                smaller `per`. Also raised, with `status` left `None`, on a transport
+                failure or a body that is not the JSON array this endpoint returns.
         """
-        self.config: Config = {
-            "api_key": os.getenv("COOLHAND_API_KEY", ""),
-            "base_url": os.getenv("COOLHAND_BASE_URL") or _DEFAULT_BASE_URL,
-            "silent": os.getenv("COOLHAND_SILENT", "true").lower() == "true",
+        filters: dict[str, QueryValue] = {
+            "search": search,
+            "include_archived": include_archived,
+            "include_system": include_system,
+            "include_templates": include_templates,
+            "include_metrics": include_metrics,
+            **_window_filters(days_back, since, until),
+            "page": page,
+            "per": per,
         }
-        if config:
-            self.config.update(config)
-        self.config.update(kwargs)
-        self.config["request_timeout"] = _resolve_request_timeout(self.config)
-        self.config["base_url"] = _normalize_base_url(
-            self.config.get("base_url", _DEFAULT_BASE_URL)
-        )
-        self._opener = _build_opener()
+        url = _with_query(f"{self.config['base_url']}{WORKLOADS_ENDPOINT}", filters)
 
-    @property
-    def api_key(self) -> str:
-        """The configured API key, stripped of surrounding whitespace."""
-        return (self.config.get("api_key") or "").strip()
+        body, headers = self._get_json_array(url, "Workload list")
 
-    @property
-    def silent(self) -> bool:
-        """Whether silent mode is enabled."""
-        return self.config.get("silent", True)
-
-    @property
-    def timeout(self) -> float:
-        """The HTTP timeout, in seconds."""
-        return self.config["request_timeout"]
-
-    def _log(self, message: str) -> None:
-        """Log a message if not in silent mode."""
-        if not self.silent:
-            logger.info(message)
+        workloads: list[WorkloadSummary] = body
+        self._log(f"Fetched {len(workloads)} workload(s)")
+        return {
+            "workloads": workloads,
+            "pagination": _pagination_from_headers(headers, page, per),
+        }
 
     def upsert(
         self,

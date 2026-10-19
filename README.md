@@ -263,6 +263,25 @@ with with_context(workload={"key": "Parser#call"}, template={"key": "Parser#call
 
 Invalid declarations raise `ValueError` before your code runs. `WorkloadService.upsert` and `TemplateService.upsert` create or rename workloads and templates explicitly (private API key). See [Declared Workloads and Templates](./docs/declared-workloads.md).
 
+## Reading Workloads and Cost Metrics
+
+`search_workloads` lists your workloads, and `include_metrics` adds the dashboard's cost and performance numbers to workloads and templates, over a rolling `days_back` window or an explicit `since`/`until` one. `search_logs` returns a per-log `cost` and can filter and sort on it. All need your **private** API key:
+
+```python
+from datetime import datetime, timezone
+
+workloads = ch.search_workloads(include_metrics=True, days_back=30)['workloads']
+workloads[0]['metrics']['total_cost']
+
+logs = ch.search_logs(
+    since=datetime(2026, 9, 1, tzinfo=timezone.utc),
+    min_cost=0.5,
+    order='cost_desc',
+)['logs']
+```
+
+See [Reading Workloads](./docs/workloads.md) for the workload reference, [Reading Templates](./docs/templates.md#metrics) for the `metrics` fields and window rules, and [Reading Logs](./docs/logs.md) for log search and `get_log`.
+
 ## Linking Feedback to an Optimization
 
 `link_feedback`, `bulk_link_feedback` (batches of 100) and `unlink_feedback` attach feedback to an optimization as evidence. Private API key required; errors raise `CoolhandAPIError`. See [Linking Feedback](./docs/feedback-links.md).
@@ -328,6 +347,8 @@ See [Verifying Interception in Your Tests](./docs/testing.md) for what it catche
 - [Reading Templates](./docs/templates.md) — search LLM request templates and fetch a single one, prompt patterns included, using the private API key
 - [Declared Workloads and Templates](./docs/declared-workloads.md) — declare the workload/template of captured calls with `with_context`, and create or rename them with `upsert` (private API key)
 - [Examples and live smoke tests](./examples/README.md) — runnable examples, plus `make live-examples` to validate OpenAI and Anthropic calls against real keys
+- [Reading Workloads](./docs/workloads.md) — list workloads with cost and performance metrics over a rolling or explicit window
+- [Reading Logs](./docs/logs.md) — search logs by cost, time window and more, and fetch one log's content and cost breakdown
 
 ## Related Packages
 

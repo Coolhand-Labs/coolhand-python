@@ -21,7 +21,7 @@ from ._config import (
     _normalize_base_url,
     _resolve_request_timeout,
 )
-from .template_service import (
+from ._read_service import (
     _MAX_ERROR_BODY_CHARS,
     CoolhandAPIError,
     _error_body,

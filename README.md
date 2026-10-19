@@ -33,7 +33,7 @@ import coolhand  # Auto-initializes and starts monitoring
 # ✅ Anthropic API calls
 # ✅ Google Gemini API calls
 # ✅ GitHub Copilot SDK calls
-# ✅ ANY library making AI API calls via httpx
+# ✅ ANY library making AI API calls via httpx or httpx2
 
 # Your existing code works unchanged:
 from openai import OpenAI
@@ -47,7 +47,7 @@ response = client.chat.completions.create(
 
 **Why Automatic Monitoring:**
 - **Zero refactoring** - No code changes to existing services
-- **Complete coverage** - Monitors all AI libraries using httpx automatically
+- **Complete coverage** - Monitors all AI libraries using httpx or httpx2 automatically
 - **Security built-in** - Automatic credential sanitization
 - **Performance optimized** - Negligible overhead via async logging
 - **Future-proof** - Automatically captures new AI calls added by your team

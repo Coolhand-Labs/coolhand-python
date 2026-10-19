@@ -65,30 +65,25 @@ FAKE_RESPONSE_BODY = json.dumps(
 ).encode()
 
 
-class FakeAnthropicTransport(httpx.AsyncBaseTransport):
-    """Returns a deterministic Anthropic response without hitting the network."""
+def _fake_transport_class(http_module: Any) -> type:
+    """A canned-Anthropic-response transport for one HTTP package (httpx/httpx2)."""
 
-    async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
-        return httpx.Response(
-            200,
-            content=FAKE_RESPONSE_BODY,
-            headers={"content-type": "application/json"},
-            request=request,
-        )
+    class FakeTransport(http_module.AsyncBaseTransport):
+        async def handle_async_request(self, request):
+            return http_module.Response(
+                200,
+                content=FAKE_RESPONSE_BODY,
+                headers={"content-type": "application/json"},
+                request=request,
+            )
+
+    return FakeTransport
 
 
-class FakeSdkTransport(sdk_http.AsyncBaseTransport):
-    """Same canned response, for whichever HTTP package the SDK is built on."""
-
-    async def handle_async_request(
-        self, request: sdk_http.Request
-    ) -> sdk_http.Response:
-        return sdk_http.Response(
-            200,
-            content=FAKE_RESPONSE_BODY,
-            headers={"content-type": "application/json"},
-            request=request,
-        )
+# Returns a deterministic Anthropic response without hitting the network.
+FakeAnthropicTransport = _fake_transport_class(httpx)
+# The same, for whichever package the installed pydantic-ai/anthropic SDK uses.
+FakeSdkTransport = _fake_transport_class(sdk_http)
 
 
 # ---------------------------------------------------------------------------

@@ -1,9 +1,10 @@
 """Test helpers for asserting that Coolhand really intercepted a request.
 
 Interception can fail silently: a client that captured a reference to
-``httpx.Client.send`` or ``requests.Session.send`` before ``import coolhand``
-never goes through the patched wrapper, so the app simply stops being
-monitored with no error. Use these helpers in your own tests or CI to catch it:
+``httpx.Client.send``, ``httpx2.Client.send`` or ``requests.Session.send``
+before ``import coolhand`` never goes through the patched wrapper, so the app
+simply stops being monitored with no error. Use these helpers in your own tests
+or CI to catch it:
 
     from coolhand.testing import (
         assert_interception_occurred,
@@ -69,8 +70,8 @@ def assert_interception_occurred(
         )
     reasons.append(
         "Likely causes: a client captured a reference to httpx.Client.send / "
-        "requests.Session.send before coolhand was imported; the request used "
-        "a transport Coolhand does not patch (e.g. aiohttp, urllib3, "
+        "httpx2.Client.send / requests.Session.send before coolhand was imported; "
+        "the request used a transport Coolhand does not patch (e.g. aiohttp, urllib3, "
         "http.client); or the URL is outside intercept_addresses, localhost, "
         "or matched exclude_api_patterns."
     )

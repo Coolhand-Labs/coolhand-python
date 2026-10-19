@@ -796,9 +796,7 @@ def _patch_locked() -> bool:
             # same call re-enters the public send(), e.g. via a requests→httpx
             # adapter chain triggering both this handler and patched_send.
             if not _should_capture_url(url) or not _handler or _intercepting.get():
-                return (_original_requests_send or real_requests_send)(
-                    self, request, **kwargs
-                )
+                return send_original()(self, request, **kwargs)
 
             token = _intercepting.set(True)
             _record_interception()
@@ -818,9 +816,7 @@ def _patch_locked() -> bool:
                     "timestamp": start,
                 }
                 attach_snapshot(req_data)
-                response = (_original_requests_send or real_requests_send)(
-                    self, request, **kwargs
-                )
+                response = send_original()(self, request, **kwargs)
                 duration = time.time() - start
 
                 res_body: Any = None

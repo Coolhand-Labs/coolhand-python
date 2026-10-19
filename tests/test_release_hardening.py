@@ -122,6 +122,40 @@ class TestPatchIsIdempotent:
         interceptor.set_handler(None)
         assert httpx.Client.send is original
 
+    def test_concurrent_patch_calls_install_one_wrapper_over_the_real_original(self):
+        import threading
+
+        interceptor.unpatch()
+        real_send = httpx.Client.send
+        seen = []
+        interceptor.set_handler(lambda req, res, err: seen.append(res))
+        threads = 8
+        barrier = threading.Barrier(threads)
+        results = []
+
+        def race():
+            barrier.wait()
+            results.append(interceptor.patch())
+
+        try:
+            workers = [threading.Thread(target=race) for _ in range(threads)]
+            for worker in workers:
+                worker.start()
+            for worker in workers:
+                worker.join()
+
+            assert results == [True] * threads
+            assert httpx.Client.send._coolhand_original is real_send
+            with httpx.Client(
+                transport=httpx.MockTransport(lambda r: httpx.Response(200, json={}))
+            ) as client:
+                assert client.post(LLM_URL, json={}).status_code == 200
+            assert len(seen) == 1
+        finally:
+            interceptor.unpatch()
+            interceptor.set_handler(None)
+        assert httpx.Client.send is real_send
+
 
 class _FailingOpener:
     def __init__(self, error):
@@ -144,10 +178,13 @@ class TestReadServiceWrapsReadTimeFailures:
 
 class TestGlobCostIsBounded:
     def test_many_consecutive_stars_in_a_host_entry_stay_fast(self):
-        entry = "a" + "*" * 400 + "b.example.com"
+        # Uncollapsed, this many stars takes minutes; collapsed it is sub-millisecond,
+        # so a 1s bound separates the two on any machine.
+        entry = "a" + "*" * 4000 + "b.example.com"
         host = "a" + "x" * 200 + "b.example.com"
         started = time.perf_counter()
         assert interceptor._compile_entry(entry)(host, 443, "/") is True
+        assert interceptor._compile_entry(entry)("ab.example.net", 443, "/") is False
         assert time.perf_counter() - started < 1.0
 
 

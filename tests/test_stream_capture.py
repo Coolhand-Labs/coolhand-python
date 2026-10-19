@@ -101,3 +101,41 @@ async def test_aiter_lines_is_captured_once(captured, module_name):
     body = captured[0][1]["body"]
     # One entry per event, not one per wrapper layer.
     assert body.count("data: ") == EVENTS
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("module_name", CLIENTS)
+async def test_breaking_out_early_reports_no_partial_body(captured, module_name):
+    """Abandoning a stream half way is not a completed response, so no record is
+    emitted for it (and nothing raises while the generator is torn down)."""
+    client, consumed_first = _client_for(module_name)
+    async with client:
+        async with client.stream("POST", LLM_URL, json={}) as response:
+            async for _ in response.aiter_bytes():
+                consumed_first.set()
+                break
+            await asyncio.sleep(0)
+
+    assert captured == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("module_name", CLIENTS)
+async def test_mid_stream_transport_error_reaches_the_host(captured, module_name):
+    module = __import__(module_name)
+
+    class Broken(module.AsyncByteStream):
+        async def __aiter__(self):
+            yield EVENT
+            raise module.ReadError("connection dropped")
+
+    transport = module.MockTransport(
+        lambda request: module.Response(
+            200, stream=Broken(), headers={"content-type": "text/event-stream"}
+        )
+    )
+    async with module.AsyncClient(transport=transport) as client:
+        async with client.stream("POST", LLM_URL, json={}) as response:
+            with pytest.raises(module.ReadError):
+                async for _ in response.aiter_bytes():
+                    pass

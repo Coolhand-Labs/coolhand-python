@@ -42,7 +42,7 @@ _pre_pending: dict[str | None, list[dict[str, Any]]] = {}
 # session id is server-assigned and absent from the session.create request, so
 # entries are temporarily keyed by a "__pending__{n}" placeholder and re-keyed
 # to the real sessionId once it's known from the session.create response.
-_session_params: dict[str, dict[str, Any]] = {}
+_session_params: dict[str | None, dict[str, Any]] = {}
 
 # Counter for temporary "__pending__{n}" keys used above; guarded by _lock.
 _pending_key_counter = itertools.count()
@@ -70,6 +70,8 @@ def _promote_system_prompt(body: dict[str, Any]) -> None:
     if not isinstance(system_message, dict):
         return
     content = system_message.get("content")
+    # Copilot's current schema only emits a plain string here; a non-string
+    # content (e.g. a content-block list) is left unpromoted rather than guessed at.
     if isinstance(content, str) and content:
         body["system"] = content
 
@@ -308,9 +310,9 @@ def patch() -> bool:
             )
             if resolved_session_id and resolved_session_id != storage_key:
                 with _lock:
-                    entry = _session_params.pop(storage_key, None)
-                    if entry is not None:
-                        _session_params[resolved_session_id] = entry
+                    moved_entry = _session_params.pop(storage_key, None)
+                    if moved_entry is not None:
+                        _session_params[resolved_session_id] = moved_entry
 
             if resolved_session_id and isinstance(result, dict):
                 model = result.get("model") or result.get("modelId")

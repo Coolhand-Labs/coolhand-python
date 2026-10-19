@@ -54,16 +54,24 @@ def _make_fake_client_class_v1():
     return FakeJsonRpcClientV1
 
 
-def _make_fake_client_class_cloud(session_id="server-abc123", model="gpt-4o"):
+def _make_fake_client_class_cloud(
+    session_id="server-abc123", model="gpt-4o", include_session_id=True
+):
     """Simulate a cloud/remote session (CopilotClient(enable_remote_sessions=True)):
     sessionId is server-assigned and absent from session.create request params,
     only appearing in the session.create response.
+
+    `include_session_id=False` simulates a degenerate response that also omits
+    sessionId, e.g. an error response or an SDK/server version mismatch.
     """
 
     class FakeCloudJsonRpcClient:
         async def request(self, method, params=None, timeout=None, **kwargs):
             if method == "session.create":
-                return {"sessionId": session_id, "model": model}
+                response = {"model": model}
+                if include_session_id:
+                    response["sessionId"] = session_id
+                return response
             return {"messageId": "msg-001"}
 
         def _handle_message(self, message):
@@ -815,6 +823,29 @@ class TestSessionCreate:
         assert "system" not in body
 
     @pytest.mark.asyncio
+    async def test_session_send_with_non_string_system_content_is_ignored(
+        self, handler
+    ):
+        from coolhand import copilot_interceptor
+
+        cls = _inject_fake_sdk()
+        copilot_interceptor.set_handler(handler)
+        copilot_interceptor.patch()
+
+        instance = cls()
+        await instance.request(
+            "session.create",
+            {"sessionId": "s1", "systemMessage": {"content": ["not", "a", "string"]}},
+        )
+        await instance.request(
+            "session.send",
+            {"sessionId": "s1", "prompt": "hi"},
+        )
+
+        body = copilot_interceptor._pre_pending["s1"][0]["req_data"]["body"]
+        assert "system" not in body
+
+    @pytest.mark.asyncio
     async def test_session_send_params_take_precedence(self, handler):
         from coolhand import copilot_interceptor
 
@@ -940,6 +971,34 @@ class TestCloudSessionReKeying:
         )
 
         assert copilot_interceptor._session_models["server-abc123"]["model"] == "gpt-4o"
+
+    @pytest.mark.asyncio
+    async def test_session_create_response_missing_session_id_stays_pending(
+        self, handler
+    ):
+        """Degenerate case: the session.create response also omits sessionId (e.g.
+        an error response or SDK/server mismatch). The entry must stay parked under
+        its pending key — not crash, not get silently dropped, not leak into some
+        other session — until the TTL sweep eventually evicts it.
+        """
+        from coolhand import copilot_interceptor
+
+        cls = _inject_fake_sdk(_make_fake_client_class_cloud(include_session_id=False))
+        copilot_interceptor.set_handler(handler)
+        copilot_interceptor.patch()
+
+        instance = cls()
+        await instance.request(
+            "session.create",
+            {"systemMessage": {"content": "You are a QA assistant."}},
+        )
+
+        assert len(copilot_interceptor._session_params) == 1
+        (pending_key,) = copilot_interceptor._session_params.keys()
+        assert pending_key.startswith("__pending__")
+        stored = copilot_interceptor._session_params[pending_key]["params"]
+        assert stored["systemMessage"] == {"content": "You are a QA assistant."}
+        assert copilot_interceptor._session_models == {}
 
 
 # ---------------------------------------------------------------------------

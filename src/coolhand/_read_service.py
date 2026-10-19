@@ -252,10 +252,9 @@ def _put_json(
         # A read timeout, reset, truncated or undecodable body escapes `open` unwrapped.
         raise CoolhandAPIError(f"{label} request failed: {error}") from error
     except ValueError as error:
-        # Type only: http.client's message for a malformed header quotes the value,
-        # which can be the API key.
-        # `from None`: the original's message quotes the header value (the API key)
-        # and would otherwise be printed with any traceback of this error.
+        # http.client's message for a malformed header quotes the value, which can
+        # be the API key. Report the type only, and `from None` so the original is
+        # not chained and printed with any traceback of this error.
         raise CoolhandAPIError(
             f"{label} request failed: {type(error).__name__}"
         ) from None
@@ -370,9 +369,8 @@ class ReadService:
                 f"{self._resource_label} request failed: {error}"
             ) from error
         except ValueError as error:
-            # Type only: http.client's message for a malformed header quotes the
-            # value, which can be the API key.
-            # `from None`: see _put_json.
+            # Type only, no chained cause: the original quotes the API key (see
+            # _put_json).
             raise CoolhandAPIError(
                 f"{self._resource_label} request failed: {type(error).__name__}"
             ) from None

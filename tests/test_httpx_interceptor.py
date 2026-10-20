@@ -1419,6 +1419,97 @@ class TestIsExcluded:
         set_exclude_api_patterns(["/files", None])  # type: ignore[list-item]
         assert _is_excluded("https://api.openai.com/v1/files") is True
 
+    @pytest.mark.parametrize(
+        "entry,shown", [("/search?q=a", "/search"), ("/a?b", "/a"), ("/p#top", "/p")]
+    )
+    @pytest.mark.parametrize(
+        "setter,name",
+        [
+            (set_exclude_api_patterns, "exclude_api_patterns"),
+            (set_intercept_addresses, "intercept_addresses"),
+        ],
+    )
+    def test_query_or_fragment_entry_warns(
+        self, entry, shown, setter, name, caplog, reset_global_instance
+    ):
+        """An entry with '?' or '#' can never match host/port/path (#192)."""
+        with caplog.at_level(logging.WARNING, logger="coolhand.httpx_interceptor"):
+            setter([entry, "/health"])
+
+        warnings = [r for r in caplog.records if r.name == "coolhand.httpx_interceptor"]
+        assert len(warnings) == 1
+        assert name in warnings[0].getMessage()
+        assert repr(shown + "...") in warnings[0].getMessage()
+        assert "'/health'" not in warnings[0].getMessage()
+
+    def test_query_entry_cannot_match_raw_query_or_fragment(
+        self, reset_global_instance
+    ):
+        """Pins the behavior the warning describes (#192)."""
+        set_exclude_api_patterns(["/a?b", "/p#top"])
+        assert _is_excluded("https://h.example/a?b") is False
+        assert _is_excluded("https://h.example/p#top") is False
+        # Only a percent-encoded character in the path can reach such an entry.
+        assert _is_excluded("https://h.example/a%3Fb") is True
+        assert _is_excluded("https://h.example/p%23top") is True
+
+    def test_query_entry_warns_alongside_non_str_entry(
+        self, caplog, reset_global_instance
+    ):
+        with caplog.at_level(logging.WARNING, logger="coolhand.httpx_interceptor"):
+            set_exclude_api_patterns(["/a?b", None])  # type: ignore[list-item]
+
+        messages = [
+            r.getMessage()
+            for r in caplog.records
+            if r.name == "coolhand.httpx_interceptor"
+        ]
+        assert len(messages) == 2
+        assert any("expected str, got NoneType" in m for m in messages)
+        assert any("'/a...'" in m for m in messages)
+
+    def test_query_entry_in_tuple_and_host_part_warns(
+        self, caplog, reset_global_instance
+    ):
+        with caplog.at_level(logging.WARNING, logger="coolhand.httpx_interceptor"):
+            set_exclude_api_patterns(("host.example?x", "host.example:80#x"))
+
+        (record,) = [
+            r for r in caplog.records if r.name == "coolhand.httpx_interceptor"
+        ]
+        assert "'host.example...'" in record.getMessage()
+        assert "'host.example:80...'" in record.getMessage()
+
+    def test_client_construction_warns_on_query_entry(
+        self, caplog, reset_global_instance
+    ):
+        from coolhand import Coolhand
+
+        client = None
+        try:
+            with caplog.at_level(logging.WARNING, logger="coolhand.httpx_interceptor"):
+                client = Coolhand(api_key="k", exclude_api_patterns=["/search?q=a"])
+            assert any("'/search...'" in r.getMessage() for r in caplog.records)
+        finally:
+            if client is not None:
+                client.stop_monitoring()
+
+    def test_warning_does_not_log_query_string_secrets(
+        self, caplog, reset_global_instance
+    ):
+        with caplog.at_level(logging.WARNING, logger="coolhand.httpx_interceptor"):
+            set_exclude_api_patterns(["/v1/chat?api_key=sk-secret#frag"])
+
+        assert "'/v1/chat...'" in caplog.text
+        assert "sk-secret" not in caplog.text
+
+    def test_glob_star_entries_do_not_warn(self, caplog, reset_global_instance):
+        """'*' is a real glob here, unlike coolhand-node's substring matching."""
+        with caplog.at_level(logging.WARNING, logger="coolhand.httpx_interceptor"):
+            set_exclude_api_patterns(["googleapis.com/*:predict", "bedrock.*.aws.com"])
+
+        assert not [r for r in caplog.records if r.name == "coolhand.httpx_interceptor"]
+
     @pytest.mark.parametrize("value", [None, [], ["/health"], ("/health",)])
     def test_valid_patterns_do_not_warn(self, value, caplog, reset_global_instance):
 

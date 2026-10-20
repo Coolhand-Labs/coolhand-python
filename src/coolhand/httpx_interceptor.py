@@ -193,8 +193,9 @@ def _warn_on_invalid_entries(name: str, entries: list[str] | None) -> None:
     iterator is consumed by the first match) or a non-``str`` entry makes URL
     matching misbehave at request time, where failures are only logged at debug
     level. Surfacing it here means a bad config is noticed when
-    ``Coolhand(...)`` is constructed. Never raises: monitoring must not break
-    the host application.
+    ``Coolhand(...)`` is constructed. Also flags ``str`` entries containing
+    ``?`` or ``#``, which cannot match a query string or fragment. Never
+    raises: monitoring must not break the host application.
     """
     if entries is None:
         return
@@ -211,6 +212,21 @@ def _warn_on_invalid_entries(name: str, entries: list[str] | None) -> None:
             "not captured.",
             name,
             ", ".join(invalid),
+        )
+    # Matching runs on host, port and path only, so an entry carrying a query
+    # string or fragment cannot match one. "*" is a real glob and is not flagged.
+    unmatchable = [e for e in entries if isinstance(e, str) and ("?" in e or "#" in e)]
+    if unmatchable:
+        logger.warning(
+            "%s entries containing '?' or '#' cannot match a query string or "
+            "fragment: patterns are matched against the URL host, port and "
+            "path ('?' is not a wildcard; use '*'). Affected entries (text "
+            "from the first '?' or '#' omitted): %s",
+            name,
+            # A query string is where secrets live (?api_key=...); keep it out of logs.
+            ", ".join(
+                repr(re.split(r"[?#]", e, maxsplit=1)[0] + "...") for e in unmatchable
+            ),
         )
 
 
@@ -328,7 +344,7 @@ def _compile_entry(entry: str) -> _Matcher:
     match the whole host (no implicit subdomains, unlike a bare host); in a
     path it matches anything, and a globbed path must match the whole path. A
     leading ``scheme://`` or ``//`` is ignored. Entries cannot carry a query
-    string, and an entry that reduces to nothing (``""``, ``"."``, ``"[]"``)
+    string or fragment, and an entry that reduces to nothing (``""``, ``"."``, ``"[]"``)
     matches nothing rather than everything.
     """
     if not isinstance(entry, str):

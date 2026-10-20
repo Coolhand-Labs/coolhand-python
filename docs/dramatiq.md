@@ -51,7 +51,7 @@ See [`examples/dramatiq_pydantic_ai.py`](../examples/dramatiq_pydantic_ai.py) fo
 | pydantic-ai via `AnthropicModel` / `OpenAIModel` | ✅ Works |
 | Any httpx- or httpx2-based library (openai, anthropic SDKs) | ✅ Works |
 | Streaming responses | ✅ Works |
-| Process-based workers (spawned subprocesses) | ✅ Works with `CoolhandDramatiqMiddleware` |
+| Process-based workers (spawned or forked subprocesses) | ✅ Works with `CoolhandDramatiqMiddleware` — see [Gap 1](#gap-1--process-based-workers) |
 | Per-task session correlation in Coolhand | ⚠️ Needs workaround — see below |
 
 ## Known Gaps and Workarounds
@@ -93,6 +93,8 @@ python -m dramatiq tasks
 >     )
 > )
 > ```
+
+> **Note:** In a forked worker, `after_process_boot` also resets the inherited client's delivery queue, locks and worker state, so a lock that was held in the parent at fork time can't hang the child. Interactions the parent had queued but not yet delivered are *not* carried into the child — the parent still delivers them — which avoids duplicates.
 
 ---
 

@@ -81,8 +81,12 @@ class CoolhandDramatiqMiddleware(dramatiq.Middleware):
         before this middleware's own config was applied — constructs one
         that does, then unregisters the old instance's atexit shutdown hook.
         Otherwise (the existing instance already matches, e.g. a fork-based
-        worker that inherited a compatible one) just re-applies the httpx
-        patch, preserving that instance's session.
+        worker that inherited a compatible one) re-applies the httpx patch,
+        preserving that instance's config and session. A fork-inherited
+        instance first has its locks, dispatch queue and worker state reset
+        (``CoolhandClient._reset_after_fork``) — the parent's pending
+        interactions are dropped in the child, since the parent still
+        delivers them. This is a no-op for thread-based workers.
 
         The replacement is constructed before the old instance's hook is
         unregistered, so a failure leaves the worker's existing instance
@@ -102,6 +106,13 @@ class CoolhandDramatiqMiddleware(dramatiq.Middleware):
         if existing_instance is not None and self._matches_requested_config(
             existing_instance
         ):
+            try:
+                existing_instance._reset_after_fork()
+            except Exception:
+                logger.exception(
+                    "Coolhand: failed to reset the fork-inherited client; "
+                    "continuing with it as-is"
+                )
             _coolhand.start_monitoring()
             return
 

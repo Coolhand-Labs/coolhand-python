@@ -4,6 +4,26 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [0.10.1] - 2026-10-21
+
+### Added
+- **Copilot `session.send` bodies carry a top-level `system` string.** The nested `systemMessage.content` is now also surfaced as `system`, mirroring Anthropic's `body.system`, so the backend's existing system-prompt extractor recognises Copilot prompts it previously missed. `systemMessage` is left in place unchanged. A non-string or empty `content` is not promoted. (#207)
+- **A warning for `?` or `#` in `exclude_api_patterns` and `intercept_addresses` entries.** `Coolhand(...)`, `set_exclude_api_patterns` and `set_intercept_addresses` now log a WARNING when an entry contains `?` or `#`, because patterns are matched against the host, port and path and so can never match a query string or fragment. The warning prints only the text before the first `?` or `#`, so a secret such as `?api_key=...` never reaches the logs. `*` is not flagged. Matching behavior is unchanged. (#206)
+
+### Fixed
+- **Cloud/remote Copilot sessions no longer silently lose their `session.create` params.** With `CopilotClient(enable_remote_sessions=True)` the `sessionId` is assigned by the server and absent from the request, so the system prompt and model were dropped for those sessions. The params are now buffered under a temporary key and re-keyed once the response supplies the real `sessionId`; this applies to both system-prompt capture and model caching. (#207)
+- **Forked Dramatiq workers no longer reuse the parent's client state.** A lock held by another parent thread at fork time could hang the child's first capture, and the parent's queued interactions could be delivered again by every worker. `CoolhandDramatiqMiddleware.after_process_boot` now replaces a fork-inherited client's locks, dispatch queue and worker state and drops the parent's pending interactions, since the parent still delivers them. Config and session are kept, thread-based workers are unaffected, and a failed reset is logged without stopping monitoring. (#205)
+
+### Changed
+- **Docs for pattern matching list two over-matches.** `docs/configuration.md` now states that `*` is the only wildcard and `?`/`#` are literal, that a non-globbed host always includes its subdomains, and that a `/fragment` entry matches any path containing it (end a `host/path` entry with `/` to avoid sibling paths). (#206)
+
+### Notes
+- **Known gap:** the module-level interceptor locks (`httpx_interceptor._patch_lock`, `_intercept_count_lock`) are not reset in a forked child. See [docs/dramatiq.md](./docs/dramatiq.md) and [docs/supported-libraries.md](./docs/supported-libraries.md).
+
+### Internal
+- New regression tests that the API key never appears in exception text or logs from `FeedbackService` and `TemplateService` (`search_templates`, `get_template`, `upsert`). No runtime change. (#204)
+- Development dependency updates: `mcp` 1.28.1 → 1.30.0 (#200), `pytest-mock` 3.15.1 → 3.16.0 (#203) and `ruff` 0.17.0 → 0.17.1 (#202).
+
 ## [0.10.0] - 2026-10-18
 
 ### Added

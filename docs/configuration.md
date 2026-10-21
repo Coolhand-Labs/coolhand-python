@@ -159,7 +159,7 @@ Omit `intercept_addresses` altogether to get the built-in list.
 
 ### Entry syntax
 
-`intercept_addresses` and `exclude_api_patterns` entries are matched against the *parsed* URL (host, port and path), not the raw string, so query text, userinfo (`https://api.openai.com@evil.com`) and lookalike hosts (`api.openai.com.evil.com`) cannot match. A leading `https://` or `//` on an entry is ignored. Hosts are case-insensitive, paths are case-sensitive and percent-decoded before matching, and an explicit default port (`:443` on `https`) matches the implied one. Entries cannot carry a query string (they would never match).
+`intercept_addresses` and `exclude_api_patterns` entries are matched against the *parsed* URL (host, port and path), not the raw string, so query text, userinfo (`https://api.openai.com@evil.com`) and lookalike hosts (`api.openai.com.evil.com`) cannot match. A leading `https://` or `//` on an entry is ignored. Hosts are case-insensitive, paths are case-sensitive and percent-decoded before matching, and an explicit default port (`:443` on `https`) matches the implied one. Entries cannot carry a query string or `#fragment`: `?` and `#` are literal characters, not wildcards, and `*` is the only wildcard. An entry containing `?` or `#` cannot match a query string or fragment, so `Coolhand(...)` logs a warning when it sees one (only a percent-encoded `%3F` or `%23` in the request *path* could match a path entry; a host entry containing them never matches).
 
 | Entry | Matches |
 |---|---|
@@ -171,5 +171,10 @@ Omit `intercept_addresses` altogether to get the built-in list.
 | `googleapis.com/*:predict` | `*` is a glob; a globbed path must match the whole path |
 | `bedrock-runtime.*.amazonaws.com` | `*` in a host matches one label (never a `.`); a globbed host is exact, with no implicit subdomains |
 | `[2001:db8::1]:11434` | IPv6 hosts need brackets |
+
+Two shapes match more than they look like they do:
+
+- A non-globbed host (`example.com`) always matches the host and every subdomain (`api.example.com`), even when you add a port or path; only a globbed host is exact. A path or port narrows the match on those parts, not on the host.
+- A `/fragment` matches any host and any path *containing* it, so `/files` also excludes `/v1/files-archive/1`. A `host/path` entry without `*` is a prefix match, so `api.example.com/files` still matches `/files-archive/1`; end the path with `/` (`api.example.com/files/`) to avoid sibling paths (this no longer matches the exact path `/files`, so list both if you need both).
 
 **Migration:** earlier versions matched entries as plain substrings of the full URL, and skipped any URL whose authority merely *contained* `localhost`. Loopback is now decided from the parsed host alone, so `localhost.example.com` or `user:localhost@host` are no longer skipped, while all of `127.0.0.0/8` and `*.localhost` now are. Entries that are a host, `host/path`, or a `/path` fragment keep working. An arbitrary fragment from the middle of a URL (for example `'openai'`, or a host-less `':predict'`) no longer matches; rewrite it with one of the forms above. The built-in Vertex AI / Gemini `:generateContent`, `:predict` etc. entries are now restricted to `googleapis.com` hosts (Vertex dedicated endpoints on `prediction.vertexai.goog` are matched by host; a custom domain or proxy in front of Vertex needs its own entry), and the Bedrock entries are listed by host (`bedrock-runtime.*.amazonaws.com`, `.amazonaws.com.cn`, `.api.aws`, plus FIPS variants).

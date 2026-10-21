@@ -818,6 +818,28 @@ class TestFeedbackServiceEdgeCases:
             assert result is None
             assert "Unexpected error submitting feedback" in caplog.text
 
+    def test_create_feedback_malformed_key_not_logged(self, feedback_service, caplog):
+        """A ValueError whose message quotes the API key (as http.client's does for
+        a malformed header) must log only the exception type."""
+        import logging
+
+        caplog.set_level(logging.WARNING)
+
+        with patch("coolhand.feedback_service._opener.open") as mock:
+            mock.side_effect = ValueError(
+                f"Invalid header value {feedback_service.api_key!r}"
+            )
+
+            result = feedback_service.create_feedback(
+                {"llm_request_log_id": 12345, "sentiment": "like"}
+            )
+
+        assert result is None
+        assert feedback_service.api_key not in caplog.text
+        # A traceback attached via exc_info would carry the original message.
+        assert all(record.exc_info is None for record in caplog.records)
+        assert "Unexpected error submitting feedback: ValueError" in caplog.text
+
     def test_create_feedback_non_success_status_code(self, feedback_service, caplog):
         """create_feedback handles non-200/201 status codes."""
         import logging

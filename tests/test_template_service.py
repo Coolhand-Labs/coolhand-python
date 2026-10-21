@@ -1,5 +1,6 @@
 """Tests for TemplateService."""
 
+import traceback
 from datetime import datetime, timedelta, timezone
 from email.message import Message
 from urllib.error import URLError
@@ -180,6 +181,33 @@ class TestApiKeyHandling:
         service.search_templates()
 
         assert service._opener.request.get_header("X-api-key") == "test-private-key"
+
+    @pytest.mark.parametrize(
+        "call",
+        [
+            lambda service: service.search_templates(),
+            lambda service: service.get_template("tmpl123abc456"),
+            lambda service: service.upsert("Parser#call", name="Parser"),
+        ],
+        ids=["search_templates", "get_template", "upsert"],
+    )
+    def test_malformed_key_value_error_does_not_leak_the_key(self, call):
+        # A control character survives strip(); http.client's ValueError then quotes
+        # the whole header value. It must surface as CoolhandAPIError, type only.
+        # Covers the public-method wiring; the shared helpers are tested at their own
+        # level in test_release_hardening.py.
+        key = "sk-abc\ndef-SECRET"
+        service = build_service(
+            api_key=key, error=ValueError(f"Invalid header value {key!r}")
+        )
+
+        with pytest.raises(CoolhandAPIError) as excinfo:
+            call(service)
+
+        rendered = "".join(traceback.format_exception(excinfo.value))
+        assert "SECRET" not in rendered
+        assert excinfo.value.__suppress_context__ is True
+        assert str(excinfo.value).endswith("request failed: ValueError")
 
 
 class TestSearchTemplatesResponse:

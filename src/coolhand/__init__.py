@@ -23,12 +23,18 @@ from .feedback_service import (
 )
 from .httpx_interceptor import DEFAULT_EXCLUDE_API_PATTERNS, DEFAULT_INTERCEPT_ADDRESSES
 from .log_service import LogService
+from .public_content_service import PublicContentService
 from .template_service import CoolhandAPIError, TemplateService, get_template_service
 from .types import (
     BulkLinkFeedbackResult,
     Config,
     FeedbackData,
     FeedbackResponse,
+    HelpArticle,
+    HelpArticleKind,
+    HelpArticleSummary,
+    HelpArticleTocEntry,
+    HelpCategory,
     LlmMetrics,
     LlmRequestLogContent,
     LlmRequestLogCostBreakdown,
@@ -42,6 +48,7 @@ from .types import (
     Pagination,
     RequestData,
     ResponseData,
+    SearchHelpArticlesResponse,
     SearchLogsResponse,
     SearchTemplatesResponse,
     SearchWorkloadsResponse,
@@ -69,6 +76,7 @@ class Coolhand(CoolhandClient):
         self._workload_service = WorkloadService(self.config)
         self._feedback_link_service = FeedbackLinkService(self.config)
         self._log_service = LogService(self.config)
+        self._public_content_service = PublicContentService(self.config)
 
         # Start monitoring
         self.start_monitoring()
@@ -370,6 +378,52 @@ class Coolhand(CoolhandClient):
         )
 
     @property
+    def public_content_service(self) -> PublicContentService:
+        """Get the help center service instance."""
+        return self._public_content_service
+
+    def search_help_articles(
+        self,
+        *,
+        query: str | None = None,
+        category: str | None = None,
+        page: int | None = None,
+        per_page: int | None = None,
+    ) -> SearchHelpArticlesResponse:
+        """Search or list the Coolhand help center, sending this client's key.
+
+        The reads need no key; to use them without a `Coolhand` instance, construct
+        `PublicContentService()` directly. See
+        `PublicContentService.search_help_articles` for the parameters, the category
+        filter and the errors.
+
+        Returns:
+            A dict with `articles` and `pagination`, the latter read from the response
+            headers.
+        """
+        return self._public_content_service.search_help_articles(
+            query=query, category=category, page=page, per_page=per_page
+        )
+
+    def get_help_article(self, slug: str) -> HelpArticle:
+        """Fetch one help center article by slug, with its markdown `body`.
+
+        Raises:
+            ValueError: If `slug` is blank, not a string, or a relative path segment.
+            CoolhandAPIError: On a non-2xx response, with the HTTP status on `status`
+                (`404` for an unknown or unpublished slug).
+        """
+        return self._public_content_service.get_help_article(slug)
+
+    def list_help_categories(self) -> list[HelpCategory]:
+        """List the help center sections, for use as `category` in a search.
+
+        Raises:
+            CoolhandAPIError: On a non-2xx response, with the HTTP status on `status`.
+        """
+        return self._public_content_service.list_help_categories()
+
+    @property
     def feedback_link_service(self) -> FeedbackLinkService:
         """Get the feedback link service instance."""
         return self._feedback_link_service
@@ -484,6 +538,11 @@ __all__ = [
     "FeedbackData",
     "FeedbackResponse",
     "FeedbackService",
+    "HelpArticle",
+    "HelpArticleKind",
+    "HelpArticleSummary",
+    "HelpArticleTocEntry",
+    "HelpCategory",
     "get_feedback_service",
     "create_feedback",
     "acreate_feedback",
@@ -502,6 +561,8 @@ __all__ = [
     "LogPagination",
     "LogService",
     "Pagination",
+    "PublicContentService",
+    "SearchHelpArticlesResponse",
     "SearchLogsResponse",
     "SearchTemplatesResponse",
     "SearchWorkloadsResponse",

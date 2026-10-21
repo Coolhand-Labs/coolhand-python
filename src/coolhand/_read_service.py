@@ -1,8 +1,9 @@
 """Shared plumbing for the read-only REST services.
 
 `TemplateService`, `WorkloadService` and `LogService` all GET a JSON resource with the
-client's **private** API key, raise `CoolhandAPIError` on any failure, and read
-pagination off response headers. That machinery lives here once.
+client's **private** API key (`PublicContentService` alone needs none), raise
+`CoolhandAPIError` on any failure, and read pagination off response headers. That
+machinery lives here once.
 """
 
 import http.client
@@ -295,6 +296,10 @@ class ReadService:
     # Names the resource in error messages ("Template request failed (404): ...").
     _resource_label = "Resource"
 
+    # Keyless reads send no `X-API-Key` at all rather than an empty one. Off for the
+    # private-key services, whose empty header is long-standing behaviour.
+    _keyless = False
+
     def __init__(self, config: Config | None = None, **kwargs: Any) -> None:
         """Initialize the service.
 
@@ -338,20 +343,18 @@ class ReadService:
 
     def _get_json(self, url: str) -> tuple[Any, Message]:
         """GET `url` and parse the JSON body, raising `CoolhandAPIError` on failure."""
-        request = Request(
-            url=url,
-            headers={
-                "Accept": "application/json",
-                "X-API-Key": self.api_key,
-                "User-Agent": f"coolhand-python/{__version__}",
-            },
-            method="GET",
-        )
+        headers = {
+            "Accept": "application/json",
+            "User-Agent": f"coolhand-python/{__version__}",
+        }
+        if self.api_key or not self._keyless:
+            headers["X-API-Key"] = self.api_key
+        request = Request(url=url, headers=headers, method="GET")
 
         try:
             with self._opener.open(request, timeout=self.timeout) as response:
                 raw = response.read().decode("utf-8")
-                headers = response.headers
+                response_headers = response.headers
         except HTTPError as error:
             raise CoolhandAPIError(
                 f"{self._resource_label} request failed ({error.code}): "
@@ -376,7 +379,7 @@ class ReadService:
             ) from None
 
         try:
-            return json.loads(raw), headers
+            return json.loads(raw), response_headers
         except ValueError as error:
             raise CoolhandAPIError(
                 f"{self._resource_label} response was not valid JSON: "

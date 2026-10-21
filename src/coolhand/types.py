@@ -270,6 +270,83 @@ class SearchWorkloadsResponse(TypedDict):
     pagination: Pagination
 
 
+# `article_kind` on the help center endpoints; a type alias rather than a runtime check,
+# so a new server-side kind does not break callers.
+HelpArticleKind = Literal[
+    "reference",
+    "concept",
+    "how_to",
+    "troubleshooting",
+    "faq_answer",
+    "release_note",
+]
+
+
+class HelpArticleSummary(TypedDict):
+    """An article as listed by `GET /api/v2/public_content`. Bodies are omitted."""
+
+    slug: str  # URL-safe identifier; also the article's path under /help
+    title: str
+    answer: str | None  # Short, self-contained answer the article addresses
+    article_kind: HelpArticleKind
+    tags: list[str]
+    category: str  # Slug of the section the article belongs to
+    url: str  # Public HTML page
+    markdown_url: str  # Markdown twin of the same page
+    reading_time_minutes: int | None
+    # On a relevance search, the matching passage with <mark> tags around matched terms;
+    # None on a plain listing.
+    search_headline: str | None
+    published_at: str | None  # ISO-8601 UTC
+    updated_content_at: str | None  # When the prose last changed
+
+
+# The definition types a toc entry only as `object`; the server sends
+# {id, text, level, children} (h3s nested under their h2), but that is not part of the
+# definition, so it stays open-ended here.
+HelpArticleTocEntry = dict[str, Any]
+
+
+class HelpArticle(TypedDict):
+    """One article from `GET /api/v2/public_content/{slug}`.
+
+    The summary fields minus `search_headline`, plus the markdown body.
+    """
+
+    slug: str
+    title: str
+    answer: str | None
+    article_kind: HelpArticleKind
+    tags: list[str]
+    category: str
+    url: str
+    markdown_url: str
+    reading_time_minutes: int | None
+    published_at: str | None
+    updated_content_at: str | None
+    body: str  # Full markdown source
+    noindex: bool
+    toc: list[HelpArticleTocEntry]
+
+
+class HelpCategory(TypedDict):
+    """A section articles are filed under (`GET /api/v2/public_content/categories`)."""
+
+    slug: str  # Pass as `category` to `search_help_articles`
+    name: str
+    description: str
+    url_prefix: Literal["/help", "/updates"]  # Where the section's articles are served
+    # The only tags the section accepts: None means any tag, an empty list means none.
+    allowed_tags: list[str] | None
+
+
+class SearchHelpArticlesResponse(TypedDict):
+    """Result of `PublicContentService.search_help_articles`."""
+
+    articles: list[HelpArticleSummary]
+    pagination: Pagination
+
+
 # The only `order` value GET /api/v2/llm_request_logs accepts; anything else is a 422.
 LlmRequestLogOrder = Literal["cost_desc"]
 

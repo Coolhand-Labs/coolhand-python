@@ -291,7 +291,10 @@ def _flatten_workload(workload: Any, label: str) -> dict[str, str]:
 
 
 class ReadService:
-    """Base for the services that GET JSON from the private-key REST endpoints."""
+    """Base for the services that GET JSON from the REST endpoints.
+
+    Private-key by default; the public help center reads are the keyless exception.
+    """
 
     # Names the resource in error messages ("Template request failed (404): ...").
     _resource_label = "Resource"
@@ -304,7 +307,8 @@ class ReadService:
         """Initialize the service.
 
         Args:
-            config: Configuration dictionary. `api_key` must be the **private** key.
+            config: Configuration dictionary. `api_key` must be the **private** key
+                (optional for the keyless `PublicContentService`).
             **kwargs: Override config values (api_key, base_url, silent,
                 request_timeout).
         """

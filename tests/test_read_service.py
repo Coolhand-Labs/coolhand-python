@@ -82,6 +82,25 @@ class TestWindowFilters:
             _window_filters(None, None, True)
 
 
+class TestApiKeyHeader:
+    def test_a_private_key_service_sends_an_empty_header_without_a_key(self):
+        service = build_service({"id": "a"})
+        service.config["api_key"] = ""
+
+        service._get_json("https://x.test/y")
+
+        request = service._opener.request
+        assert request.has_header("X-api-key")
+        assert request.get_header("X-api-key") == ""
+
+    def test_a_private_key_service_sends_its_key(self):
+        service = build_service({"id": "a"})
+
+        service._get_json("https://x.test/y")
+
+        assert service._opener.request.get_header("X-api-key") == "test-private-key"
+
+
 class TestJsonShapeHelpers:
     def test_get_json_array_returns_the_list_and_headers(self):
         service = build_service([{"id": "a"}])

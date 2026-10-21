@@ -88,8 +88,8 @@ class PublicContentService(ReadService):
         for name, value in (("query", query), ("category", category)):
             if value is not None and not isinstance(value, str):
                 raise ValueError(f"search_help_articles: {name} must be a string")
-        text = query if query and query.strip() else None
-        section = category if category and category.strip() else None
+        text = (query or "").strip() or None
+        section = (category or "").strip() or None
         filters: dict[str, QueryValue]
         if section is not None:
             filters = {"q[help_category_slug_eq]": section, "q[full_text]": text}

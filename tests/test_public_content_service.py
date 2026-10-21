@@ -1,6 +1,6 @@
 """Tests for PublicContentService."""
 
-from urllib.parse import urlparse
+from urllib.parse import parse_qs, urlparse
 
 import pytest
 
@@ -284,6 +284,17 @@ class TestKeylessEdgeCases:
             service.search_help_articles(**{argument: 5})
 
         assert service._opener.request is None
+
+
+class TestFilterWhitespace:
+    def test_surrounding_whitespace_is_trimmed_from_both_filters(self):
+        service = build_service([], PAGINATION_HEADERS)
+
+        service.search_help_articles(query="  feedback ", category=" providers ")
+
+        params = parse_qs(urlparse(service._opener.request.full_url).query)
+        assert params["q[help_category_slug_eq]"] == ["providers"]
+        assert params["q[full_text]"] == ["feedback"]
 
 
 class TestErrors:

@@ -360,8 +360,8 @@ the same "hand it to a human" rule `/loop-review` uses for stuck findings.
   placeholder step. Tagging and publishing are the user's action once
   they've reviewed and merged this skill's PR, not something this skill
   does. Never merge the Phase 5 PR yourself either. `/finish-release` is
-  that follow-up: the user invokes it after merging, and it tags and
-  publishes the GitHub release.
+  that follow-up: the user invokes it after reviewing the release PR, and
+  it then merges that PR, tags, and publishes the GitHub release.
 
 ## Rationalizations to resist
 

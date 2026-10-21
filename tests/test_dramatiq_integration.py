@@ -698,6 +698,7 @@ class TestCoolhandDramatiqMiddleware:
                     middleware.after_process_boot(broker)
                     matching_instance.shutdown.assert_not_called()
                     mock_coolhand_cls.assert_not_called()
+                    matching_instance._reset_after_fork.assert_called_once()
                     mock_start.assert_called_once()
 
         _ = coolhand
@@ -727,6 +728,7 @@ class TestCoolhandDramatiqMiddleware:
                     middleware.after_process_boot(broker)
                     matching_instance.shutdown.assert_not_called()
                     mock_coolhand_cls.assert_not_called()
+                    matching_instance._reset_after_fork.assert_called_once()
                     mock_start.assert_called_once()
 
         _ = coolhand

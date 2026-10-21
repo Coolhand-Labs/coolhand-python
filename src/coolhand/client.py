@@ -306,6 +306,19 @@ class CoolhandClient:
         )
         self.config["request_timeout"] = _resolve_request_timeout(self.config)
 
+        self._init_runtime_state()
+
+        if not self.config.get("silent"):
+            self._configure_coolhand_logging()
+
+        # Ensure queued interactions still get a delivery attempt on normal process
+        # exit, even for a bare CoolhandClient() not wrapped by the Coolhand subclass.
+        atexit.register(self.shutdown)
+
+    def _init_runtime_state(self) -> None:
+        """(Re)create the per-process delivery state: queues, locks, worker
+        reference, counters. Shared by __init__ and _reset_after_fork() so a
+        field added here can't be silently inherited across a fork."""
         self._queue: list[dict[str, Any]] = []
         self._interaction_count = 0
 
@@ -325,13 +338,9 @@ class CoolhandClient:
         # the plain counters (_interaction_count, _dropped_count,
         # _delivery_failure_count), all reachable from multiple threads.
         self._state_lock = threading.Lock()
-
-        if not self.config.get("silent"):
-            self._configure_coolhand_logging()
-
-        # Ensure queued interactions still get a delivery attempt on normal process
-        # exit, even for a bare CoolhandClient() not wrapped by the Coolhand subclass.
-        atexit.register(self.shutdown)
+        # Process that built this state, so a fork-inherited copy can be
+        # recognised in the child (see _reset_after_fork()).
+        self._pid = os.getpid()
 
     @staticmethod
     def _configure_coolhand_logging() -> None:
@@ -492,6 +501,40 @@ class CoolhandClient:
                 "Unexpected error submitting interaction: %s", type(e).__name__
             )
             return False
+
+    def _reset_after_fork(self) -> bool:
+        """Re-initialise this client's internals if it was inherited via fork().
+
+        A forked child gets a copy of the parent's locks, dispatch queue,
+        pending interactions and (dead) worker-thread reference. A lock that
+        another parent thread held at fork time is never released in the
+        child, so the locks are *replaced* rather than acquired, and the
+        parent's pending interactions are dropped — the parent still owns and
+        delivers them, so keeping them would re-deliver each once per child.
+        Config and session are preserved.
+
+        No-op (returns False) in the process that created the client, e.g.
+        thread-based workers. Returns True if a reset was performed.
+
+        Not itself thread-safe: call it at child boot, before any other
+        thread in the child uses the client.
+        """
+        if os.getpid() == self._pid:
+            return False
+
+        # Lock-free reads, diagnostics only: Queue.qsize() would take the
+        # queue's own mutex, which may be orphaned too. `.queue` is the
+        # underlying deque.
+        inherited = len(self._queue) + len(self._dispatch_queue.queue)
+        self._init_runtime_state()
+        logger.debug(
+            "Reset fork-inherited client; discarded %d pending interactions", inherited
+        )
+
+        # Same idempotent re-arm as _ensure_worker_locked().
+        atexit.unregister(self.shutdown)
+        atexit.register(self.shutdown)
+        return True
 
     def _ensure_worker(self) -> bool:
         """Start the background delivery thread if it isn't already running.

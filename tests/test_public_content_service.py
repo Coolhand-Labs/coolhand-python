@@ -256,6 +256,36 @@ class TestApiKey:
         assert service._opener.request.get_header("X-api-key") == "explicit"
 
 
+class TestKeylessEdgeCases:
+    @pytest.mark.parametrize("blank", ["", "  ", "\n"])
+    def test_a_blank_key_sends_no_header(self, blank, monkeypatch):
+        monkeypatch.delenv("COOLHAND_API_KEY", raising=False)
+        service = PublicContentService(api_key=blank)
+        service._opener = FakeOpener(response=FakeResponse([CATEGORY]))
+
+        service.list_help_categories()
+
+        assert not service._opener.request.has_header("X-api-key")
+
+    def test_a_blank_environment_key_sends_no_header(self, monkeypatch):
+        monkeypatch.setenv("COOLHAND_API_KEY", "\n")
+        service = PublicContentService()
+        service._opener = FakeOpener(response=FakeResponse([CATEGORY]))
+
+        service.list_help_categories()
+
+        assert not service._opener.request.has_header("X-api-key")
+
+    @pytest.mark.parametrize("argument", ["query", "category"])
+    def test_a_non_string_filter_raises_before_any_request(self, argument):
+        service = build_service([], PAGINATION_HEADERS)
+
+        with pytest.raises(ValueError, match=f"{argument} must be a string"):
+            service.search_help_articles(**{argument: 5})
+
+        assert service._opener.request is None
+
+
 class TestErrors:
     @pytest.mark.parametrize(
         ("status", "body"),

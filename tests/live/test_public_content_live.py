@@ -14,6 +14,8 @@ import pytest
 from coolhand import CoolhandAPIError, PublicContentService
 
 LIVE_BASE_URL = os.environ["COOLHAND_LIVE_BASE_URL"]
+# Same ceiling as live_env.py, which cannot be imported here: it demands a key.
+LIVE_TIMEOUT_SECONDS = 120
 
 ARTICLE_KINDS = {
     "reference",
@@ -29,7 +31,9 @@ ARTICLE_KINDS = {
 def anonymous(monkeypatch) -> PublicContentService:
     # The environment fallback would otherwise make a "no key" client send a key.
     monkeypatch.delenv("COOLHAND_API_KEY", raising=False)
-    return PublicContentService(base_url=LIVE_BASE_URL, silent=True)
+    return PublicContentService(
+        base_url=LIVE_BASE_URL, silent=True, timeout=LIVE_TIMEOUT_SECONDS
+    )
 
 
 def assert_nullable_str(value) -> None:

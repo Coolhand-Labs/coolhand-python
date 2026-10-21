@@ -78,11 +78,16 @@ class PublicContentService(ReadService):
             `X-Per-Page`, `X-Total-Count` and `X-Total-Pages` response headers.
 
         Raises:
+            ValueError: If `query` or `category` is not a string, before any request
+                is made.
             CoolhandAPIError: On a non-2xx response, with `status` set (`401` for an
                 invalid key, `429` once the anonymous rate limit is exceeded). Also
                 raised, with `status` left `None`, on a transport failure or a body
                 that is not the JSON array this endpoint returns.
         """
+        for name, value in (("query", query), ("category", category)):
+            if value is not None and not isinstance(value, str):
+                raise ValueError(f"search_help_articles: {name} must be a string")
         text = query if query and query.strip() else None
         section = category if category and category.strip() else None
         filters: dict[str, QueryValue]

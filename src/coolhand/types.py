@@ -282,8 +282,8 @@ HelpArticleKind = Literal[
 ]
 
 
-class HelpArticleSummary(TypedDict):
-    """An article as listed by `GET /api/v2/public_content`. Bodies are omitted."""
+class _HelpArticleFields(TypedDict):
+    """Fields shared by an article as listed and as fetched."""
 
     slug: str  # URL-safe identifier; also the article's path under /help
     title: str
@@ -294,11 +294,16 @@ class HelpArticleSummary(TypedDict):
     url: str  # Public HTML page
     markdown_url: str  # Markdown twin of the same page
     reading_time_minutes: int | None
+    published_at: str | None  # ISO-8601 UTC
+    updated_content_at: str | None  # When the prose last changed
+
+
+class HelpArticleSummary(_HelpArticleFields):
+    """An article as listed by `GET /api/v2/public_content`. Bodies are omitted."""
+
     # On a relevance search, the matching passage with <mark> tags around matched terms;
     # None on a plain listing.
     search_headline: str | None
-    published_at: str | None  # ISO-8601 UTC
-    updated_content_at: str | None  # When the prose last changed
 
 
 # The definition types a toc entry only as `object`; the server sends
@@ -307,23 +312,12 @@ class HelpArticleSummary(TypedDict):
 HelpArticleTocEntry = dict[str, Any]
 
 
-class HelpArticle(TypedDict):
+class HelpArticle(_HelpArticleFields):
     """One article from `GET /api/v2/public_content/{slug}`.
 
     The summary fields minus `search_headline`, plus the markdown body.
     """
 
-    slug: str
-    title: str
-    answer: str | None
-    article_kind: HelpArticleKind
-    tags: list[str]
-    category: str
-    url: str
-    markdown_url: str
-    reading_time_minutes: int | None
-    published_at: str | None
-    updated_content_at: str | None
     body: str  # Full markdown source
     noindex: bool
     toc: list[HelpArticleTocEntry]

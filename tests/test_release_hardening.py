@@ -291,3 +291,60 @@ class TestKeyBytesAreNotLogged:
         assert client._send_one({"id": "x", "method": "post", "url": "u"}) is False
         assert "SECRETSECRET" not in caplog.text
         assert "Unexpected error submitting interaction" in caplog.text
+
+
+class TestV0110RedactionSpellings:
+    """Credential spellings added in 0.11.0 that earlier lists missed."""
+
+    @pytest.mark.parametrize(
+        "header",
+        [
+            "Helicone-Auth",
+            "X-Github-Token",
+            "X-Vault-Token",
+            "HF-Token",
+            "Api-Token",
+            "X-Client-Key",
+            "X-Credential",
+            "X-Signature",
+        ],
+    )
+    def test_header_is_masked(self, header):
+        from coolhand.client import _sanitize_headers
+
+        secret = "supersecretvalue123456"
+        assert secret not in _sanitize_headers({header: secret})[header]
+
+    def test_benign_token_count_headers_are_not_masked(self):
+        from coolhand.client import _sanitize_headers
+
+        headers = {
+            "x-ratelimit-remaining-tokens": "1000",
+            "content-type": "application/json",
+        }
+        assert _sanitize_headers(headers) == headers
+
+    @pytest.mark.parametrize(
+        "param",
+        [
+            "bearer_token",
+            "secret_key",
+            "clientSecret",
+            "pwd",
+            "passwd",
+            "code_verifier",
+        ],
+    )
+    def test_query_param_is_redacted(self, param):
+        from coolhand.client import _sanitize_url
+
+        url = _sanitize_url(f"https://api.example.com/v1?{param}=hunter2&model=x")
+        assert "hunter2" not in url
+        assert "model=x" in url
+
+    def test_base_url_with_userinfo_is_rejected_without_echoing_it(self):
+        from coolhand._config import _normalize_base_url
+
+        with pytest.raises(ValueError) as excinfo:
+            _normalize_base_url("https://user:hunter2@coolhandlabs.com")
+        assert "hunter2" not in str(excinfo.value)

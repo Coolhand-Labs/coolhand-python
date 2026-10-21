@@ -81,6 +81,18 @@ SENSITIVE_HEADERS = [
     "xsrf-token",
     "private-token",
     "secret",
+    # Vendor and generic spellings none of the above match: Helicone's
+    # "Helicone-Auth", "X-Github-Token", "X-Vault-Token", "HF-Token", a bare
+    # "Api-Token", "X-Client-Key", "X-Credential", and signature headers. Still
+    # deliberately not bare "token", which would mask "x-ratelimit-remaining-tokens".
+    "-auth",
+    "api-token",
+    "github-token",
+    "vault-token",
+    "hf-token",
+    "client-key",
+    "credential",
+    "signature",
 ]
 
 SENSITIVE_QUERY_PARAMS = {
@@ -126,6 +138,14 @@ SENSITIVE_QUERY_PARAMS = {
     "client-secret",
     "session_token",
     "session-token",
+    "bearer_token",
+    "bearer-token",
+    "secret_key",
+    "secret-key",
+    "clientsecret",
+    "pwd",
+    "passwd",
+    "code_verifier",
 }
 
 # Azure OpenAI "On Your Data" carries datastore credentials in the *request body*

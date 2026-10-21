@@ -217,7 +217,15 @@ the same "hand it to a human" rule `/loop-review` uses for stuck findings.
    exercises a real intercepted call instead of a
    simulated one, which is a stronger signal but not required for a pass.
    If `COOLHAND_LIVE_BASE_URL` and `COOLHAND_LIVE_API_KEY` are set in the
-   environment, also run `make test-live` against the real server.
+   environment, also run `make test-live` against the real server. (Having
+   these exported does not affect `make verify`, which always skips
+   `tests/live`.) The feedback-link live tests write data and also need
+   `COOLHAND_LIVE_OPTIMIZATION_ID` and `COOLHAND_LIVE_FEEDBACK_IDS`; if those
+   are unset, `make test-live` fails at collection by design, so run
+   `uv run --all-extras pytest tests/live --ignore=tests/live/test_feedback_links_live.py`
+   instead and report the feedback-link suite as unexercised. Failures such as
+   `assert []` mean the target account has no seed data, not a regression, if
+   the touched services are unchanged since the last tag.
    Record pass/fail per script (and whether it ran live or simulated).
 
    Then run `make live-examples` — the real-key check. It runs

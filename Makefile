@@ -1,5 +1,10 @@
 .PHONY: help install test test-live live-examples lint format type-check verify check build publish clean
 
+# --all-extras: the dev/test tools live in extras, which a bare `uv run` does not install.
+# In a fresh venv that makes `uv run pytest` fall through to a global pytest on PATH
+# (possibly another Python), so every target that runs a tool goes through this.
+UV_RUN := uv run --all-extras
+
 help:
 	@echo "Available commands:"
 	@echo "  install       Install all dependencies (dev + test)"
@@ -18,8 +23,11 @@ help:
 install:
 	uv sync --all-extras
 
+# --ignore=tests/live: the live suite is opt-in (`make test-live`). Exporting
+# COOLHAND_LIVE_BASE_URL for smoke tests would otherwise make a default run collect it
+# and fail, so `test` and `verify` skip it regardless of the caller's environment.
 test:
-	uv run pytest
+	$(UV_RUN) pytest --ignore=tests/live
 
 # Real HTTP against a real Coolhand server, no mocks. Deliberately outside `verify` — CI has
 # neither a server nor a private key. Needs both of:
@@ -27,7 +35,7 @@ test:
 # The feedback link live tests also need COOLHAND_LIVE_OPTIMIZATION_ID and
 # COOLHAND_LIVE_FEEDBACK_IDS (comma-separated, 2+); see tests/live/test_feedback_links_live.py.
 test-live:
-	uv run pytest tests/live
+	$(UV_RUN) pytest tests/live
 
 # Real OpenAI / Anthropic calls through the interceptor, confirmed delivered to Coolhand.
 # Deliberately outside `verify` — CI has no keys. Needs COOLHAND_API_KEY plus OPENAI_API_KEY
@@ -37,20 +45,20 @@ live-examples:
 	scripts/live-examples.sh
 
 lint:
-	uv run ruff check src tests examples
+	$(UV_RUN) ruff check src tests examples
 
 format:
-	uv run ruff check --fix src tests examples
-	uv run ruff format src tests examples
+	$(UV_RUN) ruff check --fix src tests examples
+	$(UV_RUN) ruff format src tests examples
 
 type-check:
-	uv run mypy src
+	$(UV_RUN) mypy src
 
 # Canonical "is this ready to commit?" — mirrors exactly what CI runs
 verify:
-	uv run ruff check src tests examples
-	uv run ruff format --check src tests examples
-	uv run pytest
+	$(UV_RUN) ruff check src tests examples
+	$(UV_RUN) ruff format --check src tests examples
+	$(UV_RUN) pytest --ignore=tests/live
 
 check: verify
 

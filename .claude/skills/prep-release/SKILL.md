@@ -359,7 +359,9 @@ the same "hand it to a human" rule `/loop-review` uses for stuck findings.
   pushing a tag from this repo is a real, automatic release, not a
   placeholder step. Tagging and publishing are the user's action once
   they've reviewed and merged this skill's PR, not something this skill
-  does. Never merge the Phase 5 PR yourself either.
+  does. Never merge the Phase 5 PR yourself either. `/finish-release` is
+  that follow-up: the user invokes it after merging, and it tags and
+  publishes the GitHub release.
 
 ## Rationalizations to resist
 

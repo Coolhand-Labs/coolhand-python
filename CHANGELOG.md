@@ -17,6 +17,9 @@ All notable changes to this project will be documented in this file.
 ### Changed
 - **Docs for pattern matching list two over-matches.** `docs/configuration.md` now states that `*` is the only wildcard and `?`/`#` are literal, that a non-globbed host always includes its subdomains, and that a `/fragment` entry matches any path containing it (end a `host/path` entry with `/` to avoid sibling paths). (#206)
 
+### Security
+- **More credential spellings are redacted.** Headers: any name containing `secret` (for example `X-Client-Secret`, `X-Api-Secret`), plus `X-CSRFToken`, `X-XSRF-TOKEN` and `PRIVATE-TOKEN`. Query parameters: `private_token`, `private-token`, `access_key`, `access-key`, `accesskey`, `api_secret`, `api-secret`, `client-secret`, `session_token` and `session-token`. These previously reached Coolhand unmasked. Query-parameter names are still matched exactly (not as substrings, unlike headers), so a custom name such as `my_api_key` is not redacted.
+
 ### Notes
 - **Known gap:** the module-level interceptor locks (`httpx_interceptor._patch_lock`, `_intercept_count_lock`) are not reset in a forked child. See [docs/dramatiq.md](./docs/dramatiq.md) and [docs/supported-libraries.md](./docs/supported-libraries.md).
 

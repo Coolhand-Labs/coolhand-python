@@ -74,6 +74,13 @@ SENSITIVE_HEADERS = [
     "x-auth",
     "session-token",
     "csrf-token",
+    # More spellings seen in the wild: Django's "x-csrftoken", Angular's
+    # "x-xsrf-token", GitLab's "private-token", and any "*-secret" header
+    # ("x-client-secret", "x-api-secret").
+    "csrftoken",
+    "xsrf-token",
+    "private-token",
+    "secret",
 ]
 
 SENSITIVE_QUERY_PARAMS = {
@@ -109,6 +116,16 @@ SENSITIVE_QUERY_PARAMS = {
     "bearer",
     "x-auth-token",
     "x-access-token",
+    "private_token",
+    "private-token",
+    "access_key",
+    "access-key",
+    "accesskey",
+    "api_secret",
+    "api-secret",
+    "client-secret",
+    "session_token",
+    "session-token",
 }
 
 # Azure OpenAI "On Your Data" carries datastore credentials in the *request body*

@@ -28,7 +28,7 @@ from .types import (
 PUBLIC_CONTENT_ENDPOINT = "/api/v2/public_content"
 
 
-class PublicContentService(ReadService):
+class HelpCenterDocs(ReadService):
     """Read the Coolhand help center, with or without an API key.
 
     Anonymous callers are rate limited to 30 requests per minute per IP (`429` beyond
@@ -37,8 +37,8 @@ class PublicContentService(ReadService):
     fallback to anonymous. With no key, no header is sent.
 
     Example:
-        >>> from coolhand import PublicContentService
-        >>> service = PublicContentService()
+        >>> from coolhand import HelpCenterDocs
+        >>> service = HelpCenterDocs()
         >>> result = service.search_help_articles(query="match rate", per_page=5)
         >>> article = service.get_help_article(result["articles"][0]["slug"])
     """

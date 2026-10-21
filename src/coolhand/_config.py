@@ -107,15 +107,21 @@ def _normalize_base_url(url: str) -> str:
     """
     url = url.rstrip("/")
     parsed = urlparse(url)
-    if parsed.scheme == "https" and parsed.hostname:
+    # Userinfo is a credential: never echo it in an error message.
+    has_userinfo = "@" in parsed.netloc
+    allowed = (parsed.scheme == "https" and parsed.hostname) or (
+        parsed.scheme == "http" and parsed.hostname in {"localhost", "127.0.0.1", "::1"}
+    )
+    if allowed:
+        if has_userinfo:
+            raise ValueError(
+                "base_url must not contain credentials (user:password@host)"
+            )
         return url
-    if parsed.scheme == "http" and parsed.hostname in {
-        "localhost",
-        "127.0.0.1",
-        "::1",
-    }:
-        return url
+    # A schemeless "user:pw@host" parses with the credentials in `path`, not
+    # `netloc`, so any "@" means the value is not echoed at all.
+    shown = "<redacted>" if "@" in url else url
     raise ValueError(
-        f"base_url must use https:// (got {url!r}). "
+        f"base_url must use https:// (got {shown!r}). "
         "For local development, http://localhost is allowed."
     )

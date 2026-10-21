@@ -1,6 +1,6 @@
 # Reading the Help Center
 
-`PublicContentService` reads Coolhand's help center: the articles served at
+`HelpCenterDocs` reads Coolhand's help center: the articles served at
 `coolhandlabs.com/help/:slug` and the posts at `/updates/:slug`. "Help center" is the
 user-facing name; on the wire the resource is `public_content`
 (`GET /api/v2/public_content`, `/{slug}` and `/categories`). It is read-only: creating,
@@ -10,10 +10,10 @@ updating and archiving articles is Coolhand-internal and not wrapped.
 key, and without a `Coolhand` instance:
 
 ```python
-from coolhand import PublicContentService
+from coolhand import HelpCenterDocs
 
-help_center = PublicContentService()                   # anonymous
-keyed = PublicContentService(api_key="any-key")        # lifts the rate limit
+help_center = HelpCenterDocs()                  # anonymous
+keyed = HelpCenterDocs(api_key="any-key")       # lifts the rate limit
 ```
 
 - No key is configured: no `X-API-Key` header is sent, and the calls work. Anonymous
@@ -125,10 +125,10 @@ All three raise `CoolhandAPIError` on any failure, with the HTTP status on `.sta
 
 ## Verifying against a live server
 
-`tests/live/test_public_content_live.py` runs against a real server with no key:
+`tests/live/test_help_center_docs_live.py` runs against a real server with no key:
 
 ```bash
-COOLHAND_LIVE_BASE_URL=http://127.0.0.1:3111 uv run --all-extras pytest tests/live/test_public_content_live.py
+COOLHAND_LIVE_BASE_URL=http://127.0.0.1:3111 uv run --all-extras pytest tests/live/test_help_center_docs_live.py
 ```
 
 It makes about thirteen anonymous requests, so running it repeatedly within a minute can

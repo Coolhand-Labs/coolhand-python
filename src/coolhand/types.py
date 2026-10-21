@@ -335,7 +335,7 @@ class HelpCategory(TypedDict):
 
 
 class SearchHelpArticlesResponse(TypedDict):
-    """Result of `PublicContentService.search_help_articles`."""
+    """Result of `HelpCenterDocs.search_help_articles`."""
 
     articles: list[HelpArticleSummary]
     pagination: Pagination

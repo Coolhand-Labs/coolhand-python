@@ -21,9 +21,9 @@ from .feedback_service import (
     create_feedback,
     get_feedback_service,
 )
+from .help_center_docs import HelpCenterDocs
 from .httpx_interceptor import DEFAULT_EXCLUDE_API_PATTERNS, DEFAULT_INTERCEPT_ADDRESSES
 from .log_service import LogService
-from .public_content_service import PublicContentService
 from .template_service import CoolhandAPIError, TemplateService, get_template_service
 from .types import (
     BulkLinkFeedbackResult,
@@ -76,7 +76,7 @@ class Coolhand(CoolhandClient):
         self._workload_service = WorkloadService(self.config)
         self._feedback_link_service = FeedbackLinkService(self.config)
         self._log_service = LogService(self.config)
-        self._public_content_service = PublicContentService(self.config)
+        self._help_center_docs = HelpCenterDocs(self.config)
 
         # Start monitoring
         self.start_monitoring()
@@ -378,9 +378,9 @@ class Coolhand(CoolhandClient):
         )
 
     @property
-    def public_content_service(self) -> PublicContentService:
+    def help_center_docs(self) -> HelpCenterDocs:
         """Get the help center service instance."""
-        return self._public_content_service
+        return self._help_center_docs
 
     def search_help_articles(
         self,
@@ -393,15 +393,15 @@ class Coolhand(CoolhandClient):
         """Search or list the Coolhand help center, sending this client's key.
 
         The reads need no key; to use them without a `Coolhand` instance, construct
-        `PublicContentService()` directly. See
-        `PublicContentService.search_help_articles` for the parameters, the category
+        `HelpCenterDocs()` directly. See
+        `HelpCenterDocs.search_help_articles` for the parameters, the category
         filter and the errors.
 
         Returns:
             A dict with `articles` and `pagination`, the latter read from the response
             headers.
         """
-        return self._public_content_service.search_help_articles(
+        return self._help_center_docs.search_help_articles(
             query=query, category=category, page=page, per_page=per_page
         )
 
@@ -413,7 +413,7 @@ class Coolhand(CoolhandClient):
             CoolhandAPIError: On a non-2xx response, with the HTTP status on `status`
                 (`404` for an unknown or unpublished slug).
         """
-        return self._public_content_service.get_help_article(slug)
+        return self._help_center_docs.get_help_article(slug)
 
     def list_help_categories(self) -> list[HelpCategory]:
         """List the help center sections, for use as `category` in a search.
@@ -421,7 +421,7 @@ class Coolhand(CoolhandClient):
         Raises:
             CoolhandAPIError: On a non-2xx response, with the HTTP status on `status`.
         """
-        return self._public_content_service.list_help_categories()
+        return self._help_center_docs.list_help_categories()
 
     @property
     def feedback_link_service(self) -> FeedbackLinkService:
@@ -561,7 +561,7 @@ __all__ = [
     "LogPagination",
     "LogService",
     "Pagination",
-    "PublicContentService",
+    "HelpCenterDocs",
     "SearchHelpArticlesResponse",
     "SearchLogsResponse",
     "SearchTemplatesResponse",

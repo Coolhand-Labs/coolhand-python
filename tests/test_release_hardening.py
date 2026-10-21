@@ -7,7 +7,9 @@ import httpx
 import pytest
 import requests
 
+from coolhand import Coolhand, FeedbackLinkService
 from coolhand import httpx_interceptor as interceptor
+from coolhand._config import _normalize_base_url
 from coolhand._read_service import CoolhandAPIError, ReadService
 from coolhand.client import _sanitize_headers, _sanitize_url
 
@@ -291,3 +293,88 @@ class TestKeyBytesAreNotLogged:
         assert client._send_one({"id": "x", "method": "post", "url": "u"}) is False
         assert "SECRETSECRET" not in caplog.text
         assert "Unexpected error submitting interaction" in caplog.text
+
+
+class TestV0110RedactionSpellings:
+    """Credential spellings added in 0.11.0 that earlier lists missed."""
+
+    @pytest.mark.parametrize(
+        "header",
+        [
+            "Helicone-Auth",
+            "HELICONE-AUTH",
+            "X-Github-Token",
+            "Github-Token",
+            "X-Vault-Token",
+            "Vault-Token",
+            "HF-Token",
+            "Api-Token",
+            "X-Client-Key",
+            "X-Credential",
+            "Auth-Token",
+            "Access-Key",
+            "X-Access-Key",
+            "X-Private-Key",
+            "X-Signature",
+            "Signature",
+        ],
+    )
+    def test_header_is_masked(self, header):
+        secret = "supersecretvalue123456"
+        masked = _sanitize_headers({header: secret})[header]
+        assert secret not in masked
+        assert masked
+
+    def test_benign_token_count_headers_are_not_masked(self):
+        headers = {
+            "x-ratelimit-remaining-tokens": "1000",
+            "access-control-allow-credentials": "true",
+            "content-type": "application/json",
+        }
+        assert _sanitize_headers(headers) == headers
+
+    @pytest.mark.parametrize(
+        "param",
+        [
+            "bearer_token",
+            "bearer-token",
+            "secret_key",
+            "secret-key",
+            "clientSecret",
+            "pwd",
+            "passwd",
+            "code_verifier",
+        ],
+    )
+    def test_query_param_is_redacted(self, param):
+        url = _sanitize_url(f"https://api.example.com/v1?{param}=hunter2&model=x")
+        assert "hunter2" not in url
+        assert "model=x" in url
+
+    @pytest.mark.parametrize(
+        ("url", "message"),
+        [
+            ("https://user:hunter2@coolhandlabs.com", "must not contain credentials"),
+            ("https://hunter2@coolhandlabs.com", "must not contain credentials"),
+            ("http://user:hunter2@localhost:3000", "must not contain credentials"),
+            ("http://user:hunter2@example.com", "must use https://"),
+            ("user:hunter2@example.com", "must use https://"),
+        ],
+    )
+    def test_base_url_with_userinfo_is_rejected_without_echoing_it(self, url, message):
+        with pytest.raises(ValueError, match=message) as excinfo:
+            _normalize_base_url(url)
+        assert "hunter2" not in str(excinfo.value)
+
+    @pytest.mark.parametrize(
+        "build",
+        [
+            lambda url: Coolhand(api_key="k", base_url=url, auto_submit=False),
+            lambda url: ReadService(api_key="k", base_url=url),
+            lambda url: FeedbackLinkService(api_key="k", base_url=url),
+        ],
+        ids=["Coolhand", "ReadService", "FeedbackLinkService"],
+    )
+    def test_every_entry_point_rejects_credentials_in_base_url(self, build):
+        with pytest.raises(ValueError, match="must not contain credentials"):
+            build("https://user:hunter2@coolhandlabs.com")

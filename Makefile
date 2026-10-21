@@ -31,7 +31,7 @@ test:
 
 # Real HTTP against a real Coolhand server, no mocks. Deliberately outside `verify` — CI has
 # neither a server nor a private key. Needs both of (run
-# `pytest tests/live/test_public_content_live.py` directly to need only the base URL):
+# `pytest tests/live/test_help_center_docs_live.py` directly to need only the base URL):
 #   COOLHAND_LIVE_BASE_URL=http://127.0.0.1:3111 COOLHAND_LIVE_API_KEY=<private key> make test-live
 # The feedback link live tests also need COOLHAND_LIVE_OPTIMIZATION_ID and
 # COOLHAND_LIVE_FEEDBACK_IDS (comma-separated, 2+); see tests/live/test_feedback_links_live.py.

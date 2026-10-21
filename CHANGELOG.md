@@ -4,6 +4,18 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [0.11.0] - 2026-10-21
+
+### Added
+- **Read the Coolhand help center, no API key required.** New `HelpCenterDocs` (exported from the package root) wraps the `public_content` endpoints: `search_help_articles(query=, category=, page=, per_page=)` returns `{articles, pagination}` (relevance-ranked, with a `search_headline` on each hit when `query` is given), `get_help_article(slug)` returns one article with its markdown `body` and `toc`, and `list_help_categories()` lists the sections to use as `category`. `Coolhand` gains the same three methods plus a `help_center_docs` property, which send that client's key. Use `HelpCenterDocs()` directly for keyless access. With no key, no `X-API-Key` header is sent; if `api_key` or `COOLHAND_API_KEY` is set it is sent and lifts the anonymous limit of 30 requests per minute per IP (`429` beyond that). A key the server rejects raises `CoolhandAPIError` with `status == 401`, with no silent fallback to anonymous. `category` is sent as `q[help_category_slug_eq]` (with `query` moving to `q[full_text]`), a blank `query` or `category` is treated as omitted, and a blank, non-string or relative-path `slug` raises `ValueError` before any request. Creating, updating and archiving articles is not wrapped. New types `HelpArticle`, `HelpArticleSummary`, `HelpArticleKind`, `HelpArticleTocEntry`, `HelpCategory` and `SearchHelpArticlesResponse` are exported. See [docs/help-center.md](./docs/help-center.md). (#216)
+
+### Security
+- **More credential spellings are redacted.** Headers: any name containing `-auth` (for example `Helicone-Auth`), `api-token`, `github-token`, `vault-token`, `hf-token`, `client-key`, `x-credential`, `auth-token`, `access-key`, `private-key` or `signature` (for example `X-Github-Token`, `X-Vault-Token`, `HF-Token`, `Api-Token`, `X-Client-Key`, `X-Signature`). Query parameters: `bearer_token`, `bearer-token`, `secret_key`, `secret-key`, `clientSecret`, `pwd`, `passwd` and `code_verifier`. These previously reached Coolhand unmasked. Benign headers such as `x-ratelimit-remaining-tokens` are still left alone.
+- **A `base_url` containing credentials is rejected, and never echoed.** `https://user:password@host` now raises `ValueError` at construction instead of failing later with the password inside the error text, and the "must use https://" error no longer prints a value containing `@`. Anyone passing basic-auth credentials in `base_url` must move them out of the URL (use `api_key` or a header); such a URL never worked for requests.
+
+### Internal
+- `ReadService` gains a `_keyless` switch (off by default) so one service can omit `X-API-Key` entirely when no key is set. `TemplateService`, `WorkloadService` and `LogService` still send their (possibly empty) header exactly as before, now covered by regression tests. (#216)
+
 ## [0.10.1] - 2026-10-21
 
 ### Added

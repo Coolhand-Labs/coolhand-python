@@ -12,8 +12,8 @@ key, and without a `Coolhand` instance:
 ```python
 from coolhand import HelpCenterDocs
 
-help_center = HelpCenterDocs()                   # anonymous
-keyed = HelpCenterDocs(api_key="any-key")        # lifts the rate limit
+help_center = HelpCenterDocs()                  # anonymous
+keyed = HelpCenterDocs(api_key="any-key")       # lifts the rate limit
 ```
 
 - No key is configured: no `X-API-Key` header is sent, and the calls work. Anonymous

@@ -7,7 +7,9 @@ import httpx
 import pytest
 import requests
 
+from coolhand import Coolhand, FeedbackLinkService
 from coolhand import httpx_interceptor as interceptor
+from coolhand._config import _normalize_base_url
 from coolhand._read_service import CoolhandAPIError, ReadService
 from coolhand.client import _sanitize_headers, _sanitize_url
 
@@ -300,26 +302,33 @@ class TestV0110RedactionSpellings:
         "header",
         [
             "Helicone-Auth",
+            "HELICONE-AUTH",
             "X-Github-Token",
+            "Github-Token",
             "X-Vault-Token",
+            "Vault-Token",
             "HF-Token",
             "Api-Token",
             "X-Client-Key",
             "X-Credential",
+            "Auth-Token",
+            "Access-Key",
+            "X-Access-Key",
+            "X-Private-Key",
             "X-Signature",
+            "Signature",
         ],
     )
     def test_header_is_masked(self, header):
-        from coolhand.client import _sanitize_headers
-
         secret = "supersecretvalue123456"
-        assert secret not in _sanitize_headers({header: secret})[header]
+        masked = _sanitize_headers({header: secret})[header]
+        assert secret not in masked
+        assert masked
 
     def test_benign_token_count_headers_are_not_masked(self):
-        from coolhand.client import _sanitize_headers
-
         headers = {
             "x-ratelimit-remaining-tokens": "1000",
+            "access-control-allow-credentials": "true",
             "content-type": "application/json",
         }
         assert _sanitize_headers(headers) == headers
@@ -328,7 +337,9 @@ class TestV0110RedactionSpellings:
         "param",
         [
             "bearer_token",
+            "bearer-token",
             "secret_key",
+            "secret-key",
             "clientSecret",
             "pwd",
             "passwd",
@@ -336,15 +347,34 @@ class TestV0110RedactionSpellings:
         ],
     )
     def test_query_param_is_redacted(self, param):
-        from coolhand.client import _sanitize_url
-
         url = _sanitize_url(f"https://api.example.com/v1?{param}=hunter2&model=x")
         assert "hunter2" not in url
         assert "model=x" in url
 
-    def test_base_url_with_userinfo_is_rejected_without_echoing_it(self):
-        from coolhand._config import _normalize_base_url
-
-        with pytest.raises(ValueError) as excinfo:
-            _normalize_base_url("https://user:hunter2@coolhandlabs.com")
+    @pytest.mark.parametrize(
+        ("url", "message"),
+        [
+            ("https://user:hunter2@coolhandlabs.com", "must not contain credentials"),
+            ("https://hunter2@coolhandlabs.com", "must not contain credentials"),
+            ("http://user:hunter2@localhost:3000", "must not contain credentials"),
+            ("http://user:hunter2@example.com", "must use https://"),
+            ("user:hunter2@example.com", "must use https://"),
+        ],
+    )
+    def test_base_url_with_userinfo_is_rejected_without_echoing_it(self, url, message):
+        with pytest.raises(ValueError, match=message) as excinfo:
+            _normalize_base_url(url)
         assert "hunter2" not in str(excinfo.value)
+
+    @pytest.mark.parametrize(
+        "build",
+        [
+            lambda url: Coolhand(api_key="k", base_url=url, auto_submit=False),
+            lambda url: ReadService(api_key="k", base_url=url),
+            lambda url: FeedbackLinkService(api_key="k", base_url=url),
+        ],
+        ids=["Coolhand", "ReadService", "FeedbackLinkService"],
+    )
+    def test_every_entry_point_rejects_credentials_in_base_url(self, build):
+        with pytest.raises(ValueError, match="must not contain credentials"):
+            build("https://user:hunter2@coolhandlabs.com")

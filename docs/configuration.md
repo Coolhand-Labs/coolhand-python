@@ -91,6 +91,7 @@ import coolhand  # picks up COOLHAND_BASE_URL automatically
 - `https://` is required for all non-local hosts
 - `http://localhost` and `http://127.0.0.1` are allowed for local development only
 - Non-HTTPS remote URLs are rejected at initialization time
+- Credentials in the URL (`https://user:password@host`) are rejected too; the error never prints them. Send credentials in the `api_key` or a header instead
 
 ---
 

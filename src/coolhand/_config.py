@@ -118,7 +118,9 @@ def _normalize_base_url(url: str) -> str:
                 "base_url must not contain credentials (user:password@host)"
             )
         return url
-    shown = parsed._replace(netloc=parsed.netloc.rpartition("@")[2]).geturl()
+    # A schemeless "user:pw@host" parses with the credentials in `path`, not
+    # `netloc`, so any "@" means the value is not echoed at all.
+    shown = "<redacted>" if "@" in url else url
     raise ValueError(
         f"base_url must use https:// (got {shown!r}). "
         "For local development, http://localhost is allowed."

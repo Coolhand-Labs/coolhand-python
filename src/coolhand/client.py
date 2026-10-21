@@ -85,13 +85,19 @@ SENSITIVE_HEADERS = [
     # "Helicone-Auth", "X-Github-Token", "X-Vault-Token", "HF-Token", a bare
     # "Api-Token", "X-Client-Key", "X-Credential", and signature headers. Still
     # deliberately not bare "token", which would mask "x-ratelimit-remaining-tokens".
+    # "-auth" is a substring match, so it also masks benign names such as
+    # "x-author" and "www-authenticate"; over-redacting those is harmless. Bare
+    # "credential" is avoided so "access-control-allow-credentials" stays readable.
     "-auth",
     "api-token",
     "github-token",
     "vault-token",
     "hf-token",
     "client-key",
-    "credential",
+    "auth-token",
+    "access-key",
+    "private-key",
+    "x-credential",
     "signature",
 ]
 

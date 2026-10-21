@@ -125,10 +125,10 @@ All three raise `CoolhandAPIError` on any failure, with the HTTP status on `.sta
 
 ## Verifying against a live server
 
-`tests/live/test_public_content_live.py` runs against a real server with no key:
+`tests/live/test_help_center_docs_live.py` runs against a real server with no key:
 
 ```bash
-COOLHAND_LIVE_BASE_URL=http://127.0.0.1:3111 uv run --all-extras pytest tests/live/test_public_content_live.py
+COOLHAND_LIVE_BASE_URL=http://127.0.0.1:3111 uv run --all-extras pytest tests/live/test_help_center_docs_live.py
 ```
 
 It makes about thirteen anonymous requests, so running it repeatedly within a minute can

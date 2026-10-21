@@ -5,7 +5,7 @@ from urllib.parse import parse_qs, urlparse
 import pytest
 
 from coolhand import Coolhand, CoolhandAPIError, PublicContentService
-from coolhand.public_content_service import PUBLIC_CONTENT_ENDPOINT
+from coolhand.help_center_docs import PUBLIC_CONTENT_ENDPOINT
 
 from .fake_transport import (
     BASE_URL,
@@ -344,18 +344,16 @@ class TestErrors:
 
 
 class TestCoolhandDelegation:
-    def test_exposes_the_public_content_service(
-        self, mock_config, reset_global_instance
-    ):
+    def test_exposes_the_help_center_docs(self, mock_config, reset_global_instance):
         instance = Coolhand(config=mock_config)
 
-        assert isinstance(instance.public_content_service, PublicContentService)
+        assert isinstance(instance.help_center_docs, PublicContentService)
 
     def test_the_three_methods_delegate_and_send_the_instance_key(
         self, mock_config, reset_global_instance
     ):
         instance = Coolhand(config=mock_config)
-        service = instance.public_content_service
+        service = instance.help_center_docs
 
         service._opener = FakeOpener(
             response=FakeResponse([SUMMARY], PAGINATION_HEADERS)

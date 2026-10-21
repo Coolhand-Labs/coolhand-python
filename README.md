@@ -282,6 +282,22 @@ logs = ch.search_logs(
 
 See [Reading Workloads](./docs/workloads.md) for the workload reference, [Reading Templates](./docs/templates.md#metrics) for the `metrics` fields and window rules, and [Reading Logs](./docs/logs.md) for log search and `get_log`.
 
+## Reading the Help Center
+
+`PublicContentService` reads the Coolhand help center (the same pages as coolhandlabs.com/help and /updates). It needs **no API key**, so it works without a `Coolhand` instance:
+
+```python
+from coolhand import PublicContentService
+
+help_center = PublicContentService()
+
+result = help_center.search_help_articles(query='match rate', per_page=5)
+article = help_center.get_help_article(result['articles'][0]['slug'])  # full markdown `body`
+categories = help_center.list_help_categories()
+```
+
+Anonymous callers are limited to 30 requests per minute per IP. If `api_key` is passed (or `COOLHAND_API_KEY` is set) it is sent and lifts the limit; a key the server rejects is a `401`. A `Coolhand` instance exposes the same three methods and sends its own key. See [Reading the Help Center](./docs/help-center.md) for parameters, the category filter and errors.
+
 ## Linking Feedback to an Optimization
 
 `link_feedback`, `bulk_link_feedback` (batches of 100) and `unlink_feedback` attach feedback to an optimization as evidence. Private API key required; errors raise `CoolhandAPIError`. See [Linking Feedback](./docs/feedback-links.md).
@@ -349,6 +365,7 @@ See [Verifying Interception in Your Tests](./docs/testing.md) for what it catche
 - [Examples and live smoke tests](./examples/README.md) — runnable examples, plus `make live-examples` to validate OpenAI and Anthropic calls against real keys
 - [Reading Workloads](./docs/workloads.md) — list workloads with cost and performance metrics over a rolling or explicit window
 - [Reading Logs](./docs/logs.md) — search logs by cost, time window and more, and fetch one log's content and cost breakdown
+- [Reading the Help Center](./docs/help-center.md) — search and read Coolhand's help center articles with `PublicContentService`, no API key required
 
 ## Related Packages
 

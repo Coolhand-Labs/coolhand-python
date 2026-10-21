@@ -32,6 +32,11 @@ class TestUrlAndHeaderRedaction:
             "authorization",
             "bearer",
             "X-Auth-Token",
+            "private_token",
+            "accessKey",
+            "access_key",
+            "client-secret",
+            "session_token",
         ],
     )
     def test_credential_query_param_spellings_are_redacted(self, param):
@@ -41,7 +46,18 @@ class TestUrlAndHeaderRedaction:
 
     @pytest.mark.parametrize(
         "header",
-        ["Authentication", "X-Bearer", "X-Auth", "X-Session-Token", "X-CSRF-Token"],
+        [
+            "Authentication",
+            "X-Bearer",
+            "X-Auth",
+            "X-Session-Token",
+            "X-CSRF-Token",
+            "X-CSRFToken",
+            "X-XSRF-TOKEN",
+            "PRIVATE-TOKEN",
+            "X-Client-Secret",
+            "X-Api-Secret",
+        ],
     )
     def test_credential_header_spellings_are_masked(self, header):
         value = "supersecretvalue-0123456789"

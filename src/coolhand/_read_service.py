@@ -1,7 +1,7 @@
 """Shared plumbing for the read-only REST services.
 
 `TemplateService`, `WorkloadService` and `LogService` all GET a JSON resource with the
-client's **private** API key (`PublicContentService` alone needs none), raise
+client's **private** API key (`HelpCenterDocs` alone needs none), raise
 `CoolhandAPIError` on any failure, and read pagination off response headers. That
 machinery lives here once.
 """
@@ -308,7 +308,7 @@ class ReadService:
 
         Args:
             config: Configuration dictionary. `api_key` must be the **private** key
-                (optional for the keyless `PublicContentService`).
+                (optional for the keyless `HelpCenterDocs`).
             **kwargs: Override config values (api_key, base_url, silent,
                 request_timeout).
         """

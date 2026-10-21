@@ -284,12 +284,12 @@ See [Reading Workloads](./docs/workloads.md) for the workload reference, [Readin
 
 ## Reading the Help Center
 
-`PublicContentService` reads the Coolhand help center (the same pages as coolhandlabs.com/help and /updates). It needs **no API key**, so it works without a `Coolhand` instance:
+`HelpCenterDocs` reads the Coolhand help center (the same pages as coolhandlabs.com/help and /updates). It needs **no API key**, so it works without a `Coolhand` instance:
 
 ```python
-from coolhand import PublicContentService
+from coolhand import HelpCenterDocs
 
-help_center = PublicContentService()
+help_center = HelpCenterDocs()
 
 result = help_center.search_help_articles(query='match rate', per_page=5)
 article = help_center.get_help_article(result['articles'][0]['slug'])  # full markdown `body`
@@ -365,7 +365,7 @@ See [Verifying Interception in Your Tests](./docs/testing.md) for what it catche
 - [Examples and live smoke tests](./examples/README.md) — runnable examples, plus `make live-examples` to validate OpenAI and Anthropic calls against real keys
 - [Reading Workloads](./docs/workloads.md) — list workloads with cost and performance metrics over a rolling or explicit window
 - [Reading Logs](./docs/logs.md) — search logs by cost, time window and more, and fetch one log's content and cost breakdown
-- [Reading the Help Center](./docs/help-center.md) — search and read Coolhand's help center articles with `PublicContentService`, no API key required
+- [Reading the Help Center](./docs/help-center.md) — search and read Coolhand's help center articles with `HelpCenterDocs`, no API key required
 
 ## Related Packages
 

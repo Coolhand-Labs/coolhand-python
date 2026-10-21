@@ -11,7 +11,7 @@ import os
 
 import pytest
 
-from coolhand import CoolhandAPIError, PublicContentService
+from coolhand import CoolhandAPIError, HelpCenterDocs
 
 LIVE_BASE_URL = os.environ.get("COOLHAND_LIVE_BASE_URL", "")
 if not LIVE_BASE_URL:
@@ -33,10 +33,10 @@ ARTICLE_KINDS = {
 
 
 @pytest.fixture
-def anonymous(monkeypatch) -> PublicContentService:
+def anonymous(monkeypatch) -> HelpCenterDocs:
     # The environment fallback would otherwise make a "no key" client send a key.
     monkeypatch.delenv("COOLHAND_API_KEY", raising=False)
-    return PublicContentService(
+    return HelpCenterDocs(
         base_url=LIVE_BASE_URL, silent=True, timeout=LIVE_TIMEOUT_SECONDS
     )
 
@@ -157,7 +157,7 @@ class TestPublicContentLive:
             )
 
     def test_an_invalid_key_is_a_401_not_an_anonymous_fallback(self):
-        service = PublicContentService(
+        service = HelpCenterDocs(
             api_key="not-a-real-key",
             base_url=LIVE_BASE_URL,
             silent=True,

@@ -1,10 +1,10 @@
-"""Tests for PublicContentService."""
+"""Tests for HelpCenterDocs."""
 
 from urllib.parse import parse_qs, urlparse
 
 import pytest
 
-from coolhand import Coolhand, CoolhandAPIError, PublicContentService
+from coolhand import Coolhand, CoolhandAPIError, HelpCenterDocs
 from coolhand.help_center_docs import PUBLIC_CONTENT_ENDPOINT
 
 from .fake_transport import (
@@ -49,7 +49,7 @@ CATEGORY = {
 
 
 def build_service(body=None, headers=None, error=None, **config):
-    return fake_build_service(PublicContentService, body, headers, error, **config)
+    return fake_build_service(HelpCenterDocs, body, headers, error, **config)
 
 
 def keyless_service(body=None, headers=None, error=None):
@@ -231,7 +231,7 @@ class TestApiKey:
         assert "X-api-key" not in dict(request.header_items())
 
     def test_works_with_no_arguments_and_no_environment_key(self):
-        service = PublicContentService()
+        service = HelpCenterDocs()
         service._opener = FakeOpener(response=FakeResponse([CATEGORY]))
 
         assert service.list_help_categories() == [CATEGORY]
@@ -239,7 +239,7 @@ class TestApiKey:
 
     def test_falls_back_to_the_environment_key(self, monkeypatch):
         monkeypatch.setenv("COOLHAND_API_KEY", "env-key")
-        service = PublicContentService()
+        service = HelpCenterDocs()
         service._opener = FakeOpener(response=FakeResponse([CATEGORY]))
 
         service.list_help_categories()
@@ -248,7 +248,7 @@ class TestApiKey:
 
     def test_an_explicit_key_beats_the_environment(self, monkeypatch):
         monkeypatch.setenv("COOLHAND_API_KEY", "env-key")
-        service = PublicContentService(api_key="explicit")
+        service = HelpCenterDocs(api_key="explicit")
         service._opener = FakeOpener(response=FakeResponse([CATEGORY]))
 
         service.list_help_categories()
@@ -260,7 +260,7 @@ class TestKeylessEdgeCases:
     @pytest.mark.parametrize("blank", ["", "  ", "\n"])
     def test_a_blank_key_sends_no_header(self, blank, monkeypatch):
         monkeypatch.delenv("COOLHAND_API_KEY", raising=False)
-        service = PublicContentService(api_key=blank)
+        service = HelpCenterDocs(api_key=blank)
         service._opener = FakeOpener(response=FakeResponse([CATEGORY]))
 
         service.list_help_categories()
@@ -269,7 +269,7 @@ class TestKeylessEdgeCases:
 
     def test_a_blank_environment_key_sends_no_header(self, monkeypatch):
         monkeypatch.setenv("COOLHAND_API_KEY", "\n")
-        service = PublicContentService()
+        service = HelpCenterDocs()
         service._opener = FakeOpener(response=FakeResponse([CATEGORY]))
 
         service.list_help_categories()
@@ -347,7 +347,7 @@ class TestCoolhandDelegation:
     def test_exposes_the_help_center_docs(self, mock_config, reset_global_instance):
         instance = Coolhand(config=mock_config)
 
-        assert isinstance(instance.help_center_docs, PublicContentService)
+        assert isinstance(instance.help_center_docs, HelpCenterDocs)
 
     def test_the_three_methods_delegate_and_send_the_instance_key(
         self, mock_config, reset_global_instance

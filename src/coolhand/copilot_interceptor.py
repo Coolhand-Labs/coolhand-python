@@ -1,6 +1,7 @@
 """JSON-RPC interceptor for github-copilot-sdk — patches JsonRpcClient."""
 
 import asyncio
+import itertools
 import logging
 import threading
 import time
@@ -36,7 +37,15 @@ _pre_pending: dict[str | None, list[dict[str, Any]]] = {}
 # Note: entries are evicted after COPILOT_INTERCEPTOR_PENDING_TTL_SECONDS (300s).
 # Sessions longer than this TTL will have their system prompt absent from
 # session.send bodies logged after eviction — a logging gap, not a functional bug.
+#
+# For cloud/remote sessions (CopilotClient(enable_remote_sessions=True)) the
+# session id is server-assigned and absent from the session.create request, so
+# entries are temporarily keyed by a "__pending__{n}" placeholder and re-keyed
+# to the real sessionId once it's known from the session.create response.
 _session_params: dict[str | None, dict[str, Any]] = {}
+
+# Counter for temporary "__pending__{n}" keys used above; guarded by _lock.
+_pending_key_counter = itertools.count()
 
 # Model name keyed by sessionId, updated on session.model.change notifications.
 # Stored as {"model": str, "start": float}; timestamp refreshes on each change.
@@ -49,6 +58,22 @@ _session_models: dict[str | None, dict[str, Any]] = {}
 _session_usage: dict[str | None, dict[str, Any]] = {}
 
 _lock = threading.Lock()
+
+
+def _promote_system_prompt(body: dict[str, Any]) -> None:
+    """Surface Copilot's nested systemMessage.content as a top-level `system`
+    string field, mirroring Anthropic's body.system shape so the backend's
+    existing system-prompt extractor recognizes it. Mutates body in place;
+    the original systemMessage field is left untouched.
+    """
+    system_message = body.get("systemMessage")
+    if not isinstance(system_message, dict):
+        return
+    content = system_message.get("content")
+    # Copilot's current schema only emits a plain string here; a non-string
+    # content (e.g. a content-block list) is left unpromoted rather than guessed at.
+    if isinstance(content, str) and content:
+        body["system"] = content
 
 
 # session.create params carry credentials in the *body* — a top-level gitHubToken,
@@ -262,22 +287,38 @@ def patch() -> bool:
             p_create = params or {}
             session_id = p_create.get("sessionId")
             if session_id:
-                with _lock:
-                    _session_params[session_id] = {
-                        "params": dict(p_create),
-                        "start": time.time(),
-                    }
+                storage_key = session_id
             else:
+                with _lock:
+                    storage_key = f"__pending__{next(_pending_key_counter)}"
                 logger.debug(
-                    "Copilot interceptor: session.create has no sessionId,"
-                    " system prompt will not be captured"
+                    "Copilot interceptor: session.create has no sessionId"
+                    " (cloud/remote session) — buffering under %s pending"
+                    " server-assigned id",
+                    storage_key,
                 )
+            with _lock:
+                _session_params[storage_key] = {
+                    "params": dict(p_create),
+                    "start": time.time(),
+                }
+
             result = await _original_request(self, method, params, timeout, **kwargs)
-            if session_id and isinstance(result, dict):
+
+            resolved_session_id = session_id or (
+                result.get("sessionId") if isinstance(result, dict) else None
+            )
+            if resolved_session_id and resolved_session_id != storage_key:
+                with _lock:
+                    moved_entry = _session_params.pop(storage_key, None)
+                    if moved_entry is not None:
+                        _session_params[resolved_session_id] = moved_entry
+
+            if resolved_session_id and isinstance(result, dict):
                 model = result.get("model") or result.get("modelId")
                 if model:
                     with _lock:
-                        _session_models[session_id] = {
+                        _session_models[resolved_session_id] = {
                             "model": model,
                             "start": time.time(),
                         }
@@ -285,7 +326,7 @@ def patch() -> bool:
                         "Copilot interceptor: session.create response"
                         " — model=%s session=%s",
                         model,
-                        session_id,
+                        resolved_session_id,
                     )
                 else:
                     logger.debug(
@@ -302,19 +343,17 @@ def patch() -> bool:
         session_id = p.get("sessionId")
         with _lock:
             session_ctx = dict(_session_params.get(session_id, {}).get("params", {}))
+        body = {
+            k: v for k, v in {**session_ctx, **dict(p)}.items() if k != "requestHeaders"
+        }
+        _promote_system_prompt(body)
         req_data: RequestData = {
             "method": "POST",
             "url": "copilot://session.send",
             "headers": p.get("requestHeaders") or {},
             # requestHeaders is already carried (and masked) in "headers"; leaving
             # it in the body would ship Authorization/X-API-Key values unmasked.
-            "body": _sanitize_session_body(
-                {
-                    k: v
-                    for k, v in {**session_ctx, **dict(p)}.items()
-                    if k != "requestHeaders"
-                }
-            ),
+            "body": _sanitize_session_body(body),
             "timestamp": start,
         }
         attach_snapshot(req_data)

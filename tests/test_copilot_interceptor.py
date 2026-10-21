@@ -54,6 +54,32 @@ def _make_fake_client_class_v1():
     return FakeJsonRpcClientV1
 
 
+def _make_fake_client_class_cloud(
+    session_id="server-abc123", model="gpt-4o", include_session_id=True
+):
+    """Simulate a cloud/remote session (CopilotClient(enable_remote_sessions=True)):
+    sessionId is server-assigned and absent from session.create request params,
+    only appearing in the session.create response.
+
+    `include_session_id=False` simulates a degenerate response that also omits
+    sessionId, e.g. an error response or an SDK/server version mismatch.
+    """
+
+    class FakeCloudJsonRpcClient:
+        async def request(self, method, params=None, timeout=None, **kwargs):
+            if method == "session.create":
+                response = {"model": model}
+                if include_session_id:
+                    response["sessionId"] = session_id
+                return response
+            return {"messageId": "msg-001"}
+
+        def _handle_message(self, message):
+            pass
+
+    return FakeCloudJsonRpcClient
+
+
 def _inject_fake_sdk(client_cls=None):
     """Inject minimal fake copilot._jsonrpc into sys.modules. Returns the class."""
     if client_cls is None:
@@ -749,7 +775,75 @@ class TestSessionCreate:
         body = entry["req_data"]["body"]
         assert body["prompt"] == "hello"
         assert body["systemMessage"] == {"content": "You are a music expert."}
+        assert body["system"] == "You are a music expert."
         assert body["model"] == "gpt-4o"
+
+    @pytest.mark.asyncio
+    async def test_session_send_without_system_message_has_no_system_field(
+        self, handler
+    ):
+        from coolhand import copilot_interceptor
+
+        cls = _inject_fake_sdk()
+        copilot_interceptor.set_handler(handler)
+        copilot_interceptor.patch()
+
+        instance = cls()
+        await instance.request(
+            "session.create",
+            {"sessionId": "s1", "model": "gpt-4o"},
+        )
+        await instance.request(
+            "session.send",
+            {"sessionId": "s1", "prompt": "hi"},
+        )
+
+        body = copilot_interceptor._pre_pending["s1"][0]["req_data"]["body"]
+        assert "system" not in body
+
+    @pytest.mark.asyncio
+    async def test_session_send_with_malformed_system_message_is_ignored(self, handler):
+        from coolhand import copilot_interceptor
+
+        cls = _inject_fake_sdk()
+        copilot_interceptor.set_handler(handler)
+        copilot_interceptor.patch()
+
+        instance = cls()
+        await instance.request(
+            "session.create",
+            {"sessionId": "s1", "systemMessage": "not-a-dict"},
+        )
+        await instance.request(
+            "session.send",
+            {"sessionId": "s1", "prompt": "hi"},
+        )
+
+        body = copilot_interceptor._pre_pending["s1"][0]["req_data"]["body"]
+        assert "system" not in body
+
+    @pytest.mark.asyncio
+    async def test_session_send_with_non_string_system_content_is_ignored(
+        self, handler
+    ):
+        from coolhand import copilot_interceptor
+
+        cls = _inject_fake_sdk()
+        copilot_interceptor.set_handler(handler)
+        copilot_interceptor.patch()
+
+        instance = cls()
+        await instance.request(
+            "session.create",
+            {"sessionId": "s1", "systemMessage": {"content": ["not", "a", "string"]}},
+        )
+        await instance.request(
+            "session.send",
+            {"sessionId": "s1", "prompt": "hi"},
+        )
+
+        body = copilot_interceptor._pre_pending["s1"][0]["req_data"]["body"]
+        assert "system" not in body
 
     @pytest.mark.asyncio
     async def test_session_send_params_take_precedence(self, handler):
@@ -788,7 +882,9 @@ class TestSessionCreate:
         assert copilot_interceptor._session_params == {}
 
     @pytest.mark.asyncio
-    async def test_session_create_without_session_id_is_noop(self, handler):
+    async def test_session_create_without_session_id_buffers_under_pending_key(
+        self, handler
+    ):
         from coolhand import copilot_interceptor
 
         cls = _inject_fake_sdk()
@@ -801,8 +897,108 @@ class TestSessionCreate:
             {"systemMessage": {"content": "sys"}},  # no sessionId
         )
 
-        assert copilot_interceptor._session_params == {}
+        assert len(copilot_interceptor._session_params) == 1
+        pending_key, entry = next(iter(copilot_interceptor._session_params.items()))
+        assert pending_key.startswith("__pending__")
+        assert entry["params"]["systemMessage"] == {"content": "sys"}
         handler.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# TestCloudSessionReKeying
+# ---------------------------------------------------------------------------
+
+
+class TestCloudSessionReKeying:
+    """Covers issue #51: session.create has no sessionId when
+    CopilotClient(enable_remote_sessions=True) is used — the server-assigned
+    id only appears in the session.create response.
+    """
+
+    @pytest.mark.asyncio
+    async def test_session_create_rekeys_to_server_assigned_session_id(self, handler):
+        from coolhand import copilot_interceptor
+
+        cls = _inject_fake_sdk(_make_fake_client_class_cloud())
+        copilot_interceptor.set_handler(handler)
+        copilot_interceptor.patch()
+
+        instance = cls()
+        await instance.request(
+            "session.create",
+            {"systemMessage": {"content": "You are a QA assistant."}},
+        )
+
+        assert list(copilot_interceptor._session_params.keys()) == ["server-abc123"]
+        stored = copilot_interceptor._session_params["server-abc123"]["params"]
+        assert stored["systemMessage"] == {"content": "You are a QA assistant."}
+
+    @pytest.mark.asyncio
+    async def test_session_send_after_cloud_create_merges_system_prompt(self, handler):
+        from coolhand import copilot_interceptor
+
+        cls = _inject_fake_sdk(_make_fake_client_class_cloud())
+        copilot_interceptor.set_handler(handler)
+        copilot_interceptor.patch()
+
+        instance = cls()
+        await instance.request(
+            "session.create",
+            {"systemMessage": {"content": "You are a QA assistant."}},
+        )
+        await instance.request(
+            "session.send",
+            {"sessionId": "server-abc123", "prompt": "hello"},
+        )
+
+        entry = copilot_interceptor._pre_pending["server-abc123"][0]
+        body = entry["req_data"]["body"]
+        assert body["systemMessage"] == {"content": "You are a QA assistant."}
+        assert body["system"] == "You are a QA assistant."
+
+    @pytest.mark.asyncio
+    async def test_session_create_caches_model_for_cloud_session(self, handler):
+        from coolhand import copilot_interceptor
+
+        cls = _inject_fake_sdk(_make_fake_client_class_cloud())
+        copilot_interceptor.set_handler(handler)
+        copilot_interceptor.patch()
+
+        instance = cls()
+        await instance.request(
+            "session.create",
+            {"systemMessage": {"content": "sys"}},
+        )
+
+        assert copilot_interceptor._session_models["server-abc123"]["model"] == "gpt-4o"
+
+    @pytest.mark.asyncio
+    async def test_session_create_response_missing_session_id_stays_pending(
+        self, handler
+    ):
+        """Degenerate case: the session.create response also omits sessionId (e.g.
+        an error response or SDK/server mismatch). The entry must stay parked under
+        its pending key — not crash, not get silently dropped, not leak into some
+        other session — until the TTL sweep eventually evicts it.
+        """
+        from coolhand import copilot_interceptor
+
+        cls = _inject_fake_sdk(_make_fake_client_class_cloud(include_session_id=False))
+        copilot_interceptor.set_handler(handler)
+        copilot_interceptor.patch()
+
+        instance = cls()
+        await instance.request(
+            "session.create",
+            {"systemMessage": {"content": "You are a QA assistant."}},
+        )
+
+        assert len(copilot_interceptor._session_params) == 1
+        (pending_key,) = copilot_interceptor._session_params.keys()
+        assert pending_key.startswith("__pending__")
+        stored = copilot_interceptor._session_params[pending_key]["params"]
+        assert stored["systemMessage"] == {"content": "You are a QA assistant."}
+        assert copilot_interceptor._session_models == {}
 
 
 # ---------------------------------------------------------------------------

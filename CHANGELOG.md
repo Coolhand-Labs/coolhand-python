@@ -4,6 +4,14 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [0.11.1] - 2026-10-27
+
+### Fixed
+- **Sync `httpx`/`httpx2` streamed responses are now captured with their full body.** The sync `Client.send` wrapper never read streamed (SSE / NDJSON) bodies: every such response was logged with `is_streaming: false` and the placeholder body `"[streaming]"`, so a sync call such as `anthropic.Anthropic().beta.messages.stream(...)` reached Coolhand with no content and the server could not extract tokens, model output or the message id. Sync streams are now captured exactly like async ones: one record per response, sent when the stream ends, with the complete accumulated body, `is_streaming: true`, `body_truncated` and the correct duration. `iter_bytes`, `iter_lines`, `iter_text` and `iter_raw` are all wrapped and capture happens at the outermost running layer only, so nothing is recorded twice; arguments such as `chunk_size` are forwarded untouched, so streaming latency is unchanged. A stream that is abandoned early (`break`, closing the response, a dropped connection) or that has no content sends nothing, as async already did, because a cut-off body would look like a complete one. A streaming-content-type response that `send()` already read in full (not made with `stream=True`) is now reported immediately with its real body instead of `"[streaming]"`; async behavior is unchanged. Capture and handler errors are caught inside the shared capture helper, so they cannot break the host's stream; this now also covers a capture-side error in the async path. The `requests` interceptor is untouched and still records `[streaming]`. (#225)
+
+### Internal
+- Dependency and CI action bumps: `ruff` 0.17.1 → 0.17.2 (also moves the `uv.lock` format `revision` from 3 to 5) (#222), `pytest-mock` 3.16.0 → 3.17.0 (#223), `virtualenv` 21.7.13 → 21.14.9 in `uv.lock` (#219), `astral-sh/setup-uv` 10.3.0 → 10.3.2 (#220) and `pypa/gh-action-pypi-publish` 1.14.2 → 1.14.3 (#221). All are dev/CI-only; none changes the runtime dependencies of the published package.
+
 ## [0.11.0] - 2026-10-21
 
 ### Added

@@ -8,7 +8,7 @@ import logging
 import re
 import threading
 import time
-from collections.abc import Callable
+from collections.abc import AsyncIterator, Callable, Iterator
 from pathlib import Path
 from typing import Any
 from urllib.parse import unquote, urlsplit
@@ -553,6 +553,115 @@ def _unwrap(func: Callable) -> Callable:
     return getattr(func, "__dict__", {}).get("_coolhand_original", func)
 
 
+def _decode_bytes(chunk: bytes) -> str:
+    return chunk.decode("utf-8", errors="replace")
+
+
+# httpx implements lines on text on bytes on raw, each looked up on the response
+# instance (sync as ``iter_*``, async as ``aiter_*``). Every one is wrapped, since
+# a consumer may call any of them. The converter turns one item into the text
+# appended to the captured body.
+_STREAM_METHODS: tuple[tuple[str, Callable[[Any], str]], ...] = (
+    ("bytes", _decode_bytes),
+    ("lines", lambda line: line + "\n"),
+    ("text", str),
+    ("raw", _decode_bytes),
+)
+
+
+class _StreamCapture:
+    """Accumulates one streamed response and reports it to the handler once.
+
+    Shared by the sync and async ``send`` wrappers. Capture happens only at the
+    outermost iterator layer that is running (``active``), or every chunk would be
+    recorded once per layer. The record is sent when the stream is exhausted;
+    abandoning it half way (``break``, ``close()``, a transport error) sends
+    nothing, because a cut-off body is indistinguishable from a complete one.
+    Nothing here may raise into the host's stream.
+    """
+
+    def __init__(self, response: Any, req_data: RequestData, start: float) -> None:
+        self._response = response
+        self._req_data = req_data
+        self._start = start
+        self._chunks = _BoundedChunks(_max_body_bytes)
+        self._sent = False
+        self.active = False
+
+    def add(self, text: str) -> None:
+        try:
+            self._chunks.append(text)
+        except Exception:
+            logger.debug("Streaming capture error", exc_info=True)
+
+    def send(self) -> None:
+        if self._sent or not self._chunks:
+            return
+        self._sent = True
+        try:
+            res_data: ResponseData = {
+                "status_code": self._response.status_code,
+                "headers": dict(self._response.headers),
+                "body": self._chunks.joined(),
+                "timestamp": time.time(),
+                "duration": time.time() - self._start,
+                "is_streaming": True,
+                "body_truncated": self._chunks.truncated,
+            }
+            if _handler:
+                _handler(self._req_data, res_data, None)
+        except Exception:
+            logger.debug("Handler error in streaming", exc_info=True)
+
+    def wrap_sync(self, orig: Callable, to_text: Callable[[Any], str]) -> Callable:
+        def capturing(*args: Any, **kwargs: Any) -> Iterator[Any]:
+            if self.active:
+                yield from orig(*args, **kwargs)
+                return
+            self.active = True
+            try:
+                for item in orig(*args, **kwargs):
+                    if item:
+                        self.add(to_text(item))
+                    yield item
+            finally:
+                self.active = False
+            self.send()
+
+        return capturing
+
+    def wrap_async(self, orig: Callable, to_text: Callable[[Any], str]) -> Callable:
+        async def capturing(*args: Any, **kwargs: Any) -> AsyncIterator[Any]:
+            if self.active:
+                async for item in orig(*args, **kwargs):
+                    yield item
+                return
+            self.active = True
+            try:
+                async for item in orig(*args, **kwargs):
+                    if item:
+                        self.add(to_text(item))
+                    yield item
+            finally:
+                self.active = False
+            self.send()
+
+        return capturing
+
+    def install(self, prefix: str, wrap: Callable) -> None:
+        """Wrap the response's ``<prefix>bytes/lines/text/raw`` to capture them.
+
+        Arguments (e.g. ``chunk_size``) are forwarded untouched so httpx's own
+        buffering, and the host's streaming latency, is unchanged.
+        """
+        for suffix, to_text in _STREAM_METHODS:
+            name = prefix + suffix
+            if hasattr(self._response, name):
+                setattr(
+                    self._response, name, wrap(getattr(self._response, name), to_text)
+                )
+
+
 def _make_patched_send(get_original: Callable[[], Callable]) -> Callable:
     """Build the sync ``send`` wrapper; ``get_original`` returns the real ``send``."""
 
@@ -582,6 +691,18 @@ def _make_patched_send(get_original: Callable[[], Callable]) -> Callable:
             attach_snapshot(req_data)
             response = get_original()(self, request, **kwargs)
             duration = time.time() - start
+
+            if _is_streaming_content_type(response.headers.get("content-type", "")):
+                capture = _StreamCapture(response, req_data, start)
+                content = getattr(response, "_content", None)
+                if isinstance(content, bytes):
+                    # send(stream=False) already read the whole body, so there is
+                    # nothing left to iterate: report it now.
+                    capture.add(_decode_bytes(content))
+                    capture.send()
+                else:
+                    capture.install("iter_", capture.wrap_sync)
+                return response
 
             res_data: ResponseData = {
                 "status_code": response.status_code,
@@ -646,70 +767,8 @@ def _make_patched_async_send(get_original: Callable[[], Callable]) -> Callable:
 
             if is_streaming:
                 # Wrap streaming methods to capture content
-                captured_chunks = _BoundedChunks(_max_body_bytes)
-                content_sent = [False]  # Use list to allow mutation in closures
-
-                def send_captured():
-                    if not content_sent[0] and captured_chunks:
-                        content_sent[0] = True
-                        res_data: ResponseData = {
-                            "status_code": response.status_code,
-                            "headers": dict(response.headers),
-                            "body": captured_chunks.joined(),
-                            "timestamp": time.time(),
-                            "duration": time.time() - start,
-                            "is_streaming": True,
-                            "body_truncated": captured_chunks.truncated,
-                        }
-                        try:
-                            _handler(req_data, res_data, None)
-                        except Exception:
-                            logger.debug("Handler error in streaming", exc_info=True)
-
-                # httpx implements aiter_lines on aiter_text on aiter_bytes on
-                # aiter_raw, each looked up on the instance. Wrap them all (a
-                # consumer may call any one) but capture only at the outermost
-                # layer that is running, or every chunk would be recorded once
-                # per layer.
-                capture_active = [False]
-
-                def wrap_stream(orig, to_text):
-                    async def capturing(*args, **kwargs):
-                        if capture_active[0]:
-                            async for item in orig(*args, **kwargs):
-                                yield item
-                            return
-                        capture_active[0] = True
-                        try:
-                            async for item in orig(*args, **kwargs):
-                                if item:
-                                    captured_chunks.append(to_text(item))
-                                yield item
-                        finally:
-                            capture_active[0] = False
-                        send_captured()
-
-                    return capturing
-
-                def decode_bytes(chunk):
-                    return chunk.decode("utf-8", errors="replace")
-
-                # aiter_lines is used by OpenAI for SSE; aiter_raw is the lowest
-                # level. Arguments (e.g. chunk_size) are forwarded untouched so
-                # httpx's own buffering, and the host's streaming latency, is
-                # unchanged.
-                for name, to_text in (
-                    ("aiter_bytes", decode_bytes),
-                    ("aiter_lines", lambda line: line + "\n"),
-                    ("aiter_text", str),
-                    ("aiter_raw", decode_bytes),
-                ):
-                    if hasattr(response, name):
-                        setattr(
-                            response,
-                            name,
-                            wrap_stream(getattr(response, name), to_text),
-                        )
+                capture = _StreamCapture(response, req_data, start)
+                capture.install("aiter_", capture.wrap_async)
             else:
                 # Non-streaming: send immediately
                 res_data: ResponseData = {

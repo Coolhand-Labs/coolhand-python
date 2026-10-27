@@ -430,3 +430,112 @@ def test_sync_multibyte_character_split_across_chunks_is_captured_intact(
 
     assert len(captured) == 1
     assert captured[0][1]["body"] == body.decode()
+
+
+# --- consumers that stop at the [DONE] sentinel ------------------------------------
+#
+# The OpenAI SDK breaks out of its SSE loop at ``data: [DONE]`` and never exhausts the
+# underlying iterator, so "report when exhausted" alone never captured those streams.
+
+OPENAI_SSE = (
+    b'data: {"id": "chatcmpl-1", "choices": [{"delta": {"content": "ok"}}]}\n\n'
+    b'data: {"id": "chatcmpl-1", "choices": [], "usage": {"total_tokens": 12}}\n\n'
+    b"data: [DONE]\n\n"
+)
+
+
+def _openai_chunks(size=13):
+    return [OPENAI_SSE[i : i + size] for i in range(0, len(OPENAI_SSE), size)]
+
+
+@pytest.mark.parametrize("module_name", CLIENTS)
+@pytest.mark.parametrize("method", ["iter_lines", "iter_bytes", "iter_text"])
+def test_sync_stopping_at_done_reports_the_complete_body_once(
+    captured, module_name, method
+):
+    client, _ = _sync_client(module_name, _openai_chunks())
+    with client:
+        with client.stream("POST", LLM_URL, json={}) as response:
+            for item in getattr(response, method)():
+                text = item if isinstance(item, str) else item.decode()
+                if "[DONE]" in text:
+                    break
+
+    assert len(captured) == 1
+    res = captured[0][1]
+    assert res["is_streaming"] is True
+    assert res["body_truncated"] is False
+    assert res["body"].rstrip().endswith("data: [DONE]")
+    assert '"total_tokens": 12' in res["body"]
+    assert '"id": "chatcmpl-1"' in res["body"]
+
+
+@pytest.mark.parametrize("module_name", CLIENTS)
+def test_sync_stopping_at_done_of_an_over_cap_stream_reports_it_truncated(
+    captured, module_name, monkeypatch
+):
+    monkeypatch.setattr(interceptor, "_max_body_bytes", 40)
+    client, _ = _sync_client(module_name, _openai_chunks())
+    with client:
+        with client.stream("POST", LLM_URL, json={}) as response:
+            for line in response.iter_lines():
+                if "[DONE]" in line:
+                    break
+
+    assert len(captured) == 1
+    assert captured[0][1]["body_truncated"] is True
+
+
+@pytest.mark.parametrize("module_name", CLIENTS)
+def test_sync_stopping_before_done_still_reports_nothing(captured, module_name):
+    client, _ = _sync_client(module_name, _openai_chunks())
+    with client:
+        with client.stream("POST", LLM_URL, json={}) as response:
+            for line in response.iter_lines():
+                if "total_tokens" in line:
+                    break
+
+    assert captured == []
+
+
+@pytest.mark.parametrize("module_name", CLIENTS)
+def test_sync_error_after_done_still_reports_the_complete_body(captured, module_name):
+    """The body already ended on its own terminator, so it is complete by protocol."""
+    client, _ = _sync_client(module_name, _openai_chunks(), fail_after=True)
+    with client:
+        with pytest.raises(Exception, match="connection dropped"):
+            with client.stream("POST", LLM_URL, json={}) as response:
+                for _ in response.iter_lines():
+                    pass
+
+    assert len(captured) == 1
+    assert captured[0][1]["body"].rstrip().endswith("data: [DONE]")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("module_name", CLIENTS)
+async def test_async_stopping_at_done_reports_the_complete_body_once(
+    captured, module_name
+):
+    module = __import__(module_name)
+
+    class Stream(module.AsyncByteStream):
+        async def __aiter__(self):
+            for chunk in _openai_chunks():
+                yield chunk
+
+    transport = module.MockTransport(
+        lambda request: module.Response(
+            200, stream=Stream(), headers={"content-type": "text/event-stream"}
+        )
+    )
+    async with module.AsyncClient(transport=transport) as client:
+        async with client.stream("POST", LLM_URL, json={}) as response:
+            async for line in response.aiter_lines():
+                if "[DONE]" in line:
+                    break
+
+    # An abandoned async generator is finalised by the event loop, not at ``break``.
+    await asyncio.sleep(0.01)
+    assert len(captured) == 1
+    assert captured[0][1]["body"].rstrip().endswith("data: [DONE]")

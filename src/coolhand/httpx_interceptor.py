@@ -567,6 +567,11 @@ _STREAM_METHODS: tuple[tuple[str, Callable[[Any], str] | None], ...] = (
 )
 
 
+# The terminator OpenAI-compatible SSE streams end with.
+_DONE_SENTINEL = "data: [DONE]"
+_DONE_SENTINEL_TAIL = 64
+
+
 class _StreamCapture:
     """Accumulates one streamed response and reports it to the handler once.
 
@@ -574,8 +579,10 @@ class _StreamCapture:
     outermost iterator layer that is running (``active``), or every chunk would be
     recorded once per layer. The record is sent when the stream is exhausted;
     abandoning it half way (``break``, ``close()``, a transport error) sends
-    nothing, because a cut-off body is indistinguishable from a complete one.
-    Nothing here may raise into the host's stream.
+    nothing, because a cut-off body is indistinguishable from a complete one. The one
+    exception is a stream abandoned right after its own ``data: [DONE]`` terminator:
+    the OpenAI SDK stops reading there without exhausting the iterator, and the body
+    is complete by protocol. Nothing here may raise into the host's stream.
     """
 
     def __init__(self, response: Any, req_data: RequestData, start: float) -> None:
@@ -584,15 +591,22 @@ class _StreamCapture:
         self._start = start
         self._chunks = _BoundedChunks(_max_body_bytes)
         self._decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")
+        self._tail = ""  # last captured text, kept even once the body is truncated
         self._sent = False
         self.active = False
 
     def add(self, item: Any, to_text: Callable[[Any], str] | None = None) -> None:
         try:
             text = to_text(item) if to_text else self._decoder.decode(item)
+            self._tail = (self._tail + text)[-_DONE_SENTINEL_TAIL:]
             self._chunks.append(text)
         except Exception:
             logger.debug("Streaming capture error", exc_info=True)
+
+    def abandoned(self) -> None:
+        """The consumer stopped reading: report only a stream ending on ``[DONE]``."""
+        if self._tail.rstrip().endswith(_DONE_SENTINEL):
+            self.send()
 
     def send(self) -> None:
         if self._sent or not self._chunks:
@@ -629,6 +643,7 @@ class _StreamCapture:
                     yield item
             finally:
                 self.active = False
+                self.abandoned()
             self.send()
 
         return capturing
@@ -649,6 +664,7 @@ class _StreamCapture:
                     yield item
             finally:
                 self.active = False
+                self.abandoned()
             self.send()
 
         return capturing

@@ -9,6 +9,7 @@ import os
 import shutil
 import stat
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -99,8 +100,8 @@ class TestConfirmDelivery:
     @pytest.mark.parametrize(
         "overrides, expected",
         [
-            ({"interaction_count": 0}, "expected 1 captured interaction, got 0"),
-            ({"interaction_count": 2}, "expected 1 captured interaction, got 2"),
+            ({"interaction_count": 0}, "expected 1 captured interaction(s), got 0"),
+            ({"interaction_count": 2}, "expected 1 captured interaction(s), got 2"),
             ({"delivery_failure_count": 1}, "delivery failed"),
             ({"dropped_count": 1}, "dropped or not delivered"),
             ({"pending_delivery": 1}, "dropped or not delivered"),
@@ -116,6 +117,94 @@ class TestConfirmDelivery:
         err = capsys.readouterr().err
         assert err.startswith("FAIL live_x")
         assert expected in err
+
+    def test_expected_interactions_is_the_exact_count(self, stats, capsys):
+        stats["value"] = _logging_stats(interaction_count=2)
+
+        _live_check.confirm_delivery("live_x", expected_interactions=2)
+        assert "PASS live_x" in capsys.readouterr().out
+
+        with pytest.raises(SystemExit):
+            _live_check.confirm_delivery("live_x", expected_interactions=3)
+        assert "expected 3 captured interaction(s), got 2" in capsys.readouterr().err
+
+
+SSE_BODY = (
+    'event: message_start\ndata: {"type": "message_start", "usage": {"n": 1}}\n\n'
+    "data: not json\n\n"
+    "data: [DONE]\n\n"
+    'data: ["a list"]\n\n'
+    'data: {"id": "x"}\n\n'
+)
+
+
+class TestSseEvents:
+    def test_parses_json_object_data_lines_only(self):
+        assert _live_check.sse_events(SSE_BODY) == [
+            {"type": "message_start", "usage": {"n": 1}},
+            {"id": "x"},
+        ]
+
+    @pytest.mark.parametrize("body", [None, b"data: {}", {"a": 1}, "[streaming]", ""])
+    def test_non_sse_bodies_yield_nothing(self, body):
+        assert _live_check.sse_events(body) == []
+
+
+def _streamed(**overrides):
+    res = {"is_streaming": True, "body_truncated": False, "body": SSE_BODY}
+    res.update(overrides)
+    return ({"url": "https://api.openai.com/v1/x"}, res, None)
+
+
+class TestSingleStreamedCapture:
+    def test_returns_the_response_of_one_complete_streamed_capture(self):
+        assert (
+            _live_check.single_streamed_capture("live_x", [_streamed()])["body"]
+            == SSE_BODY
+        )
+
+    @pytest.mark.parametrize(
+        "records, expected",
+        [
+            ([], "expected 1 captured streamed response, got 0"),
+            ([_streamed(), _streamed()], "got 2"),
+            ([_streamed(is_streaming=False)], "not marked is_streaming"),
+            ([_streamed(body="[streaming]")], "streamed body was not captured"),
+            ([_streamed(body="")], "streamed body was not captured"),
+            ([_streamed(body=None)], "streamed body was not captured"),
+            ([_streamed(body_truncated=True)], "truncated"),
+        ],
+    )
+    def test_fails_when_the_streamed_body_is_not_fully_captured(
+        self, capsys, records, expected
+    ):
+        with pytest.raises(SystemExit) as exc:
+            _live_check.single_streamed_capture("live_x", records)
+
+        assert exc.value.code == 1
+        assert expected in capsys.readouterr().err
+
+    def test_errored_captures_are_not_counted(self):
+        errored = ({"url": "u"}, None, RuntimeError("boom"))
+        assert _live_check.single_streamed_capture("live_x", [errored, _streamed()])
+
+
+class TestStreamingCaptureExample:
+    def test_passes_against_the_installed_interceptor(self):
+        """The offline example is the release check for sync stream token metadata."""
+        script = REPO_ROOT / "examples" / "streaming_capture.py"
+        if not script.exists():
+            pytest.skip("examples/ not present")
+        result = subprocess.run(
+            [sys.executable, str(script)],
+            capture_output=True,
+            text=True,
+            timeout=60,
+            cwd=REPO_ROOT / "examples",
+            env={**os.environ, "PYTHONPATH": str(REPO_ROOT / "src")},
+        )
+        assert result.returncode == 0, result.stderr
+        assert "PASS streaming_capture" in result.stdout
 
 
 # scripts/ isn't in the sdist, so suites run from an sdist can't exercise the runner.

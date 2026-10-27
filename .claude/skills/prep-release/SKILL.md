@@ -205,7 +205,9 @@ the same "hand it to a human" rule `/loop-review` uses for stuck findings.
 
 2. If step 1 is green, run the example scripts:
    `uv run python examples/basic_usage.py`,
-   `uv run python examples/auto_monitor_example.py`, and
+   `uv run python examples/auto_monitor_example.py`,
+   `uv run python examples/streaming_capture.py` (offline; exits 1 unless sync
+   streams are captured with message id and token counts), and
    `uv run python examples/dramatiq_pydantic_ai.py`. Unlike a
    clean-skip-on-missing-key pattern (the live scripts below are the
    exception), these scripts always run to completion — they fall back

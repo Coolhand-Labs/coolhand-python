@@ -215,6 +215,9 @@ class TestSanitizeRedTeamGaps:
             "refresh_token",
             "id_token",
             "password",
+            "X_API_KEY",
+            "auth_key",
+            "Auth-Key",
         ],
     )
     def test_redacts_additional_query_params(self, param):

@@ -6,14 +6,27 @@ Run any example from the repo root with `uv run python examples/<name>.py`.
 |---------|---------------|
 | `basic_usage.py` | Manual initialization, `log_interaction`, feedback, shutdown (placeholder key) |
 | `auto_monitor_example.py` | Zero-config monitoring (simulated provider calls) |
+| `streaming_capture.py` | Offline pass/fail check: sync SSE streams are captured with their message id and token counts (no keys) |
 | `dramatiq_pydantic_ai.py` | Dramatiq + pydantic-ai, see [docs/dramatiq.md](../docs/dramatiq.md) |
 | `band-guesser/` | FastAPI app, see its own README |
 | `live_openai.py`, `live_anthropic.py` | Live smoke tests, below |
 
+## Streaming capture check
+
+`streaming_capture.py` needs no keys or network. It streams Anthropic- and OpenAI-shaped SSE bodies through a sync
+`httpx` client with the real interceptor patched in (reading via `iter_bytes` and `iter_lines`, as the SDKs do) and
+exits 1 unless the captured record has `is_streaming: true` and a body with the message id and token counts.
+
+```bash
+uv run python examples/streaming_capture.py
+```
+
 ## Live smoke tests
 
-`live_openai.py` and `live_anthropic.py` make **one real provider call** through the interceptor, then wait for
-delivery (`coolhand.shutdown()`) and check that the log reached Coolhand with no drops or delivery failures. Unlike
+`live_openai.py` and `live_anthropic.py` make **two real provider calls** through the interceptor, one plain and one
+sync streaming, then wait for delivery (`coolhand.shutdown()`) and check that both logs reached Coolhand with no drops
+or delivery failures. For the streamed call they also check that the captured SSE body carries the message id and the
+same token counts the SDK reported, which fails if sync streams are logged as the `"[streaming]"` placeholder. Unlike
 the other examples they are pass/fail checks, so a release can be validated against real keys.
 
 ```bash

@@ -1,5 +1,6 @@
 """httpx interceptor for capturing API calls."""
 
+import codecs
 import contextvars
 import functools
 import ipaddress
@@ -553,20 +554,22 @@ def _unwrap(func: Callable) -> Callable:
     return getattr(func, "__dict__", {}).get("_coolhand_original", func)
 
 
-def _decode_bytes(chunk: bytes) -> str:
-    return chunk.decode("utf-8", errors="replace")
-
-
 # httpx implements lines on text on bytes on raw, each looked up on the response
 # instance (sync as ``iter_*``, async as ``aiter_*``). Every one is wrapped, since
 # a consumer may call any of them. The converter turns one item into the text
-# appended to the captured body.
-_STREAM_METHODS: tuple[tuple[str, Callable[[Any], str]], ...] = (
-    ("bytes", _decode_bytes),
+# appended to the captured body; ``None`` means a bytes layer, decoded by the
+# capture's incremental decoder so a character split across chunks survives.
+_STREAM_METHODS: tuple[tuple[str, Callable[[Any], str] | None], ...] = (
+    ("bytes", None),
     ("lines", lambda line: line + "\n"),
     ("text", str),
-    ("raw", _decode_bytes),
+    ("raw", None),
 )
+
+
+# The terminator OpenAI-compatible SSE streams end with.
+_DONE_SENTINEL = "data: [DONE]"
+_DONE_SENTINEL_TAIL = 64
 
 
 class _StreamCapture:
@@ -576,8 +579,10 @@ class _StreamCapture:
     outermost iterator layer that is running (``active``), or every chunk would be
     recorded once per layer. The record is sent when the stream is exhausted;
     abandoning it half way (``break``, ``close()``, a transport error) sends
-    nothing, because a cut-off body is indistinguishable from a complete one.
-    Nothing here may raise into the host's stream.
+    nothing, because a cut-off body is indistinguishable from a complete one. The one
+    exception is a stream abandoned right after its own ``data: [DONE]`` terminator:
+    the OpenAI SDK stops reading there without exhausting the iterator, and the body
+    is complete by protocol. Nothing here may raise into the host's stream.
     """
 
     def __init__(self, response: Any, req_data: RequestData, start: float) -> None:
@@ -585,20 +590,30 @@ class _StreamCapture:
         self._req_data = req_data
         self._start = start
         self._chunks = _BoundedChunks(_max_body_bytes)
+        self._decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")
+        self._tail = ""  # last captured text, kept even once the body is truncated
         self._sent = False
         self.active = False
 
-    def add(self, text: str) -> None:
+    def add(self, item: Any, to_text: Callable[[Any], str] | None = None) -> None:
         try:
+            text = to_text(item) if to_text else self._decoder.decode(item)
+            self._tail = (self._tail + text)[-_DONE_SENTINEL_TAIL:]
             self._chunks.append(text)
         except Exception:
             logger.debug("Streaming capture error", exc_info=True)
+
+    def abandoned(self) -> None:
+        """The consumer stopped reading: report only a stream ending on ``[DONE]``."""
+        if self._tail.rstrip().endswith(_DONE_SENTINEL):
+            self.send()
 
     def send(self) -> None:
         if self._sent or not self._chunks:
             return
         self._sent = True
         try:
+            self._chunks.append(self._decoder.decode(b"", final=True))
             res_data: ResponseData = {
                 "status_code": self._response.status_code,
                 "headers": dict(self._response.headers),
@@ -613,7 +628,9 @@ class _StreamCapture:
         except Exception:
             logger.debug("Handler error in streaming", exc_info=True)
 
-    def wrap_sync(self, orig: Callable, to_text: Callable[[Any], str]) -> Callable:
+    def wrap_sync(
+        self, orig: Callable, to_text: Callable[[Any], str] | None
+    ) -> Callable:
         def capturing(*args: Any, **kwargs: Any) -> Iterator[Any]:
             if self.active:
                 yield from orig(*args, **kwargs)
@@ -622,15 +639,18 @@ class _StreamCapture:
             try:
                 for item in orig(*args, **kwargs):
                     if item:
-                        self.add(to_text(item))
+                        self.add(item, to_text)
                     yield item
             finally:
                 self.active = False
+                self.abandoned()
             self.send()
 
         return capturing
 
-    def wrap_async(self, orig: Callable, to_text: Callable[[Any], str]) -> Callable:
+    def wrap_async(
+        self, orig: Callable, to_text: Callable[[Any], str] | None
+    ) -> Callable:
         async def capturing(*args: Any, **kwargs: Any) -> AsyncIterator[Any]:
             if self.active:
                 async for item in orig(*args, **kwargs):
@@ -640,10 +660,11 @@ class _StreamCapture:
             try:
                 async for item in orig(*args, **kwargs):
                     if item:
-                        self.add(to_text(item))
+                        self.add(item, to_text)
                     yield item
             finally:
                 self.active = False
+                self.abandoned()
             self.send()
 
         return capturing
@@ -698,7 +719,7 @@ def _make_patched_send(get_original: Callable[[], Callable]) -> Callable:
                 if isinstance(content, bytes):
                     # send(stream=False) already read the whole body, so there is
                     # nothing left to iterate: report it now.
-                    capture.add(_decode_bytes(content))
+                    capture.add(content)
                     capture.send()
                 else:
                     capture.install("iter_", capture.wrap_sync)

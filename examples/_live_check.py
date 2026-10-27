@@ -6,9 +6,10 @@ Contract, relied on by scripts/live-examples.sh:
   - exit 1 (message on stderr) when the call or the delivery failed
 """
 
+import json
 import os
 import sys
-from typing import NoReturn
+from typing import Any, NoReturn
 
 # Distinct from 0 and 1 (and the same code automake uses for "skipped") so the runner
 # classifies SKIP from the exit status, never by grepping log text.
@@ -45,7 +46,69 @@ def fail(name: str, message: str) -> NoReturn:
     sys.exit(1)
 
 
-def confirm_delivery(name: str) -> None:
+def capture_responses() -> list[tuple[Any, Any, Any]]:
+    """Record every (request, response, error) the interceptor reports, from now on.
+
+    The records are the raw capture, before redaction and delivery, so a check on them
+    proves what the interceptor saw. The previously installed handler (Coolhand's
+    delivery) still runs, so delivery is unaffected.
+    """
+    from coolhand import httpx_interceptor
+
+    records: list[tuple[Any, Any, Any]] = []
+    previous = httpx_interceptor._handler
+
+    def tap(request: Any, response: Any, error: Any) -> None:
+        records.append((request, response, error))
+        if previous:
+            previous(request, response, error)
+
+    httpx_interceptor.set_handler(tap)
+    return records
+
+
+def sse_events(body: Any) -> list[dict]:
+    """The JSON payloads of an SSE body's ``data:`` lines (``[DONE]`` and non-JSON skipped)."""
+    if not isinstance(body, str):
+        return []
+    events = []
+    for line in body.splitlines():
+        if not line.startswith("data:"):
+            continue
+        try:
+            event = json.loads(line[5:].strip())
+        except ValueError:
+            continue
+        if isinstance(event, dict):
+            events.append(event)
+    return events
+
+
+def single_streamed_capture(name: str, records: list) -> dict:
+    """Fail unless exactly one complete streamed response was captured; return its response.
+
+    This is the sync-streaming regression check: a sync stream used to be logged with
+    ``is_streaming: false`` and the placeholder body ``"[streaming]"``, so the server
+    could extract no tokens, output or message id from it.
+    """
+    streamed = [res for _, res, err in records if err is None and res]
+    if len(streamed) != 1:
+        fail(name, f"expected 1 captured streamed response, got {len(streamed)}")
+    res = streamed[0]
+    if res.get("is_streaming") is not True:
+        fail(
+            name,
+            f"captured response not marked is_streaming: {res.get('is_streaming')!r}",
+        )
+    if res.get("body_truncated"):
+        fail(name, "captured streamed body was truncated")
+    body = res.get("body")
+    if not isinstance(body, str) or body.strip() == "[streaming]" or not body.strip():
+        fail(name, f"streamed body was not captured: {str(body)[:80]!r}")
+    return res
+
+
+def confirm_delivery(name: str, expected_interactions: int = 1) -> None:
     """Wait for the delivery barrier, then fail unless the log reached Coolhand.
 
     Known limit: shutdown() waits a bounded time (5s), so against a very slow backend a
@@ -62,12 +125,13 @@ def confirm_delivery(name: str) -> None:
         fail(name, f"Coolhand is not initialized: {status}")
     logging_stats = status["logging"]
 
-    # Exactly one: these scripts make a single call, so 0 means it wasn't captured and
-    # more than 1 means it was double-logged.
-    if logging_stats["interaction_count"] != 1:
+    # Exactly the calls made: fewer means one wasn't captured, more means it was
+    # double-logged.
+    if logging_stats["interaction_count"] != expected_interactions:
         fail(
             name,
-            f"expected 1 captured interaction, got {logging_stats['interaction_count']}",
+            f"expected {expected_interactions} captured interaction(s), "
+            f"got {logging_stats['interaction_count']}",
         )
     if logging_stats["delivery_failure_count"]:
         fail(name, f"Coolhand delivery failed: {logging_stats}")

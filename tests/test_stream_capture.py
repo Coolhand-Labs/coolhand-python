@@ -413,3 +413,20 @@ def test_sync_capture_bug_does_not_break_the_stream(captured, module_name, monke
 
     assert body == ANTHROPIC_SSE
     assert captured == []
+
+
+@pytest.mark.parametrize("module_name", CLIENTS)
+@pytest.mark.parametrize("method", ["iter_bytes", "iter_raw"])
+def test_sync_multibyte_character_split_across_chunks_is_captured_intact(
+    captured, module_name, method
+):
+    body = "data: café ☕ 日本語\n\n".encode()
+    chunks = [body[i : i + 1] for i in range(len(body))]
+    client, _ = _sync_client(module_name, chunks)
+    with client:
+        with client.stream("POST", LLM_URL, json={}) as response:
+            for _ in getattr(response, method)():
+                pass
+
+    assert len(captured) == 1
+    assert captured[0][1]["body"] == body.decode()

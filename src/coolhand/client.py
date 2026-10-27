@@ -124,7 +124,10 @@ SENSITIVE_QUERY_PARAMS = {
     "x-goog-signature",
     # Credential spellings the header list already treats as sensitive.
     "x-api-key",
+    "x_api_key",
     "auth",
+    "auth_key",
+    "auth-key",
     "auth_token",
     "auth-token",
     "access-token",

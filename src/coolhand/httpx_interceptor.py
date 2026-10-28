@@ -700,6 +700,7 @@ def _make_patched_send(get_original: Callable[[], Callable]) -> Callable:
         _record_interception()
         start = time.time()
         req_data: RequestData | None = None
+        response_received = False
 
         try:
             req_data = {
@@ -711,6 +712,7 @@ def _make_patched_send(get_original: Callable[[], Callable]) -> Callable:
             }
             attach_snapshot(req_data)
             response = get_original()(self, request, **kwargs)
+            response_received = True
             duration = time.time() - start
 
             if _is_streaming_content_type(response.headers.get("content-type", "")):
@@ -740,6 +742,9 @@ def _make_patched_send(get_original: Callable[[], Callable]) -> Callable:
             return response
 
         except Exception as e:
+            if response_received:
+                logger.debug("Response capture error", exc_info=True)
+                return response
             if req_data is not None:
                 try:
                     _handler(req_data, None, str(e))
@@ -769,6 +774,7 @@ def _make_patched_async_send(get_original: Callable[[], Callable]) -> Callable:
         _record_interception()
         start = time.time()
         req_data: RequestData | None = None
+        response_received = False
 
         try:
             req_data = {
@@ -780,6 +786,7 @@ def _make_patched_async_send(get_original: Callable[[], Callable]) -> Callable:
             }
             attach_snapshot(req_data)
             response = await get_original()(self, request, **kwargs)
+            response_received = True
             duration = time.time() - start
 
             # Check for streaming response
@@ -808,6 +815,9 @@ def _make_patched_async_send(get_original: Callable[[], Callable]) -> Callable:
             return response
 
         except Exception as e:
+            if response_received:
+                logger.debug("Response capture error", exc_info=True)
+                return response
             if req_data is not None:
                 try:
                     _handler(req_data, None, str(e))
@@ -901,6 +911,7 @@ def _patch_locked() -> bool:
             _record_interception()
             start = time.time()
             req_data: RequestData | None = None
+            response_received = False
 
             try:
                 body: str | bytes | None = request.body
@@ -916,6 +927,7 @@ def _patch_locked() -> bool:
                 }
                 attach_snapshot(req_data)
                 response = send_original()(self, request, **kwargs)
+                response_received = True
                 duration = time.time() - start
 
                 res_body: Any = None
@@ -953,6 +965,9 @@ def _patch_locked() -> bool:
                 return response
 
             except Exception as e:
+                if response_received:
+                    logger.debug("Response capture error", exc_info=True)
+                    return response
                 if req_data is not None:
                     try:
                         _handler(req_data, None, str(e))

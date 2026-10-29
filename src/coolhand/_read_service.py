@@ -1,8 +1,8 @@
 """Shared plumbing for the read-only REST services.
 
-`TemplateService`, `WorkloadService` and `LogService` all GET a JSON resource with the
-client's **private** API key (`HelpCenterDocs` alone needs none), raise
-`CoolhandAPIError` on any failure, and read pagination off response headers. That
+`TemplateService`, `StepTemplateService`, `WorkloadService` and `LogService` all GET a
+JSON resource with the client's **private** API key (`HelpCenterDocs` alone needs none),
+raise `CoolhandAPIError` on any failure, and read pagination off response headers. That
 machinery lives here once.
 """
 

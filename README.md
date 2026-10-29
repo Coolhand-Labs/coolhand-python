@@ -250,6 +250,19 @@ These are read methods, so they **raise** `CoolhandAPIError` (carrying the HTTP 
 
 For the full filter reference, pagination, and error handling, see [Reading Templates](./docs/templates.md).
 
+## Reading Step Templates
+
+`list_step_templates` and `get_step_template` read the skills and other recurring steps Coolhand detects in your captured agent sessions. They need your **private** API key; `include_metrics` adds run, turn, tool and efficiency figures:
+
+```python
+result = ch.list_step_templates(step_type='prompt_step', include_metrics=True)
+
+step_template = ch.get_step_template(result['step_templates'][0]['id'])
+step_template['metrics']['notes']
+```
+
+`get_log(..., include_turn_metrics=True)` adds the per-turn breakdown of a captured agent session as `turn_metrics`. Errors raise `CoolhandAPIError` with the HTTP status on `.status`. See [Reading Step Templates](./docs/step-templates.md) for the parameters, `metrics` fields and errors.
+
 ## Declaring Workloads and Templates
 
 If you already know which workload and template an LLM call belongs to, declare it with `with_context` and the server skips template matching for those calls:
@@ -361,6 +374,7 @@ See [Verifying Interception in Your Tests](./docs/testing.md) for what it catche
 - [Dramatiq + pydantic-ai](./docs/dramatiq.md) — task queue integration guide, known gaps, workarounds
 - [Linking Feedback to an Optimization](./docs/feedback-links.md) — link one or many feedbacks to an optimization as evidence, using the private API key
 - [Reading Templates](./docs/templates.md) — search LLM request templates and fetch a single one, prompt patterns included, using the private API key
+- [Reading Step Templates](./docs/step-templates.md) — list the skills and recurring steps detected in captured agent sessions, with run and efficiency metrics, using the private API key
 - [Declared Workloads and Templates](./docs/declared-workloads.md) — declare the workload/template of captured calls with `with_context`, and create or rename them with `upsert` (private API key)
 - [Examples and live smoke tests](./examples/README.md) — runnable examples, plus `make live-examples` to validate OpenAI and Anthropic calls against real keys
 - [Reading Workloads](./docs/workloads.md) — list workloads with cost and performance metrics over a rolling or explicit window

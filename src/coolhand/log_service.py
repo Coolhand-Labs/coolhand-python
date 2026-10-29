@@ -190,6 +190,7 @@ class LogService(ReadService):
         max_chars: int | None = None,
         search_query: str | None = None,
         include_thinking: bool | None = None,
+        include_turn_metrics: bool | None = None,
     ) -> LlmRequestLogContent:
         """Get one log's content and cost by hashid.
 
@@ -201,6 +202,10 @@ class LogService(ReadService):
             search_query: Return up to 5 matching snippets per field instead of the
                 content. Mutually exclusive in practice with `section` / `max_chars`.
             include_thinking: Add `thinking_response`, an array of thinking blocks.
+            include_turn_metrics: Add `turn_metrics`, the per-turn breakdown of a
+                captured agent session: one entry per user message, with no content, so
+                it is still returned after the content scrub. `None` for a log that is
+                not a captured session. The key is omitted entirely unless requested.
 
         Returns:
             The log, with `cost` and `cost_breakdown` (both `None` when it cannot be
@@ -228,6 +233,7 @@ class LogService(ReadService):
             "max_chars": max_chars,
             "search_query": search_query,
             "include_thinking": include_thinking,
+            "include_turn_metrics": include_turn_metrics,
         }
         url = _with_query(
             f"{self.config['base_url']}{LOGS_ENDPOINT}/{encoded_id}", filters

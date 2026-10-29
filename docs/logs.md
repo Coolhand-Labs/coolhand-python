@@ -144,12 +144,20 @@ unset for frequent polling.
 | `max_chars` | `int` | Maximum characters per content field. Non-positive is a `422` |
 | `search_query` | `str` | Return up to 5 matching snippets per field instead of the content. Must be non-blank |
 | `include_thinking` | `bool` | Add `thinking_response`, an array of thinking blocks |
+| `include_turn_metrics` | `bool` | Add `turn_metrics`, the per-turn breakdown of a captured agent session (default false). See below |
 
 The result carries the fields above plus `url`, `system_prompt`, `user_prompt`,
 `output`, `cost` and `cost_breakdown`. The breakdown is `None` when the log cannot be
 priced; otherwise it holds `total_cost`, `input_cost`, `output_cost`,
 `cached_input_cost`, `cache_creation_input_cost` and `reasoning_output_cost`. With
 `search_query`, `matches` and `search_query` come back instead of the content.
+
+`turn_metrics` has one entry per user message of a captured agent session:
+`{index, human, started_at, ended_at, assistant_requests, tool_calls, input_tokens,
+output_tokens, cache_read_tokens, cache_creation_tokens}` (the timestamps and token counts
+are `None` when unknown). It is `None` for a log that is not a captured session, and the
+key is omitted entirely unless you ask for it. It holds no content, so it is still
+returned after the content scrub.
 
 `get_log` raises `ValueError` before any request if `log_id` is blank, not a string, or
 a relative path segment (`.` / `..`), or if `search_query` is given but blank (the server

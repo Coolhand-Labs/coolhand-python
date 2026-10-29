@@ -406,6 +406,24 @@ class SearchLogsResponse(TypedDict):
     pagination: LogPagination
 
 
+class LlmRequestLogTurnMetric(TypedDict):
+    """One user message of a captured agent session and the work done in response.
+
+    Carries no content, so it survives the content scrub.
+    """
+
+    index: int
+    human: bool
+    started_at: str | None
+    ended_at: str | None
+    assistant_requests: int
+    tool_calls: int
+    input_tokens: int | None
+    output_tokens: int | None
+    cache_read_tokens: int | None
+    cache_creation_tokens: int | None
+
+
 class LlmRequestLogContent(TypedDict, total=False):
     """A log from `GET /api/v2/llm_request_logs/{id}`.
 
@@ -441,3 +459,98 @@ class LlmRequestLogContent(TypedDict, total=False):
     matches: dict[str, list[str]]  # Keys: system_prompt, user_prompt, output
     # Only with `include_thinking=True`; the server returns an array of blocks.
     thinking_response: list[str] | None
+    # Only with `include_turn_metrics=True` (the key is omitted otherwise); `None` when
+    # the log is not a captured agent session.
+    turn_metrics: NotRequired[list[LlmRequestLogTurnMetric] | None]
+
+
+# The `step_type` values `GET /api/v2/step_templates` accepts as a filter; anything else
+# is a 422.
+StepTemplateType = Literal["prompt_step", "tool_step"]
+
+
+class StepTemplateToolStat(TypedDict):
+    """Share of runs using one tool, and its average calls per run."""
+
+    name: str
+    pct_of_runs: float
+    avg_per_run: float
+
+
+class StepTemplateTurnStats(TypedDict):
+    """User turns per run."""
+
+    avg: float
+    median: float
+    high: int
+    single_turn_pct: float | None
+
+
+class StepTemplateEfficiencyCohort(TypedDict):
+    """One cohort of runs, measured from the invocation onward.
+
+    The token figures are `None` (and `tokens_available` false) when no run in the
+    cohort has token data.
+    """
+
+    runs: int
+    avg_turns_after: float
+    avg_tool_calls: float
+    avg_requests: float
+    token_runs: int
+    tokens_available: bool
+    median_tokens: int | None
+    p90_tokens: int | None
+    tokens_per_tool_call: int | None
+
+
+class StepTemplateEfficiency(TypedDict):
+    """Runs split into `interactive` (the user kept typing) and `automated` cohorts."""
+
+    # Each cohort is `None` when it has no runs.
+    interactive: StepTemplateEfficiencyCohort | None
+    automated: StepTemplateEfficiencyCohort | None
+    all: StepTemplateEfficiencyCohort | None
+    # Runs with no per-turn snapshot; they are in none of the cohorts.
+    unavailable_runs: int
+
+
+class StepTemplateMetrics(TypedDict):
+    """The `metrics` object on a step template.
+
+    Says where data is missing rather than leaving gaps to be guessed at: `notes`
+    explains, in plain sentences, each gap that applies.
+    """
+
+    total_runs: int
+    tool_stats: list[StepTemplateToolStat] | None  # `None`: nothing to show
+    turn_stats: StepTemplateTurnStats | None  # `None`: nothing to show
+    # `None` for tool steps and for step templates with no recorded runs.
+    efficiency: StepTemplateEfficiency | None
+    notes: list[str]
+
+
+class StepTemplate(TypedDict):
+    """A step template from `GET /api/v2/step_templates` and `.../{id}`."""
+
+    id: int  # The integer primary key, unlike the hashids on logs and templates
+    name: str
+    # "prompt_step" matches a user prompt such as a slash command; "tool_step" matches
+    # tool usage.
+    step_type: StepTemplateType
+    status: str
+    user_turn_pattern: str | None
+    created_at: str  # ISO-8601 UTC
+    updated_at: str  # ISO-8601 UTC
+    sessions_count: int  # Distinct sessions it appeared in
+    occurrences_count: int
+    last_seen_at: str | None  # ISO-8601 UTC
+    # Only with `include_metrics=True` on the list; present by default on the show.
+    metrics: NotRequired[StepTemplateMetrics]
+
+
+class ListStepTemplatesResponse(TypedDict):
+    """Result of `StepTemplateService.list_step_templates`."""
+
+    step_templates: list[StepTemplate]
+    pagination: Pagination

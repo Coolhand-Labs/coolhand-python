@@ -24,6 +24,7 @@ from .feedback_service import (
 from .help_center_docs import HelpCenterDocs
 from .httpx_interceptor import DEFAULT_EXCLUDE_API_PATTERNS, DEFAULT_INTERCEPT_ADDRESSES
 from .log_service import LogService
+from .step_template_service import StepTemplateService
 from .template_service import CoolhandAPIError, TemplateService, get_template_service
 from .types import (
     BulkLinkFeedbackResult,
@@ -35,11 +36,13 @@ from .types import (
     HelpArticleSummary,
     HelpArticleTocEntry,
     HelpCategory,
+    ListStepTemplatesResponse,
     LlmMetrics,
     LlmRequestLogContent,
     LlmRequestLogCostBreakdown,
     LlmRequestLogOrder,
     LlmRequestLogSummary,
+    LlmRequestLogTurnMetric,
     LlmRequestTemplateDetail,
     LlmRequestTemplateStatus,
     LlmRequestTemplateSummary,
@@ -52,6 +55,13 @@ from .types import (
     SearchLogsResponse,
     SearchTemplatesResponse,
     SearchWorkloadsResponse,
+    StepTemplate,
+    StepTemplateEfficiency,
+    StepTemplateEfficiencyCohort,
+    StepTemplateMetrics,
+    StepTemplateToolStat,
+    StepTemplateTurnStats,
+    StepTemplateType,
     WorkloadSummary,
     WorkloadTemplate,
 )
@@ -73,6 +83,7 @@ class Coolhand(CoolhandClient):
         # Initialize feedback and read services with same config
         self._feedback_service = FeedbackService(self.config)
         self._template_service = TemplateService(self.config)
+        self._step_template_service = StepTemplateService(self.config)
         self._workload_service = WorkloadService(self.config)
         self._feedback_link_service = FeedbackLinkService(self.config)
         self._log_service = LogService(self.config)
@@ -243,6 +254,70 @@ class Coolhand(CoolhandClient):
         )
 
     @property
+    def step_template_service(self) -> StepTemplateService:
+        """Get the step template service instance."""
+        return self._step_template_service
+
+    def list_step_templates(
+        self,
+        *,
+        search: str | None = None,
+        step_type: StepTemplateType | None = None,
+        include_metrics: bool | None = None,
+        page: int | None = None,
+        per: int | None = None,
+    ) -> ListStepTemplatesResponse:
+        """List the skills and recurring steps detected in your captured agent sessions.
+
+        Requires the **private** API key. `include_metrics=True` adds a `metrics` object
+        per step template and makes the server cap `per` at 25.
+
+        See `StepTemplateService.list_step_templates` for the full filter and error
+        reference.
+
+        Returns:
+            A dict with `step_templates` (newest first) and `pagination`, the latter
+            read from the response headers.
+
+        Raises:
+            CoolhandAPIError: On a non-2xx response, with the HTTP status on `status`
+                (`422` for an unknown `step_type`). A `504` is expected and retryable
+                rather than a bug.
+        """
+        return self._step_template_service.list_step_templates(
+            search=search,
+            step_type=step_type,
+            include_metrics=include_metrics,
+            page=page,
+            per=per,
+        )
+
+    def get_step_template(
+        self,
+        step_template_id: int,
+        *,
+        include_metrics: bool | None = None,
+    ) -> StepTemplate:
+        """Get one step template by its integer id.
+
+        Requires the **private** API key. `metrics` is returned by default, unlike on
+        the list; pass `include_metrics=False` to skip the metrics queries.
+
+        Args:
+            step_template_id: The integer `id` from `list_step_templates`.
+            include_metrics: Pass `False` to omit `metrics` (server default is true).
+
+        Raises:
+            ValueError: If `step_template_id` is not a positive integer.
+            CoolhandAPIError: On a non-2xx response, with the HTTP status on `status`
+                (`404` for an unknown id, a draft or failed step template, or one
+                belonging to another client).
+        """
+        return self._step_template_service.get_step_template(
+            step_template_id, include_metrics=include_metrics
+        )
+
+    @property
     def workload_service(self) -> WorkloadService:
         """Get the workload service instance."""
         return self._workload_service
@@ -358,10 +433,13 @@ class Coolhand(CoolhandClient):
         max_chars: int | None = None,
         search_query: str | None = None,
         include_thinking: bool | None = None,
+        include_turn_metrics: bool | None = None,
     ) -> LlmRequestLogContent:
         """Get one log's content, `cost` and `cost_breakdown` by hashid.
 
-        Requires the **private** API key.
+        Requires the **private** API key. `include_turn_metrics=True` adds
+        `turn_metrics`, the per-turn breakdown of a captured agent session (`None` for
+        any other log).
 
         Raises:
             ValueError: If `log_id` is blank, not a string, or a relative path segment,
@@ -375,6 +453,7 @@ class Coolhand(CoolhandClient):
             max_chars=max_chars,
             search_query=search_query,
             include_thinking=include_thinking,
+            include_turn_metrics=include_turn_metrics,
         )
 
     @property
@@ -555,9 +634,11 @@ __all__ = [
     "LlmRequestLogCostBreakdown",
     "LlmRequestLogOrder",
     "LlmRequestLogSummary",
+    "LlmRequestLogTurnMetric",
     "LlmRequestTemplateDetail",
     "LlmRequestTemplateStatus",
     "LlmRequestTemplateSummary",
+    "ListStepTemplatesResponse",
     "LogPagination",
     "LogService",
     "Pagination",
@@ -566,6 +647,14 @@ __all__ = [
     "SearchLogsResponse",
     "SearchTemplatesResponse",
     "SearchWorkloadsResponse",
+    "StepTemplate",
+    "StepTemplateEfficiency",
+    "StepTemplateEfficiencyCohort",
+    "StepTemplateMetrics",
+    "StepTemplateService",
+    "StepTemplateToolStat",
+    "StepTemplateTurnStats",
+    "StepTemplateType",
     "TemplateService",
     "WorkloadService",
     "WorkloadSummary",

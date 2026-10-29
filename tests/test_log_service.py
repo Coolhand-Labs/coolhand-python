@@ -145,6 +145,7 @@ ALL_GET_ARGS = {
     "max_chars": 2000,
     "search_query": "timeout",
     "include_thinking": False,
+    "include_turn_metrics": True,
 }
 
 ALL_GET_QUERY = {
@@ -152,6 +153,7 @@ ALL_GET_QUERY = {
     "max_chars": ["2000"],
     "search_query": ["timeout"],
     "include_thinking": ["false"],
+    "include_turn_metrics": ["true"],
 }
 
 # The endpoint only sends X-Page / X-Per-Page unless include_total=true.
@@ -313,6 +315,22 @@ class TestGetLog:
         service.get_log("log123abc456", search_query="timeout")
 
         assert query_of(service._opener.request) == {"search_query": ["timeout"]}
+
+    def test_include_turn_metrics_false_is_sent_explicitly(self):
+        service = build_service(LOG_CONTENT)
+
+        service.get_log("log123abc456", include_turn_metrics=False)
+
+        assert query_of(service._opener.request) == {"include_turn_metrics": ["false"]}
+
+    def test_turn_metrics_may_be_null_or_absent(self):
+        absent = build_service(LOG_CONTENT).get_log("log123abc456")
+        null = build_service({**LOG_CONTENT, "turn_metrics": None}).get_log(
+            "log123abc456", include_turn_metrics=True
+        )
+
+        assert "turn_metrics" not in absent
+        assert null["turn_metrics"] is None
 
     def test_returns_cost_and_the_breakdown(self):
         service = build_service(LOG_CONTENT)

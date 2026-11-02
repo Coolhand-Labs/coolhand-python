@@ -7,7 +7,7 @@ coverage==7.16.2
 
 # Code quality
 ruff>=0.6.0
-mypy==2.4.0
+mypy==2.4.1
 
 # Type checking
 types-requests==2.33.0.20261006

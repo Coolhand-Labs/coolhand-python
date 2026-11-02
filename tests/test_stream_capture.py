@@ -12,6 +12,7 @@ captured data is reported once with ``stream_incomplete: True``.
 import asyncio
 import importlib.util
 import json
+import sys
 import threading
 import time
 from types import SimpleNamespace
@@ -743,20 +744,29 @@ def test_a_later_outcome_does_not_send_a_second_record_or_change_the_first(captu
 
 
 def test_concurrent_outcomes_send_exactly_one_record(captured):
-    capture = _bare_capture()
-    barrier = threading.Barrier(16)
+    interval = sys.getswitchinterval()
+    sys.setswitchinterval(1e-6)
+    try:
+        for _ in range(100):
+            captured.clear()
+            capture = _bare_capture()
+            barrier = threading.Barrier(16)
 
-    def race(incomplete):
-        barrier.wait()
-        capture.send(incomplete=incomplete)
+            def race(incomplete, capture=capture, barrier=barrier):
+                barrier.wait()
+                capture.send(incomplete=incomplete)
 
-    threads = [threading.Thread(target=race, args=(n % 2 == 0,)) for n in range(16)]
-    for thread in threads:
-        thread.start()
-    for thread in threads:
-        thread.join()
+            threads = [
+                threading.Thread(target=race, args=(n % 2 == 0,)) for n in range(16)
+            ]
+            for thread in threads:
+                thread.start()
+            for thread in threads:
+                thread.join()
 
-    assert len(captured) == 1
+            assert len(captured) == 1
+    finally:
+        sys.setswitchinterval(interval)
 
 
 @pytest.mark.parametrize("module_name", CLIENTS)

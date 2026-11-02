@@ -684,6 +684,19 @@ class _StreamCapture:
                     self._response, name, wrap(getattr(self._response, name), to_text)
                 )
 
+    def start(self, prefix: str, wrap: Callable) -> None:
+        """Begin capturing a streaming response, or report it now if already read.
+
+        ``send(stream=False)`` reads the whole body inside ``send()``, so there is
+        nothing left to iterate and iterating it later is not an abandon.
+        """
+        content = getattr(self._response, "_content", None)
+        if isinstance(content, bytes):
+            self.add(content)
+            self.send()
+        else:
+            self.install(prefix, wrap)
+
 
 def _make_patched_send(get_original: Callable[[], Callable]) -> Callable:
     """Build the sync ``send`` wrapper; ``get_original`` returns the real ``send``."""
@@ -717,14 +730,7 @@ def _make_patched_send(get_original: Callable[[], Callable]) -> Callable:
 
             if _is_streaming_content_type(response.headers.get("content-type", "")):
                 capture = _StreamCapture(response, req_data, start)
-                content = getattr(response, "_content", None)
-                if isinstance(content, bytes):
-                    # send(stream=False) already read the whole body, so there is
-                    # nothing left to iterate: report it now.
-                    capture.add(content)
-                    capture.send()
-                else:
-                    capture.install("iter_", capture.wrap_sync)
+                capture.start("iter_", capture.wrap_sync)
                 return response
 
             res_data: ResponseData = {
@@ -791,14 +797,7 @@ def _make_patched_async_send(get_original: Callable[[], Callable]) -> Callable:
             if is_streaming:
                 # Wrap streaming methods to capture content
                 capture = _StreamCapture(response, req_data, start)
-                content = getattr(response, "_content", None)
-                if isinstance(content, bytes):
-                    # send(stream=False) already read the whole body, so there is
-                    # nothing left to iterate: report it now.
-                    capture.add(content)
-                    capture.send()
-                else:
-                    capture.install("aiter_", capture.wrap_async)
+                capture.start("aiter_", capture.wrap_async)
             else:
                 # Non-streaming: send immediately
                 res_data: ResponseData = {

@@ -109,7 +109,7 @@ Streaming responses (SSE / `text/event-stream` and NDJSON) are captured differen
 
 - The patched `send` (sync and async, for both `httpx` and `httpx2`) wraps the response's iterator methods (`iter_bytes`, `iter_lines`, `iter_text`, `iter_raw`, and their `aiter_*` counterparts) to accumulate chunks as they stream past. Arguments such as `chunk_size` are passed through untouched, so your code sees the same chunks at the same time.
 - A stream is complete only if the wrapped iterator was exhausted. Capture and submission then happen once, after your code has consumed the full stream, however many of the iterator layers your code or the SDK uses.
-- The captured body is the complete concatenated stream content, with `is_streaming: true` in the logged metadata. A sync call such as `anthropic.Anthropic().messages.stream(...)` is logged with its full SSE body, so token usage and the message id can be extracted.
+- The captured body is the concatenated stream content (everything read before the stream ended or was abandoned), with `is_streaming: true` in the logged metadata. A sync call such as `anthropic.Anthropic().messages.stream(...)` is logged with its full SSE body, so token usage and the message id can be extracted.
 - A stream that is abandoned before it ends is reported with whatever had arrived and `raw_request.stream_incomplete: true`. A stream that ends normally is sent without the field. See [Abandoned streams](#abandoned-streams-stream_incomplete).
 - A stream with no content is not reported.
 - A sync `send()` that already read an SSE/NDJSON body (not made with `stream=True`) is reported immediately with that body.

@@ -140,14 +140,18 @@ def test_over_cap_abandoned_stream_marks_both_independently(sdk, mock_urlopen):
         with http.stream("POST", LLM_URL, json={}) as response:
             for _ in response.iter_bytes():
                 pass
+    seen = 0
     with _http_client() as http:
         with http.stream("POST", LLM_URL, json={}) as response:
-            for _ in response.iter_bytes():
-                break
+            for chunk in response.iter_bytes():
+                seen += len(chunk)
+                if seen > 30:
+                    break
 
     complete, abandoned = _posted(sdk, mock_urlopen)
     assert "[truncated: " in complete["response_body"]
     assert "stream_incomplete" not in complete
+    assert abandoned["response_body"].count("[truncated: ") == 1
     assert abandoned["stream_incomplete"] is True
 
 

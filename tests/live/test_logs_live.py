@@ -1,4 +1,4 @@
-"""End-to-end proof of `search_logs` and `get_log` against a REAL Coolhand server.
+"""End-to-end proof of `search_logs`, `get_log` and `failure_summary` on a REAL server.
 
 Nothing here is mocked. Run it with `make test-live` (the environment it needs is
 described in `test_templates_live.py`). Every request is read-only.
@@ -20,6 +20,25 @@ COST_BREAKDOWN_FIELDS = [
     "cached_input_cost",
     "cache_creation_input_cost",
     "reasoning_output_cost",
+]
+
+FAILURE_SUMMARY_FIELDS = [
+    "client_id",
+    "client_name",
+    "days_analyzed",
+    "total_failed_count",
+    "provider_outage_excluded_count",
+    "error_breakdown",
+    "by_template",
+    "actionable_summary",
+]
+
+FAILURE_CATEGORIES = [
+    "client_error",
+    "rate_limit",
+    "server_error",
+    "provider_error",
+    "relayed_upstream",
 ]
 
 # Bounded so min_cost / order=cost_desc cannot trip the statement timeout on a large
@@ -179,6 +198,49 @@ class TestGetLogLive:
         assert excinfo.value.status == 404
 
 
+class TestFailureSummaryLive:
+    def test_summary_has_every_documented_key_and_a_non_empty_breakdown(self):
+        summary = live_service().failure_summary(days_back=30)
+
+        assert sorted(summary) == sorted(FAILURE_SUMMARY_FIELDS)
+        assert isinstance(summary["client_id"], str)
+        assert isinstance(summary["client_name"], str)
+        assert isinstance(summary["days_analyzed"], int)
+        assert isinstance(summary["total_failed_count"], int)
+        assert isinstance(summary["provider_outage_excluded_count"], int)
+        assert sorted(summary["actionable_summary"]) == [
+            "client_fixable_count",
+            "server_side_count",
+        ]
+        assert summary["error_breakdown"], "Live fixture broken: no failed logs."
+        for pattern in summary["error_breakdown"]:
+            assert isinstance(pattern["error_pattern"], str)
+            assert isinstance(pattern["count"], int)
+            assert pattern["category"] in FAILURE_CATEGORIES
+            assert len(pattern["example_log_ids"]) <= 3
+        for template in summary["by_template"]:
+            assert isinstance(template["template_name"], str)
+            assert isinstance(template["failed_count"], int)
+
+    def test_error_contains_with_a_summary_pattern_lists_failed_logs(self):
+        service = live_service()
+        pattern = service.failure_summary(days_back=30)["error_breakdown"][0]
+
+        logs = service.search_logs(
+            error_contains=pattern["error_pattern"], days_back=30, per=5
+        )["logs"]
+
+        assert logs, f"No logs matched error_contains for {pattern['category']}."
+        for log in logs:
+            assert_log_shape(log)
+
+    def test_a_non_positive_days_back_is_a_422(self):
+        with pytest.raises(CoolhandAPIError) as excinfo:
+            live_service().failure_summary(days_back=0)
+
+        assert excinfo.value.status == 422
+
+
 class TestAuthenticationLive:
     def test_no_api_key_is_a_401_on_search_and_show(self):
         service = live_service(api_key="")
@@ -187,9 +249,12 @@ class TestAuthenticationLive:
             service.search_logs()
         with pytest.raises(CoolhandAPIError) as show_error:
             service.get_log("whatever")
+        with pytest.raises(CoolhandAPIError) as summary_error:
+            service.failure_summary()
 
         assert search_error.value.status == 401
         assert show_error.value.status == 401
+        assert summary_error.value.status == 401
 
     def test_an_invalid_api_key_is_a_401(self):
         with pytest.raises(CoolhandAPIError) as excinfo:

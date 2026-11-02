@@ -1,8 +1,10 @@
-# Reading Logs (Search + Get)
+# Reading Logs (Search, Get + Failure Summary)
 
 `search_logs` and `get_log` read back the logs Coolhand has collected through automatic
 monitoring, via `GET /api/v2/llm_request_logs` and
 `GET /api/v2/llm_request_logs/{id}`. Every log carries a per-log `cost`.
+`failure_summary` rolls the failed ones up by error pattern, via
+`GET /api/v2/llm_request_logs/failure_summary`.
 
 Both require your **private** API key. The public key used to submit logs is write-only
 and is rejected here, so construct a separate `LogService` (or `Coolhand`) with the
@@ -58,6 +60,7 @@ Ransack predicates; `sort` is the only Ransack passthrough.
 | `workload_id` | `str` | Workload hashid; matches every template in it |
 | `system_prompt_contains` | `str` | Case-insensitive substring of the system prompt |
 | `user_prompt_contains` | `str` | Case-insensitive substring of the user prompt |
+| `error_contains` | `str` | Case-insensitive substring of the failed request's error text. Pass a `failure_summary` `error_pattern` to list the logs behind it |
 | `model` | `str` | Model name |
 | `source_api` | `str` | e.g. `"openai"`, `"anthropic"`, `"vertex"` |
 | `source_api_result` | `str` | Result status, e.g. `"success"` or `"failed"` |
@@ -155,16 +158,53 @@ priced; otherwise it holds `total_cost`, `input_cost`, `output_cost`,
 a relative path segment (`.` / `..`), or if `search_query` is given but blank (the server
 would silently return the content shape instead of a search result).
 
+## `failure_summary(days_back=None)`
+
+Rolls this client's recent failed requests up by error pattern and by template, and
+sorts each pattern into whose problem it is. Failures inside a confirmed provider outage
+are left out and counted in `provider_outage_excluded_count`. `days_back` is optional
+(the server defaults to 7 and allows up to 36500); it is sent only when given and is not
+validated client-side, so `0` or a negative value reaches the server's `422`.
+
+```python
+summary = ch.failure_summary(days_back=30)
+print(summary["total_failed_count"], summary["actionable_summary"])
+
+top = summary["error_breakdown"][0]
+print(top["category"], top["count"], top["error_pattern"])
+
+# The logs behind that pattern.
+logs = ch.search_logs(error_contains=top["error_pattern"], days_back=30)["logs"]
+```
+
+The result is one `FailureSummaryResponse` dict (not paginated), with every key always
+present:
+
+| Key | Notes |
+|---|---|
+| `client_id`, `client_name` | The client the API key belongs to |
+| `days_analyzed` | The window the server applied |
+| `total_failed_count` | Every failed request in the window, across all patterns |
+| `provider_outage_excluded_count` | Failures left out because they fell inside a confirmed provider outage |
+| `error_breakdown` | The 50 most frequent patterns, each with `error_pattern`, `source_api` (or `None`), `count`, `first_seen_at`, `last_seen_at`, `category`, `example_error_details`, `example_log_ids` (up to 3) and `example_log_urls` |
+| `by_template` | Per template: `template_id` (or `None`), `template_name`, `failed_count`, `error_patterns` (dicts; the definition does not type their keys), `example_log_ids`, `example_log_urls` |
+| `actionable_summary` | `client_fixable_count` and `server_side_count`, counting every pattern |
+
+`category` is one of `client_error` (a 4xx the caller can fix), `rate_limit` (429),
+`server_error` (5xx), `provider_error` (no HTTP status) or `relayed_upstream` (an
+upstream vendor's account or key error surfaced through a relay).
+
 ## Errors
 
-Both methods raise `CoolhandAPIError` on any non-2xx response, with the HTTP status on
+All three methods raise `CoolhandAPIError` on any non-2xx response, with the HTTP status on
 `.status`:
 
 | Status | When |
 |---|---|
 | `401` | No API key, an invalid key, or the public key |
 | `404` | `get_log` only: unknown id, another client's, or an internally generated record |
+| `422` | `failure_summary` only: a non-positive `days_back` |
 | `422` | A bad `template_id` / `workload_id` / `days_back`, a malformed or inverted `since` / `until`, a negative or non-numeric `min_cost`, an unknown `order`, or a non-positive `max_chars` |
-| `504` | The search exceeded the server's statement timeout. Narrow it with `since` or `days_back` |
+| `504` | The search exceeded the server's statement timeout. Narrow it with `since` or `days_back`; for `failure_summary`, retry with a smaller `days_back` |
 
 `.status` is `None` on a transport failure or a non-JSON body.

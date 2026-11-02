@@ -28,6 +28,11 @@ from .template_service import CoolhandAPIError, TemplateService, get_template_se
 from .types import (
     BulkLinkFeedbackResult,
     Config,
+    FailureActionableSummary,
+    FailureCategory,
+    FailureErrorPattern,
+    FailureSummaryResponse,
+    FailureTemplateBreakdown,
     FeedbackData,
     FeedbackResponse,
     HelpArticle,
@@ -298,6 +303,7 @@ class Coolhand(CoolhandClient):
         workload_id: str | None = None,
         system_prompt_contains: str | None = None,
         user_prompt_contains: str | None = None,
+        error_contains: str | None = None,
         model: str | None = None,
         source_api: str | None = None,
         source_api_result: str | None = None,
@@ -332,6 +338,7 @@ class Coolhand(CoolhandClient):
             workload_id=workload_id,
             system_prompt_contains=system_prompt_contains,
             user_prompt_contains=user_prompt_contains,
+            error_contains=error_contains,
             model=model,
             source_api=source_api,
             source_api_result=source_api_result,
@@ -349,6 +356,23 @@ class Coolhand(CoolhandClient):
             page=page,
             per=per,
         )
+
+    def failure_summary(
+        self, *, days_back: int | None = None
+    ) -> FailureSummaryResponse:
+        """Summarize your failed requests by error pattern and by template.
+
+        Requires the **private** API key. Pass an entry's `error_pattern` as
+        `error_contains` to `search_logs` to list the logs behind it.
+
+        See `LogService.failure_summary` for the response and error reference.
+
+        Raises:
+            CoolhandAPIError: On a non-2xx response, with the HTTP status on `status`
+                (`422` for a non-positive `days_back`; `504` is retryable with a
+                smaller one).
+        """
+        return self._log_service.failure_summary(days_back=days_back)
 
     def get_log(
         self,
@@ -535,6 +559,11 @@ __all__ = [
     "DEFAULT_INTERCEPT_ADDRESSES",
     "RequestData",
     "ResponseData",
+    "FailureActionableSummary",
+    "FailureCategory",
+    "FailureErrorPattern",
+    "FailureSummaryResponse",
+    "FailureTemplateBreakdown",
     "FeedbackData",
     "FeedbackResponse",
     "FeedbackService",

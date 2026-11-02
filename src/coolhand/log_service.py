@@ -1,9 +1,10 @@
 """Read-only access to the LLM request log endpoints.
 
-Wraps `GET /api/v2/llm_request_logs` (search) and `GET /api/v2/llm_request_logs/{id}`
-(show). Both require the client's **private** API key — the public key used to submit
-logs is write-only and is rejected here. Submitting logs is `CoolhandClient`'s job;
-this service only reads them back.
+Wraps `GET /api/v2/llm_request_logs` (search), `GET /api/v2/llm_request_logs/{id}`
+(show) and `GET /api/v2/llm_request_logs/failure_summary`. All require the client's
+**private** API key — the public key used to submit logs is write-only and is
+rejected here. Submitting logs is `CoolhandClient`'s job; this service only reads
+them back.
 """
 
 from datetime import datetime
@@ -20,6 +21,7 @@ from ._read_service import (
     _with_query,
 )
 from .types import (
+    FailureSummaryResponse,
     LlmRequestLogContent,
     LlmRequestLogOrder,
     LlmRequestLogSummary,
@@ -28,6 +30,7 @@ from .types import (
 )
 
 LOGS_ENDPOINT = "/api/v2/llm_request_logs"
+FAILURE_SUMMARY_ENDPOINT = f"{LOGS_ENDPOINT}/failure_summary"
 
 
 def _log_pagination(
@@ -80,6 +83,7 @@ class LogService(ReadService):
         workload_id: str | None = None,
         system_prompt_contains: str | None = None,
         user_prompt_contains: str | None = None,
+        error_contains: str | None = None,
         model: str | None = None,
         source_api: str | None = None,
         source_api_result: str | None = None,
@@ -107,6 +111,8 @@ class LogService(ReadService):
             workload_id: Workload hashid; matches every template in it.
             system_prompt_contains: Case-insensitive substring of the system prompt.
             user_prompt_contains: Case-insensitive substring of the user prompt.
+            error_contains: Case-insensitive substring of the failed request's error
+                text. Pass an `error_pattern` from `failure_summary` to list its logs.
             model: Exact model name.
             source_api: Source API, e.g. "openai" or "anthropic".
             source_api_result: Result status, e.g. "success" or "failed".
@@ -156,6 +162,7 @@ class LogService(ReadService):
             "workload_id": workload_id,
             "system_prompt_contains": system_prompt_contains,
             "user_prompt_contains": user_prompt_contains,
+            "error_contains": error_contains,
             "model": model,
             "source_api": source_api,
             "source_api_result": source_api_result,
@@ -181,6 +188,45 @@ class LogService(ReadService):
             "logs": logs,
             "pagination": _log_pagination(headers, logs, page, per),
         }
+
+    def failure_summary(
+        self, *, days_back: int | None = None
+    ) -> FailureSummaryResponse:
+        """Summarize this client's failed requests by error pattern and by template.
+
+        Each pattern is sorted into whose problem it is (`category`), and failures
+        inside a confirmed provider outage are left out and counted in
+        `provider_outage_excluded_count`. Pass a pattern's `error_pattern` as
+        `error_contains` to `search_logs` to list the logs behind it.
+
+        Args:
+            days_back: How many days to look back. The server defaults to 7 and allows
+                up to 36500. Not validated here, so a bad value reaches the server's
+                `422`.
+
+        Returns:
+            The single summary object: `client_id`, `client_name`, `days_analyzed`,
+            `total_failed_count`, `provider_outage_excluded_count`, `error_breakdown`
+            (the 50 most frequent patterns), `by_template` and `actionable_summary`.
+            Not paginated.
+
+        Raises:
+            CoolhandAPIError: On a non-2xx response, with `status` set — `401` for a
+                missing/invalid/public key, `422` for a non-positive `days_back`, and
+                `504` when the summary took too long (retry with a smaller
+                `days_back`). Also raised, with `status` left `None`, on a transport
+                failure or a body that is not a JSON object.
+        """
+        url = _with_query(
+            f"{self.config['base_url']}{FAILURE_SUMMARY_ENDPOINT}",
+            {"days_back": days_back},
+        )
+
+        body, _headers = self._get_json_object(url, "Failure summary")
+
+        summary = cast(FailureSummaryResponse, body)
+        self._log(f"Fetched failure summary for {summary.get('days_analyzed')} day(s)")
+        return summary
 
     def get_log(
         self,

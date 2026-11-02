@@ -462,6 +462,21 @@ class TestErrors:
         assert caught.value.status == 404
 
 
+class TestPublicSurface:
+    def test_failure_summary_types_are_importable_from_the_package_root(self):
+        import coolhand
+
+        for name in (
+            "FailureSummaryResponse",
+            "FailureCategory",
+            "FailureErrorPattern",
+            "FailureTemplateBreakdown",
+            "FailureActionableSummary",
+        ):
+            assert hasattr(coolhand, name)
+            assert name in coolhand.__all__
+
+
 class TestCoolhandDelegation:
     def test_exposes_the_log_service(self, mock_config, reset_global_instance):
         instance = Coolhand(config=mock_config)

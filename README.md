@@ -280,8 +280,9 @@ logs = ch.search_logs(
 )['logs']
 
 summary = ch.failure_summary(days_back=30)
-pattern = summary['error_breakdown'][0]['error_pattern']
-failed = ch.search_logs(error_contains=pattern, days_back=30)['logs']
+if summary['error_breakdown']:
+    pattern = summary['error_breakdown'][0]['error_pattern']
+    failed = ch.search_logs(error_contains=pattern, days_back=30)['logs']
 ```
 
 See [Reading Workloads](./docs/workloads.md) for the workload reference, [Reading Templates](./docs/templates.md#metrics) for the `metrics` fields and window rules, and [Reading Logs](./docs/logs.md) for log search, `get_log` and `failure_summary`.

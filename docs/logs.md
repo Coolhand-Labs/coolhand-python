@@ -170,11 +170,12 @@ validated client-side, so `0` or a negative value reaches the server's `422`.
 summary = ch.failure_summary(days_back=30)
 print(summary["total_failed_count"], summary["actionable_summary"])
 
-top = summary["error_breakdown"][0]
-print(top["category"], top["count"], top["error_pattern"])
+if summary["error_breakdown"]:
+    top = summary["error_breakdown"][0]
+    print(top["category"], top["count"], top["error_pattern"])
 
-# The logs behind that pattern.
-logs = ch.search_logs(error_contains=top["error_pattern"], days_back=30)["logs"]
+    # The logs behind that pattern.
+    logs = ch.search_logs(error_contains=top["error_pattern"], days_back=30)["logs"]
 ```
 
 The result is one `FailureSummaryResponse` dict (not paginated), with every key always
@@ -203,8 +204,7 @@ All three methods raise `CoolhandAPIError` on any non-2xx response, with the HTT
 |---|---|
 | `401` | No API key, an invalid key, or the public key |
 | `404` | `get_log` only: unknown id, another client's, or an internally generated record |
-| `422` | `failure_summary` only: a non-positive `days_back` |
-| `422` | A bad `template_id` / `workload_id` / `days_back`, a malformed or inverted `since` / `until`, a negative or non-numeric `min_cost`, an unknown `order`, or a non-positive `max_chars` |
+| `422` | A bad `template_id` / `workload_id` / `days_back`, a malformed or inverted `since` / `until`, a negative or non-numeric `min_cost`, an unknown `order`, or a non-positive `max_chars`; `failure_summary` also 422s on a non-positive `days_back` |
 | `504` | The search exceeded the server's statement timeout. Narrow it with `since` or `days_back`; for `failure_summary`, retry with a smaller `days_back` |
 
 `.status` is `None` on a transport failure or a non-JSON body.

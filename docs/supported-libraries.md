@@ -121,7 +121,7 @@ A streamed response your code stops reading before it ends is logged with the pa
 
 | Path | Marked `stream_incomplete: true` when |
 |------|----------------------------------------|
-| Sync `iter_bytes` / `iter_lines` / `iter_text` / `iter_raw` (`httpx`, `httpx2`) | you `break`, call `close()` on the iterator or the response, or the generator is garbage-collected before the stream is exhausted |
+| Sync `iter_bytes` / `iter_lines` / `iter_text` / `iter_raw` (`httpx`, `httpx2`) | the wrapped iterator is closed (`break` out of a loop that holds the only reference, or `close()` on the iterator) or garbage-collected before the stream is exhausted. `response.close()` alone does not trigger it |
 | Async `aiter_*` (`httpx`, `httpx2`) | the same, plus `aclose()`, a cancelled task, or the event loop finalising the abandoned generator (including at `asyncio.run()` shutdown) |
 | Transport error mid-stream (reset, timeout, dropped connection) | the error reaches your code; the body read so far is sent |
 | OpenAI SDK stopping at `data: [DONE]` | the SDK stops reading without draining the iterator, so the stream is not exhausted |
@@ -130,6 +130,7 @@ A streamed response your code stops reading before it ends is logged with the pa
 - The marker is independent of the size cap. A body longer than `max_body_bytes` that was read to the end is truncated but not marked; one that was abandoned is marked whether or not it was truncated.
 - Exactly one record is sent per response. The first outcome wins, so a late `close()`, a second `aclose()` or a garbage-collection finaliser cannot send another.
 - For an async generator abandoned with `break`, the record is sent when the event loop finalises the generator, so it can arrive a moment after the `break`. A generator that is never finalised (the loop is already closed when it is garbage-collected) sends nothing.
+- For a sync stream whose iterator is kept alive by a reference cycle (the OpenAI and Anthropic SDK `Stream` objects), a `break` is reported when Python's cycle collector next frees it, which can be later than the `break`. A process that exits before that collection loses the record.
 - A trailing multibyte character split by the cut is dropped from a partial body rather than logged as a replacement character.
 - `requests` calls are unaffected: their streamed bodies are never read, so there is no partial body to send.
 

@@ -12,6 +12,9 @@ captured data is reported once with ``stream_incomplete: True``.
 import asyncio
 import importlib.util
 import json
+import threading
+import time
+from types import SimpleNamespace
 
 import pytest
 
@@ -460,7 +463,7 @@ def test_sync_breaking_out_early_reports_the_partial_body_as_incomplete(
 
 
 @pytest.mark.parametrize("module_name", CLIENTS)
-def test_sync_closing_the_response_early_reports_the_partial_body_once(
+def test_sync_closing_the_response_and_the_iterator_reports_the_partial_body_once(
     captured, module_name
 ):
     client, _ = _sync_client(module_name, _sse_chunks())
@@ -693,20 +696,57 @@ def test_sync_abandoned_multibyte_stream_drops_a_split_trailing_character(
     assert captured[0][1]["stream_incomplete"] is True
 
 
+def _bare_capture(text="data: x\n\n"):
+    capture = interceptor._StreamCapture(
+        SimpleNamespace(status_code=200, headers={}), {}, time.time()
+    )
+    capture.add(text.encode())
+    return capture
+
+
+def test_a_later_outcome_does_not_send_a_second_record_or_change_the_first(captured):
+    capture = _bare_capture()
+
+    capture.send(incomplete=True)
+    capture.send()
+    capture.send(incomplete=True)
+
+    assert len(captured) == 1
+    assert captured[0][1]["stream_incomplete"] is True
+
+
+def test_concurrent_outcomes_send_exactly_one_record(captured):
+    capture = _bare_capture()
+    barrier = threading.Barrier(16)
+
+    def race(incomplete):
+        barrier.wait()
+        capture.send(incomplete=incomplete)
+
+    threads = [threading.Thread(target=race, args=(n % 2 == 0,)) for n in range(16)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+
+    assert len(captured) == 1
+
+
 @pytest.mark.parametrize("module_name", CLIENTS)
-def test_sync_late_finaliser_after_a_report_does_not_send_a_second_record(
+def test_sync_closing_an_exhausted_stream_again_sends_nothing_more(
     captured, module_name
 ):
     client, _ = _sync_client(module_name, _sse_chunks())
     with client:
         with client.stream("POST", LLM_URL, json={}) as response:
             iterator = response.iter_bytes()
-            next(iterator)
-            iterator.close()
+            for _ in iterator:
+                pass
             iterator.close()
         response.close()
 
     assert len(captured) == 1
+    assert "stream_incomplete" not in captured[0][1]
 
 
 @pytest.mark.parametrize("module_name", CLIENTS)
@@ -784,3 +824,60 @@ async def test_async_exhausted_stream_is_complete(captured, module_name):
     assert len(captured) == 1
     assert "stream_incomplete" not in captured[0][1]
     assert captured[0][1]["body"] == OPENAI_SSE.decode()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("module_name", CLIENTS)
+async def test_async_buffer_is_released_after_the_report(
+    captured, module_name, monkeypatch
+):
+    captures = []
+    original = interceptor._StreamCapture.__init__
+
+    def spy(self, *args, **kwargs):
+        original(self, *args, **kwargs)
+        captures.append(self)
+
+    monkeypatch.setattr(interceptor._StreamCapture, "__init__", spy)
+    client, consumed_first = _client_for(module_name)
+    async with client:
+        async with client.stream("POST", LLM_URL, json={}) as response:
+            agen = response.aiter_bytes()
+            await agen.__anext__()
+            consumed_first.set()
+            await agen.aclose()
+
+    assert len(captured) == 1
+    assert not captures[0]._chunks
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("module_name", CLIENTS)
+async def test_async_abandoned_over_cap_stream_is_truncated_and_incomplete(
+    captured, module_name, monkeypatch
+):
+    monkeypatch.setattr(interceptor, "_max_body_bytes", 40)
+    module = __import__(module_name)
+
+    class Stream(module.AsyncByteStream):
+        async def __aiter__(self):
+            for chunk in _openai_chunks():
+                yield chunk
+
+    transport = module.MockTransport(
+        lambda request: module.Response(
+            200, stream=Stream(), headers={"content-type": "text/event-stream"}
+        )
+    )
+    async with module.AsyncClient(transport=transport) as client:
+        async with client.stream("POST", LLM_URL, json={}) as response:
+            agen = response.aiter_lines()
+            async for line in agen:
+                if "[DONE]" in line:
+                    break
+            await agen.aclose()
+
+    assert len(captured) == 1
+    res = captured[0][1]
+    assert res["body_truncated"] is True
+    assert res["stream_incomplete"] is True

@@ -124,10 +124,13 @@ def run_case(name: str, url: str, body: bytes, reader: str, stop_at_done: bool) 
     try:
         res = _live_check.single_streamed_capture(name, records)
         (check_anthropic if "anthropic" in url else check_openai)(res)
-        if bool(res.get("stream_incomplete")) is not stop_at_done:
-            raise AssertionError(f"stream_incomplete={res.get('stream_incomplete')!r}")
     except AssertionError as e:
         _live_check.fail(name, f"token metadata missing from captured body: {e}")
+    if bool(res.get("stream_incomplete")) is not stop_at_done:
+        _live_check.fail(
+            name,
+            f"stream_incomplete={res.get('stream_incomplete')!r}, expected {stop_at_done}",
+        )
     print(f"PASS {name}: id and token counts captured")
 
 

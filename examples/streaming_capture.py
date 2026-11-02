@@ -7,7 +7,8 @@ No keys and no network: a sync httpx client streams Anthropic- and OpenAI-shaped
 bodies from a mock transport through the real interceptor. A sync stream used to be
 logged with ``is_streaming: false`` and the placeholder body ``"[streaming]"``, so the
 server could extract no tokens, output or message id from it. This exits 1 if the
-captured body does not carry them, 0 otherwise.
+captured body does not carry them, or if ``stream_incomplete`` is missing on the case that
+stops at ``data: [DONE]`` or present on any other, 0 otherwise.
 """
 
 import json

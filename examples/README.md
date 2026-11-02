@@ -15,7 +15,7 @@ Run any example from the repo root with `uv run python examples/<name>.py`.
 
 `streaming_capture.py` needs no keys or network. It streams Anthropic- and OpenAI-shaped SSE bodies through a sync
 `httpx` client with the real interceptor patched in (reading via `iter_bytes` and `iter_lines`, as the SDKs do) and
-exits 1 unless the captured record has `is_streaming: true` and a body with the message id and token counts.
+exits 1 unless the captured record has `is_streaming: true` and a body with the message id and token counts, and carries `stream_incomplete: true` only for the case that stops at `data: [DONE]`.
 
 ```bash
 uv run python examples/streaming_capture.py

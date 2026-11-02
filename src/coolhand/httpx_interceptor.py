@@ -791,7 +791,14 @@ def _make_patched_async_send(get_original: Callable[[], Callable]) -> Callable:
             if is_streaming:
                 # Wrap streaming methods to capture content
                 capture = _StreamCapture(response, req_data, start)
-                capture.install("aiter_", capture.wrap_async)
+                content = getattr(response, "_content", None)
+                if isinstance(content, bytes):
+                    # send(stream=False) already read the whole body, so there is
+                    # nothing left to iterate: report it now.
+                    capture.add(content)
+                    capture.send()
+                else:
+                    capture.install("aiter_", capture.wrap_async)
             else:
                 # Non-streaming: send immediately
                 res_data: ResponseData = {

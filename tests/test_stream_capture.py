@@ -436,6 +436,33 @@ def test_sync_event_stream_read_without_streaming_is_captured_once(
     res = captured[0][1]
     assert res["is_streaming"] is True
     assert res["body"] == ANTHROPIC_SSE.decode()
+    assert "stream_incomplete" not in res
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("module_name", CLIENTS)
+async def test_async_fully_read_event_stream_is_complete_even_if_iteration_breaks(
+    captured, module_name
+):
+    """post() reads the body inside send(); breaking out later is not an abandon."""
+    module = __import__(module_name)
+    transport = module.MockTransport(
+        lambda request: module.Response(
+            200, content=ANTHROPIC_SSE, headers={"content-type": "text/event-stream"}
+        )
+    )
+    async with module.AsyncClient(transport=transport) as client:
+        response = await client.post(LLM_URL, json={})
+        assert len(captured) == 1
+        async for _ in response.aiter_lines():
+            break
+        await asyncio.sleep(0.01)
+
+    assert len(captured) == 1
+    res = captured[0][1]
+    assert res["is_streaming"] is True
+    assert res["body"] == ANTHROPIC_SSE.decode()
+    assert "stream_incomplete" not in res
 
 
 @pytest.mark.parametrize("module_name", CLIENTS)

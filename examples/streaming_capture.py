@@ -73,7 +73,7 @@ OPENAI_SSE = (
 
 # (name, url, body, reader, stop_at_done). Readers cover the iterator layers SDKs use:
 # the Anthropic SDK reads bytes, the OpenAI SDK reads lines and stops at ``[DONE]``
-# without exhausting the stream, which is the case that used to capture nothing.
+# without exhausting the stream, so that record is marked ``stream_incomplete``.
 CASES = [
     ("anthropic via iter_bytes", ANTHROPIC_URL, ANTHROPIC_SSE, "iter_bytes", False),
     ("anthropic via iter_lines", ANTHROPIC_URL, ANTHROPIC_SSE, "iter_lines", False),
@@ -124,6 +124,8 @@ def run_case(name: str, url: str, body: bytes, reader: str, stop_at_done: bool) 
     try:
         res = _live_check.single_streamed_capture(name, records)
         (check_anthropic if "anthropic" in url else check_openai)(res)
+        if bool(res.get("stream_incomplete")) is not stop_at_done:
+            raise AssertionError(f"stream_incomplete={res.get('stream_incomplete')!r}")
     except AssertionError as e:
         _live_check.fail(name, f"token metadata missing from captured body: {e}")
     print(f"PASS {name}: id and token counts captured")

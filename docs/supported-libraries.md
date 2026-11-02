@@ -108,11 +108,30 @@ To override: pass `intercept_addresses=[...]` to `Coolhand()`. See [Advanced Con
 Streaming responses (SSE / `text/event-stream` and NDJSON) are captured differently from non-streaming:
 
 - The patched `send` (sync and async, for both `httpx` and `httpx2`) wraps the response's iterator methods (`iter_bytes`, `iter_lines`, `iter_text`, `iter_raw`, and their `aiter_*` counterparts) to accumulate chunks as they stream past. Arguments such as `chunk_size` are passed through untouched, so your code sees the same chunks at the same time.
-- Capture and submission happen when the iterator is exhausted — after your code has consumed the full stream. One record is sent per response, however many of the iterator layers your code or the SDK uses.
+- A stream is complete only if the wrapped iterator was exhausted. Capture and submission then happen once, after your code has consumed the full stream, however many of the iterator layers your code or the SDK uses.
 - The captured body is the complete concatenated stream content, with `is_streaming: true` in the logged metadata. A sync call such as `anthropic.Anthropic().messages.stream(...)` is logged with its full SSE body, so token usage and the message id can be extracted.
-- A stream that is abandoned before it ends (you `break` out of the loop, close the response early, or the connection drops mid-stream) is not reported: a cut-off body would look like a complete one. The exception is a stream whose last event is `data: [DONE]`: the OpenAI SDK stops reading there without exhausting the stream, and the body is complete, so it is reported. A stream with no content is not reported either.
+- A stream that is abandoned before it ends is reported with whatever had arrived and `raw_request.stream_incomplete: true`. A stream that ends normally is sent without the field. See [Abandoned streams](#abandoned-streams-stream_incomplete).
+- A stream with no content is not reported.
 - A sync `send()` that already read an SSE/NDJSON body (not made with `stream=True`) is reported immediately with that body.
 - `requests` calls are the exception: with `stream=True` (passed to `send()`/`request()` or set as `Session.stream`) or an SSE/NDJSON content type, the response is recorded with the placeholder body `"[streaming]"` and `is_streaming: true`. The body is never read, so your code keeps true streaming (no buffering, no added first-byte latency), but the response content is not captured — even for plain JSON responses.
+
+### Abandoned streams (`stream_incomplete`)
+
+A streamed response your code stops reading before it ends is logged with the partial body and `raw_request.stream_incomplete: true`, instead of being dropped. The backend then nulls latency, and nulls token counts unless the provider's final usage event is in the captured body; the SDK never computes tokens, cost or latency for a partial body.
+
+| Path | Marked `stream_incomplete: true` when |
+|------|----------------------------------------|
+| Sync `iter_bytes` / `iter_lines` / `iter_text` / `iter_raw` (`httpx`, `httpx2`) | you `break`, call `close()` on the iterator or the response, or the generator is garbage-collected before the stream is exhausted |
+| Async `aiter_*` (`httpx`, `httpx2`) | the same, plus `aclose()`, a cancelled task, or the event loop finalising the abandoned generator (including at `asyncio.run()` shutdown) |
+| Transport error mid-stream (reset, timeout, dropped connection) | the error reaches your code; the body read so far is sent |
+| OpenAI SDK stopping at `data: [DONE]` | the SDK stops reading without draining the iterator, so the stream is not exhausted |
+
+- There is one rule: complete means the iterator was exhausted. A stream that stops after `data: [DONE]` is still marked, and the body it carries is whole. The backend decides what to do with it.
+- The marker is independent of the size cap. A body longer than `max_body_bytes` that was read to the end is truncated but not marked; one that was abandoned is marked whether or not it was truncated.
+- Exactly one record is sent per response. The first outcome wins, so a late `close()`, a second `aclose()` or a garbage-collection finaliser cannot send another.
+- For an async generator abandoned with `break`, the record is sent when the event loop finalises the generator, so it can arrive a moment after the `break`. A generator that is never finalised (the loop is already closed when it is garbage-collected) sends nothing.
+- A trailing multibyte character split by the cut is dropped from a partial body rather than logged as a replacement character.
+- `requests` calls are unaffected: their streamed bodies are never read, so there is no partial body to send.
 
 ---
 

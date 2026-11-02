@@ -458,6 +458,10 @@ class CoolhandClient:
             "is_streaming": response.get("is_streaming", False) if response else False,
         }
 
+        # Only a strict true is acted on by the backend; completed streams omit it.
+        if response and response.get("stream_incomplete") is True:
+            interaction["stream_incomplete"] = True
+
         # The declaration was snapshotted on the caller's context when the call was
         # made. It is not part of raw_request: _send_one lifts it out to sit beside it.
         declared = request.get("declared")

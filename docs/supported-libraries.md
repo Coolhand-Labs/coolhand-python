@@ -124,7 +124,7 @@ A streamed response your code stops reading before it ends is logged with the pa
 | Sync `iter_bytes` / `iter_lines` / `iter_text` / `iter_raw` (`httpx`, `httpx2`) | the wrapped iterator is closed (`break` out of a loop that holds the only reference, or `close()` on the iterator) or garbage-collected before the stream is exhausted. `response.close()` alone does not trigger it |
 | Async `aiter_*` (`httpx`, `httpx2`) | the same, plus `aclose()`, a cancelled task, or the event loop finalising the abandoned generator (including at `asyncio.run()` shutdown) |
 | Transport error mid-stream (reset, timeout, dropped connection) | the error reaches your code; the body read so far is sent |
-| OpenAI SDK stopping at `data: [DONE]` | the SDK stops reading without draining the iterator, so the stream is not exhausted |
+| OpenAI SDK (sync and async) | the SDK stops at `data: [DONE]` and closes the response without draining the iterator, so every stream read through it is marked, even one your code reads to the end. Set `stream_options={"include_usage": True}` so the final usage event is in the body and token counts survive; latency is not kept for a marked record |
 
 - There is one rule: complete means the iterator was exhausted. A stream that stops after `data: [DONE]` is still marked, and the body it carries is whole. The backend decides what to do with it.
 - The marker is independent of the size cap. A body longer than `max_body_bytes` that was read to the end is truncated but not marked; one that was abandoned is marked whether or not it was truncated.

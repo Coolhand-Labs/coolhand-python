@@ -145,7 +145,7 @@ stream = client.chat.completions.create(
 for chunk in stream:
     if chunk.choices[0].delta.content:
         print(chunk.choices[0].delta.content, end="")
-# Streamed response automatically logged to Coolhand! See docs/supported-libraries.md for how abandoned streams are marked.
+# Streamed response automatically logged to Coolhand! See docs/supported-libraries.md for how abandoned streams (including OpenAI SDK streams) are marked.
 ```
 
 ## What Gets Logged

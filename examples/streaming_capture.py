@@ -7,7 +7,8 @@ No keys and no network: a sync httpx client streams Anthropic- and OpenAI-shaped
 bodies from a mock transport through the real interceptor. A sync stream used to be
 logged with ``is_streaming: false`` and the placeholder body ``"[streaming]"``, so the
 server could extract no tokens, output or message id from it. This exits 1 if the
-captured body does not carry them, 0 otherwise.
+captured body does not carry them, or if ``stream_incomplete`` is missing on the case that
+stops at ``data: [DONE]`` or present on any other, 0 otherwise.
 """
 
 import json
@@ -73,7 +74,7 @@ OPENAI_SSE = (
 
 # (name, url, body, reader, stop_at_done). Readers cover the iterator layers SDKs use:
 # the Anthropic SDK reads bytes, the OpenAI SDK reads lines and stops at ``[DONE]``
-# without exhausting the stream, which is the case that used to capture nothing.
+# without exhausting the stream, so that record is marked ``stream_incomplete``.
 CASES = [
     ("anthropic via iter_bytes", ANTHROPIC_URL, ANTHROPIC_SSE, "iter_bytes", False),
     ("anthropic via iter_lines", ANTHROPIC_URL, ANTHROPIC_SSE, "iter_lines", False),
@@ -126,6 +127,13 @@ def run_case(name: str, url: str, body: bytes, reader: str, stop_at_done: bool) 
         (check_anthropic if "anthropic" in url else check_openai)(res)
     except AssertionError as e:
         _live_check.fail(name, f"token metadata missing from captured body: {e}")
+    marked = res.get("stream_incomplete") is True
+    if marked is not stop_at_done or ("stream_incomplete" in res) is not stop_at_done:
+        _live_check.fail(
+            name,
+            f"stream_incomplete={res.get('stream_incomplete')!r}, expected "
+            + ("True" if stop_at_done else "the field omitted"),
+        )
     print(f"PASS {name}: id and token counts captured")
 
 

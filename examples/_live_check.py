@@ -85,7 +85,7 @@ def sse_events(body: Any) -> list[dict]:
 
 
 def single_streamed_capture(name: str, records: list) -> dict:
-    """Fail unless exactly one complete streamed response was captured; return its response.
+    """Fail unless exactly one streamed response was captured; return its response.
 
     This is the sync-streaming regression check: a sync stream used to be logged with
     ``is_streaming: false`` and the placeholder body ``"[streaming]"``, so the server

@@ -29,6 +29,9 @@ class ResponseData(TypedDict, total=False):
     # Set by an interceptor that already truncated ``body`` to ``max_body_bytes``
     # (the streaming accumulator), so the client doesn't truncate it again.
     body_truncated: bool
+    # Set by an interceptor when a streamed response was abandoned before it ended
+    # and ``body`` holds only what had arrived (``raw_request.stream_incomplete``).
+    stream_incomplete: bool
 
 
 class Config(TypedDict, total=False):

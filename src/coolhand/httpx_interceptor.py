@@ -269,6 +269,9 @@ class _BoundedChunks:
     def __bool__(self) -> bool:
         return bool(self._chunks)
 
+    def clear(self) -> None:
+        self._chunks = []
+
     def joined(self) -> str:
         text = "".join(self._chunks)
         if self.truncated:
@@ -567,22 +570,17 @@ _STREAM_METHODS: tuple[tuple[str, Callable[[Any], str] | None], ...] = (
 )
 
 
-# The terminator OpenAI-compatible SSE streams end with.
-_DONE_SENTINEL = "data: [DONE]"
-_DONE_SENTINEL_TAIL = 64
-
-
 class _StreamCapture:
     """Accumulates one streamed response and reports it to the handler once.
 
     Shared by the sync and async ``send`` wrappers. Capture happens only at the
     outermost iterator layer that is running (``active``), or every chunk would be
-    recorded once per layer. The record is sent when the stream is exhausted;
-    abandoning it half way (``break``, ``close()``, a transport error) sends
-    nothing, because a cut-off body is indistinguishable from a complete one. The one
-    exception is a stream abandoned right after its own ``data: [DONE]`` terminator:
-    the OpenAI SDK stops reading there without exhausting the iterator, and the body
-    is complete by protocol. Nothing here may raise into the host's stream.
+    recorded once per layer. A stream is complete only if the wrapped iterator was
+    exhausted. Anything else that captured data (``break``, ``close()``, a cancelled
+    or garbage-collected generator, a transport error, an SDK that stops at
+    ``data: [DONE]`` without draining the iterator) is sent as it stood, marked
+    ``stream_incomplete``. The first outcome wins, so a late finalizer cannot send a
+    second record. Nothing here may raise into the host's stream.
     """
 
     def __init__(self, response: Any, req_data: RequestData, start: float) -> None:
@@ -591,29 +589,27 @@ class _StreamCapture:
         self._start = start
         self._chunks = _BoundedChunks(_max_body_bytes)
         self._decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")
-        self._tail = ""  # last captured text, kept even once the body is truncated
         self._sent = False
+        self._lock = threading.Lock()
         self.active = False
 
     def add(self, item: Any, to_text: Callable[[Any], str] | None = None) -> None:
+        if self._sent:
+            return
         try:
             text = to_text(item) if to_text else self._decoder.decode(item)
-            self._tail = (self._tail + text)[-_DONE_SENTINEL_TAIL:]
             self._chunks.append(text)
         except Exception:
             logger.debug("Streaming capture error", exc_info=True)
 
-    def abandoned(self) -> None:
-        """The consumer stopped reading: report only a stream ending on ``[DONE]``."""
-        if self._tail.rstrip().endswith(_DONE_SENTINEL):
-            self.send()
-
-    def send(self) -> None:
-        if self._sent or not self._chunks:
-            return
-        self._sent = True
+    def send(self, incomplete: bool = False) -> None:
+        with self._lock:
+            if self._sent or not self._chunks:
+                return
+            self._sent = True
         try:
-            self._chunks.append(self._decoder.decode(b"", final=True))
+            if not incomplete:
+                self._chunks.append(self._decoder.decode(b"", final=True))
             res_data: ResponseData = {
                 "status_code": self._response.status_code,
                 "headers": dict(self._response.headers),
@@ -623,10 +619,14 @@ class _StreamCapture:
                 "is_streaming": True,
                 "body_truncated": self._chunks.truncated,
             }
+            if incomplete:
+                res_data["stream_incomplete"] = True
             if _handler:
                 _handler(self._req_data, res_data, None)
         except Exception:
             logger.debug("Handler error in streaming", exc_info=True)
+        finally:
+            self._chunks.clear()
 
     def wrap_sync(
         self, orig: Callable, to_text: Callable[[Any], str] | None
@@ -636,15 +636,16 @@ class _StreamCapture:
                 yield from orig(*args, **kwargs)
                 return
             self.active = True
+            exhausted = False
             try:
                 for item in orig(*args, **kwargs):
                     if item:
                         self.add(item, to_text)
                     yield item
+                exhausted = True
             finally:
                 self.active = False
-                self.abandoned()
-            self.send()
+                self.send(incomplete=not exhausted)
 
         return capturing
 
@@ -657,15 +658,16 @@ class _StreamCapture:
                     yield item
                 return
             self.active = True
+            exhausted = False
             try:
                 async for item in orig(*args, **kwargs):
                     if item:
                         self.add(item, to_text)
                     yield item
+                exhausted = True
             finally:
                 self.active = False
-                self.abandoned()
-            self.send()
+                self.send(incomplete=not exhausted)
 
         return capturing
 
@@ -681,6 +683,19 @@ class _StreamCapture:
                 setattr(
                     self._response, name, wrap(getattr(self._response, name), to_text)
                 )
+
+    def start(self, prefix: str, wrap: Callable) -> None:
+        """Begin capturing a streaming response, or report it now if already read.
+
+        ``send(stream=False)`` reads the whole body inside ``send()``, so there is
+        nothing left to iterate and iterating it later is not an abandon.
+        """
+        content = getattr(self._response, "_content", None)
+        if isinstance(content, bytes):
+            self.add(content)
+            self.send()
+        else:
+            self.install(prefix, wrap)
 
 
 def _make_patched_send(get_original: Callable[[], Callable]) -> Callable:
@@ -715,14 +730,7 @@ def _make_patched_send(get_original: Callable[[], Callable]) -> Callable:
 
             if _is_streaming_content_type(response.headers.get("content-type", "")):
                 capture = _StreamCapture(response, req_data, start)
-                content = getattr(response, "_content", None)
-                if isinstance(content, bytes):
-                    # send(stream=False) already read the whole body, so there is
-                    # nothing left to iterate: report it now.
-                    capture.add(content)
-                    capture.send()
-                else:
-                    capture.install("iter_", capture.wrap_sync)
+                capture.start("iter_", capture.wrap_sync)
                 return response
 
             res_data: ResponseData = {
@@ -789,7 +797,7 @@ def _make_patched_async_send(get_original: Callable[[], Callable]) -> Callable:
             if is_streaming:
                 # Wrap streaming methods to capture content
                 capture = _StreamCapture(response, req_data, start)
-                capture.install("aiter_", capture.wrap_async)
+                capture.start("aiter_", capture.wrap_async)
             else:
                 # Non-streaming: send immediately
                 res_data: ResponseData = {

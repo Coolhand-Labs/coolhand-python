@@ -60,11 +60,15 @@ deploy. No human approval. Say so in the final report.
 
 1. Save the PR's current description outside the repo:
    `gh pr view <n> --json body --jq .body > /tmp/release-pr-<n>-body.md`.
-2. `gh pr merge <n> --squash --delete-branch --subject "release vX.Y.Z (#<n>)"
-   --body-file /tmp/release-pr-<n>-body.md`. This matches history (`release
-   v0.10.1 (#209)`, body = PR description). `--subject` is used verbatim, so
-   keep the `(#<n>)`. Add no attribution lines. Never `--admin` or bypass
-   checks; if the merge is refused, stop and report.
+2. `gh pr merge <n> --squash --delete-branch --admin --subject "release
+   vX.Y.Z (#<n>)" --body-file /tmp/release-pr-<n>-body.md`. This matches
+   history (`release v0.10.1 (#209)`, body = PR description). `--subject` is
+   used verbatim, so keep the `(#<n>)`. Add no attribution lines. `--admin` is
+   needed because the "only maintainers can merge" ruleset rejects a plain
+   merge, and invoking this skill is the user's authorization for it. It is
+   for that ruleset only: Phase 1 step 4 already required green checks, and
+   `--admin` is never the way past a red or pending one. If the merge is still
+   refused, stop and report.
 3. `git fetch origin main --tags`; `<sha>` is `gh pr view <n> --json
    mergeCommit --jq .mergeCommit.oid`. Re-read the three version files at
    `<sha>` and confirm they still say `X.Y.Z`.

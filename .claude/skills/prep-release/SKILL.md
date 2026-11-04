@@ -91,7 +91,15 @@ Process the user's chosen PRs one at a time, not as a batch:
    conflicts, skip it, note it in the running list as "skipped — needs
    rebase," and continue with the rest. Don't resolve conflicts on someone
    else's branch unilaterally.
-2. `gh pr merge <n> --squash --delete-branch` for each surviving PR.
+2. `gh pr merge <n> --squash --delete-branch --admin` for each surviving PR.
+   The "only maintainers can merge" ruleset on `main` rejects a plain
+   `gh pr merge` ("base branch policy prohibits the merge"), so `--admin` (the
+   maintainer bypass) is the normal path here, and the user's sign-off in
+   Phase 1 is the authorization for it. It bypasses only that ruleset, not a
+   conflict: a PR that `--admin` still can't merge ("has merge conflicts") is
+   skipped per step 1. A `mergeStateStatus` of `UNKNOWN` right after an earlier
+   merge just means GitHub is still recomputing; `--admin` merging or refusing
+   with a conflict is the real answer.
 3. After each merge, sync local `main` before evaluating the next PR.
    First check `git status --porcelain` — if it's not empty, stop and
    surface it to the user rather than discarding unknown local state;

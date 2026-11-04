@@ -550,16 +550,26 @@ def _read_response_body(response: Any) -> Any:
 # ``aclose()``, exhaustion) is deterministic and still reports synchronously.
 
 _AbandonedRecord = tuple[RequestData, ResponseData]
-_abandoned: "queue.SimpleQueue[_AbandonedRecord | None]" = queue.SimpleQueue()
+# Items: a record; ``None`` (wakes the reporter so it sees its stop flag); or an
+# ``Event`` barrier that the reporter sets once everything queued before it is done.
+_abandoned: "queue.SimpleQueue[_AbandonedRecord | threading.Event | None]" = (
+    queue.SimpleQueue()
+)
 _reporter: threading.Thread | None = None
 _reporter_stop: threading.Event | None = None
-_reporter_pid = 0
+# Lock order: _patch_lock -> _reporter_lock -> (handler's) client locks, taken in
+# that order by everything that starts or stops the reporter. Neither of the first
+# two is ever taken from a finalizer.
 _reporter_lock = threading.RLock()
 # True on a thread while the cyclic GC is running on it, i.e. while any finalizer
 # that fires on that thread is a GC finalizer. Thread-local so another thread's
-# ordinary send is never deferred by a collection running elsewhere.
+# ordinary send is never deferred by a collection running elsewhere. The callback
+# that maintains it stays registered for the process lifetime once installed: it is
+# a trivial attribute store, and removing it on unpatch() would let a late finalizer
+# of a pre-unpatch stream call the handler from inside the GC again.
 _gc_state = threading.local()
-# How long unpatch()/set_handler(None) wait for an in-flight handler call.
+# How long unpatch()/set_handler(None)/flush_abandoned() wait for an in-flight
+# handler call.
 _REPORTER_JOIN_TIMEOUT = 2.0
 
 
@@ -571,6 +581,8 @@ def _track_gc(phase: str, info: dict[str, int]) -> None:
 
 
 def _in_gc() -> bool:
+    # At interpreter shutdown ``_gc_state`` may already be None, which reads as False:
+    # a finalizer then reports synchronously, as it did before the reporter existed.
     return getattr(_gc_state, "active", False)
 
 
@@ -585,36 +597,56 @@ def _deliver_abandoned(record: _AbandonedRecord) -> None:
         logger.debug("Handler error in abandoned-stream report", exc_info=True)
 
 
+def _handle_queued(item: "_AbandonedRecord | threading.Event | None") -> None:
+    if isinstance(item, threading.Event):
+        item.set()
+    elif item is not None:
+        _deliver_abandoned(item)
+
+
 def _reporter_loop(stop: threading.Event) -> None:
     while not stop.is_set():
-        record = _abandoned.get()
-        if record is not None:  # None is only a wake-up for stop
-            _deliver_abandoned(record)
+        _handle_queued(_abandoned.get())
+
+
+def _drain_abandoned(deliver: bool) -> None:
+    """Empty the queue on the calling thread, delivering the records or not."""
+    while True:
+        try:
+            item = _abandoned.get_nowait()
+        except queue.Empty:
+            return
+        if deliver:
+            _handle_queued(item)
+        elif isinstance(item, threading.Event):
+            item.set()
+
+
+def _reporter_alive() -> bool:
+    thread = _reporter  # read once: a teardown may clear it concurrently
+    return thread is not None and thread.is_alive()
 
 
 def flush_abandoned() -> None:
-    """Deliver abandoned-stream records that are queued but not yet reported.
+    """Deliver abandoned-stream records that are queued or in flight.
 
-    Called from ``CoolhandClient.shutdown()`` so they are not lost at exit. Runs the
-    handler on the calling thread, so it must not be called from a GC finalizer.
-    Best effort: a record the reporter thread is delivering at this instant is the
-    reporter's to finish.
+    Called from ``CoolhandClient.shutdown()`` so they are not lost at exit. Waits
+    (bounded by ``_REPORTER_JOIN_TIMEOUT``) for the reporter to get through everything
+    queued ahead of a barrier, then delivers any remainder on the calling thread. Must
+    not be called from a GC finalizer.
     """
-    while True:
-        try:
-            record = _abandoned.get_nowait()
-        except queue.Empty:
-            return
-        if record is not None:
-            _deliver_abandoned(record)
-
-
-def _discard_abandoned() -> None:
-    while True:
-        try:
-            _abandoned.get_nowait()
-        except queue.Empty:
-            return
+    thread = _reporter
+    me = threading.current_thread()
+    if thread is not None and thread is not me and thread.is_alive():
+        done = threading.Event()
+        _abandoned.put(done)
+        deadline = time.monotonic() + _REPORTER_JOIN_TIMEOUT
+        while time.monotonic() < deadline:
+            if done.wait(0.02):
+                return
+            if not thread.is_alive():  # stopped after the check above
+                break
+    _drain_abandoned(deliver=True)
 
 
 def _stop_reporter_locked() -> None:
@@ -627,26 +659,29 @@ def _stop_reporter_locked() -> None:
         _abandoned.put(None)
         if thread is not threading.current_thread():
             thread.join(_REPORTER_JOIN_TIMEOUT)
-    flush_abandoned()
-    _discard_abandoned()
+    _drain_abandoned(deliver=True)
+    _drain_abandoned(deliver=False)
 
 
 def _sync_reporter() -> None:
     """Run the reporter exactly while capture is active (patched, with a handler).
 
     Idempotent; called after every state change (``set_handler``, ``patch``,
-    ``unpatch``) and when a capture begins, so a forked child gets its own thread.
+    ``unpatch``) and when a capture begins, so a forked child, or a reporter that
+    died, gets a fresh thread.
     """
-    global _reporter, _reporter_stop, _reporter_pid
-    with _reporter_lock:
-        wanted = _patched and _handler is not None
-        if not wanted:
+    global _reporter, _reporter_stop
+    with _patch_lock, _reporter_lock:
+        if not (_patched and _handler is not None):
             if _reporter is not None:
                 _stop_reporter_locked()
             return
-        if _reporter is not None and _reporter_pid == os.getpid():
+        if _reporter_alive():
             return
-        _discard_abandoned()  # nothing legitimate is queued while no reporter runs
+        # Anything queued while no reporter ran is stale (a finalizer racing a
+        # teardown, or what a reporter that died abnormally left): drop it rather
+        # than deliver it after the fact.
+        _drain_abandoned(deliver=False)
         if _track_gc not in gc.callbacks:
             gc.callbacks.append(_track_gc)
         stop = threading.Event()
@@ -660,17 +695,23 @@ def _sync_reporter() -> None:
             thread.start()
         except RuntimeError:  # interpreter is exiting
             return
-        _reporter, _reporter_stop, _reporter_pid = thread, stop, os.getpid()
+        _reporter, _reporter_stop = thread, stop
 
 
 def _reset_reporter_after_fork() -> None:
     """A forked child has no reporter thread, may inherit a lock another parent
-    thread held, and must not report the parent's queued records. The next capture
-    starts its own reporter (see ``_StreamCapture.__init__``)."""
-    global _reporter, _reporter_stop, _reporter_lock
+    thread held or its queue blocked, and must not report the parent's queued records
+    (the parent delivers them). The next capture starts its own reporter (see
+    ``_StreamCapture.__init__``); a stream inherited from the parent that is
+    finalized in the child before then is dropped rather than reported twice."""
+    global _reporter, _reporter_stop, _reporter_lock, _abandoned, _patch_lock
     _reporter = _reporter_stop = None
     _reporter_lock = threading.RLock()
-    _discard_abandoned()
+    # _sync_reporter takes this one too, on a child's first capture.
+    _patch_lock = threading.RLock()
+    # Replaced, not drained: the parent's reporter was blocked inside get() at fork
+    # time, which can leave the inherited queue's internal lock held forever.
+    _abandoned = queue.SimpleQueue()
 
 
 if hasattr(os, "register_at_fork"):
@@ -683,7 +724,7 @@ def set_handler(
     """Set the handler for captured requests (``None`` stops reporting)."""
     global _handler
     if handler is None:
-        with _reporter_lock:
+        with _patch_lock, _reporter_lock:
             # Report what is already queued while the old handler is still set.
             if _reporter is not None:
                 _stop_reporter_locked()
@@ -743,8 +784,8 @@ class _StreamCapture:
         self._sent = False
         self._lock = threading.Lock()
         self.active = False
-        if _reporter is None or _reporter_pid != os.getpid():
-            _sync_reporter()  # first capture in a forked child
+        if not _reporter_alive():
+            _sync_reporter()  # first capture in a forked child, or a dead reporter
 
     def add(self, item: Any, to_text: Callable[[Any], str] | None = None) -> None:
         if self._sent:
@@ -756,6 +797,7 @@ class _StreamCapture:
             logger.debug("Streaming capture error", exc_info=True)
 
     def send(self, incomplete: bool = False) -> None:
+        in_gc = _in_gc()
         with self._lock:
             if self._sent or not self._chunks:
                 return
@@ -774,7 +816,7 @@ class _StreamCapture:
             }
             if incomplete:
                 res_data["stream_incomplete"] = True
-            if _in_gc():
+            if in_gc:
                 # Finalized by the cyclic GC, possibly while this very thread holds
                 # a lock the handler needs: hand off, never call the handler here.
                 # No logging either, it takes locks too. With no reporter running
@@ -784,7 +826,7 @@ class _StreamCapture:
             elif _handler:
                 _handler(self._req_data, res_data, None)
         except Exception:
-            if not _in_gc():
+            if not in_gc:
                 logger.debug("Handler error in streaming", exc_info=True)
         finally:
             self._chunks.clear()

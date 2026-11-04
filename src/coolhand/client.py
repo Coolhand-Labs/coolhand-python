@@ -826,6 +826,14 @@ class CoolhandClient:
         called mid-program rather than right before process exit).
         """
         logger.info("Shutting down Coolhand...")
+        # Abandoned streams reach the handler through a reporter thread; hand over
+        # any it has not delivered yet so the flush below includes them.
+        try:
+            from . import httpx_interceptor
+
+            httpx_interceptor.flush_abandoned()
+        except Exception:
+            logger.debug("Could not drain abandoned-stream records", exc_info=True)
         self.flush()
 
         # Guards a narrow race: something enqueued directly onto the dispatch

@@ -49,13 +49,32 @@ an individual PR's diff already contains.
      — weight those higher regardless of size; failing CI checks or a
      non-clean `mergeable` state also push risk up; an isolated additive
      feature or docs-only change is lower risk.
-3. Present one table: PR number, title, quality, risk, CI status,
-   mergeable state, and a one-line recommendation (include / exclude /
-   needs work before it can be considered). Call out anything that looks
+3. **Classify each PR's author** and record it in a running contributor
+   list that Phase 3 and Phase 5 reuse:
+   - **bot**: `author.is_bot` (Dependabot and the like). Never thanked.
+   - **team**: `gh api repos/{owner}/{repo}/pulls/<n> --jq .author_association`
+     is `MEMBER`, `OWNER` or `COLLABORATOR`.
+   - **outside contributor**: anyone else. Also flag the PR as coming from a
+     fork (`isCrossRepository`) when it does.
+   - **first-time contributor** (a subset of outside): the login has no
+     commit on `main` at or before the last tag —
+     `gh api "repos/{owner}/{repo}/commits?author=<login>&until=<last-tag-date>"`
+     returns `[]` and `gh pr list --state merged --author <login>` is empty.
+     Decide this now, before Phase 2 merges anything: once their PR is
+     merged they stop looking new. Record the GitHub `login` (for the
+     `@mention`) and the PR number(s).
+4. Present one table: PR number, title, **author** (login plus `team`, `bot`,
+   `outside contributor` or `first-time contributor`), quality, risk, CI
+   status, mergeable state, and a one-line recommendation (include / exclude /
+   needs work before it can be considered). Below the table, list every
+   outside and first-time contributor by `@login` with the PR they sent, so
+   the user sees them without scanning. An outside PR has no CI run until a
+   maintainer approves its workflows — say so instead of rating CI as
+   passing. Call out anything that looks
    unfinished — draft, a WIP-sounding title, failing checks, an empty or
    placeholder description, visible `TODO`/`FIXME` in the diff — as
    "exclude, not ready" rather than rating it neutrally.
-4. Stop here and ask the user which PRs to include in this release. This
+5. Stop here and ask the user which PRs to include in this release. This
    is the one planned decision point in the whole skill — do not merge,
    write changelog entries, or touch the version files until the user
    answers. (Phase 2 step 3 below has its own unplanned-error stop for an
@@ -72,7 +91,15 @@ Process the user's chosen PRs one at a time, not as a batch:
    conflicts, skip it, note it in the running list as "skipped — needs
    rebase," and continue with the rest. Don't resolve conflicts on someone
    else's branch unilaterally.
-2. `gh pr merge <n> --squash --delete-branch` for each surviving PR.
+2. `gh pr merge <n> --squash --delete-branch --admin` for each surviving PR.
+   The "only maintainers can merge" ruleset on `main` rejects a plain
+   `gh pr merge` ("base branch policy prohibits the merge"), so `--admin` (the
+   maintainer bypass) is the normal path here, and the user's sign-off in
+   Phase 1 is the authorization for it. It bypasses only that ruleset, not a
+   conflict: a PR that `--admin` still can't merge ("has merge conflicts") is
+   skipped per step 1. A `mergeStateStatus` of `UNKNOWN` right after an earlier
+   merge just means GitHub is still recomputing; `--admin` merging or refusing
+   with a conflict is the real answer.
 3. After each merge, sync local `main` before evaluating the next PR.
    First check `git status --porcelain` — if it's not empty, stop and
    surface it to the user rather than discarding unknown local state;
@@ -106,13 +133,28 @@ never on `main` directly.
      existing entries (bolded one-liner followed by a detailed paragraph;
      section headers drawn from `### Added` / `### Fixed` / `### Security`
      / `### Changed` / `### Breaking changes` / `### Notes` / `### Removed`
-     / `### Internal` as appropriate) — plain-English migration notes for
+     / `### Internal` / `### Thanks` as appropriate) — plain-English migration notes for
      anything behavior-affecting. Attribute each entry to its PR number
      where one exists: check Phase 2's merge list first, then fall back to
      the squash-merge commit message (`git log --grep`, which carries the
      PR number in its title) for anything not merged in this run. If a
      change genuinely has no discoverable PR (a direct commit to `main`),
      write the entry without one rather than skipping it.
+   - **Credit outside contributors.** For every change from an outside
+     contributor (the Phase 1 list; for changes not merged in this run, look
+     the author up from the PR, `gh pr view <n> --json author`, and classify
+     as in Phase 1 step 3), put `thanks @login` next to the PR number on that
+     entry's bolded one-liner, e.g. `(#236, thanks @login)`. Then end the
+     version's section with a `### Thanks` heading (last, after
+     `### Internal`) that names each outside contributor and what they sent.
+     For a first-time contributor, add a shout-out saying it is their first
+     contribution to this package and welcoming them, e.g. "Welcome and
+     thank you to @login, whose first contribution to coolhand-python, #236,
+     keeps a successful response when capturing it fails." Contributors
+     who have landed before get the thanks without the first-time line. Skip
+     bots and team members, and omit `### Thanks` when there is nothing to put
+     in it. The GitHub release body is this section verbatim, so the
+     `@mention` and the thanks reach the release notes without a second copy.
    - `README.md` / `docs/*.md` — any new config option, public method, or
      behavior change needs the relevant section updated. Follow this
      repo's docs philosophy from `AGENTS.md`: the README stays a scannable
@@ -329,6 +371,9 @@ the same "hand it to a human" rule `/loop-review` uses for stuck findings.
    tag it, or run `make build`/`make publish` yourself.
 2. Report one consolidated summary covering the whole run:
    - Phase 1's PR table and which PRs the user chose.
+- Outside and first-time contributors in this release, by `@login` and PR,
+  and where their credit landed in `CHANGELOG.md` (the `thanks @login` entry
+  and the `### Thanks` section).
    - Phase 2's outcome: which PRs merged, which were skipped for new
      conflicts (and need a rebase before the next release).
    - The release-prep PR link, the version bump and why.

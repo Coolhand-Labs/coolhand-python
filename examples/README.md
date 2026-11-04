@@ -7,6 +7,7 @@ Run any example from the repo root with `uv run python examples/<name>.py`.
 | `basic_usage.py` | Manual initialization, `log_interaction`, feedback, shutdown (placeholder key) |
 | `auto_monitor_example.py` | Zero-config monitoring (simulated provider calls) |
 | `streaming_capture.py` | Offline pass/fail check: sync SSE streams are captured with their message id and token counts (no keys) |
+| `abandoned_stream.py` | Offline pass/fail check: streams abandoned part-way (`break`, `close()`, async `break`, cancelled task) reach Coolhand with `stream_incomplete: true`, completed ones without it (no keys) |
 | `dramatiq_pydantic_ai.py` | Dramatiq + pydantic-ai, see [docs/dramatiq.md](../docs/dramatiq.md) |
 | `band-guesser/` | FastAPI app, see its own README |
 | `live_openai.py`, `live_anthropic.py` | Live smoke tests, below |
@@ -19,6 +20,18 @@ exits 1 unless the captured record has `is_streaming: true` and a body with the 
 
 ```bash
 uv run python examples/streaming_capture.py
+```
+
+## Abandoned stream check
+
+`abandoned_stream.py` needs no keys and no outside network. It streams OpenAI-shaped SSE bodies through the real
+interceptor and the real Coolhand client, which delivers to a throwaway local HTTP server standing in for the Coolhand
+API, and exits 1 unless that server receives exactly one log per call: the partial body with `stream_incomplete: true`
+for a sync `break`, a sync `close()`, an async `break` and a cancelled task, and the whole body with no marker for a
+stream read to the end.
+
+```bash
+uv run python examples/abandoned_stream.py
 ```
 
 ## Live smoke tests

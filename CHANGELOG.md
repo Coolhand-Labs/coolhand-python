@@ -4,6 +4,25 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [0.12.0] - 2026-11-04
+
+### Added
+- **See why your requests fail: `failure_summary`.** New `Coolhand.failure_summary(days_back=None)` (and `LogService.failure_summary`) calls `GET /api/v2/llm_request_logs/failure_summary` with the private key and returns the failure rate, error patterns, a per-template breakdown and an actionable summary. `days_back` is sent only when given and is not validated client-side, so the server's 422 reaches you; a non-2xx response raises `CoolhandAPIError` with `.status` (401, 422, 504), like the other read methods. The response types (`FailureSummaryResponse`, `FailureErrorPattern`, `FailureTemplateBreakdown`, `FailureActionableSummary`, `FailureCategory`) are exported from the package root. See [docs/logs.md](./docs/logs.md). (#244)
+- **`search_logs(error_contains=...)` lists the logs behind an error.** It maps to the `error_contains` query parameter, a case-insensitive substring of the failed request's error text. Pass a failure summary's `error_pattern` to get the logs that produced it. (#244)
+
+### Changed
+- **Streamed responses your code stops reading early are now sent, marked `stream_incomplete`.** A stream abandoned before it ends (a `break`, `close()`/`aclose()`, a cancelled task, a dropped connection, or an SDK that stops at `data: [DONE]` without draining the iterator) used to be dropped or, for the v0.11.1 `[DONE]` special case, reported as if complete. One rule now replaces that special case: a stream is complete only if the wrapped iterator was exhausted, and anything else that captured data is sent once with `raw_request.stream_incomplete: true` and the partial body. A stream read to the end is sent without the field. Sync and async (`httpx`, `httpx2`) are handled separately, each logs exactly one record per call, and no tokens, cost or latency are computed client-side. The marker is independent of `max_body_bytes`: a truncated body read to the end is not marked, an abandoned one is. **Migration:** nothing to change in your code. Because the OpenAI SDK stops at `[DONE]`, every OpenAI stream is now marked, so the backend nulls latency for all of them; token counts survive only with `stream_options={"include_usage": True}`. Requires the server-side support (already deployed). `requests` and the Copilot interceptor are unchanged. See [Abandoned streams](./docs/supported-libraries.md#abandoned-streams-stream_incomplete). (#245)
+
+### Fixed
+- **A successful response is no longer lost when capturing it fails.** If instrumentation raised while reading or recording a response (`httpx`, `httpx2`, sync and async, and `requests.Session.send`), the error handler recorded it as a failed HTTP request and re-raised it, so a request that had succeeded raised in the caller's code and the response was lost. The response is now returned unchanged, and the capture failure is logged at debug level without being recorded as a request error. (#236, thanks @mikemikimike)
+
+### Internal
+- `examples/abandoned_stream.py` (offline, no keys) guards the abandoned-stream change end to end: it streams through the real interceptor and Coolhand client to a throwaway local server and fails unless a sync `break`, a sync `close()`, an async `break` and a cancelled task each arrive once with the partial body and `stream_incomplete: true`, and completed streams arrive whole with no marker. It runs in `make verify` through `tests/test_live_examples.py`.
+- Dependency and CI action bumps, all dev/CI-only (none changes the runtime dependencies of the published package): `fastmcp-slim` 3.4.2 → 3.4.10 (#235), `mypy` 2.4.0 → 2.4.1 (#242), `pytest` 9.1.1 → 9.2.0 (#241), `ruff` 0.17.2 → 0.17.3 (#240), `virtualenv` 21.14.9 → 21.14.13 (#227) and `astral-sh/setup-uv` 10.3.2 → 10.3.3 (#239).
+
+### Thanks
+- Welcome and thank you to @mikemikimike, whose first contribution to coolhand-python, #236, keeps a successful response intact when capturing it fails.
+
 ## [0.11.1] - 2026-10-27
 
 ### Fixed

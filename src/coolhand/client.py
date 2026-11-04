@@ -179,6 +179,31 @@ SENSITIVE_BODY_KEY_TOKENS = (
 
 DATA_SOURCE_FIELDS = ("data_sources", "dataSources")
 
+# Credential-bearing body fields outside the Azure subtree, matched by exact
+# (case-insensitive) name. Deliberately NOT substring matching: "token" or "key"
+# would mangle max_tokens, key_points and the like. Covers Anthropic
+# ``mcp_servers[].authorization_token``, OpenAI Responses MCP tools'
+# ``authorization``, and the ``client_secret`` of a realtime ephemeral key.
+_SECRET_BODY_KEYS = frozenset(
+    {
+        "authorization_token",
+        "authorization",
+        "client_secret",
+        "api_key",
+        "apikey",
+        "access_token",
+        "bearer_token",
+    }
+)
+# A ``headers`` dict beside one of these keys is an MCP server definition.
+_MCP_URL_KEYS = frozenset({"server_url", "url"})
+_REDACTED = "[REDACTED]"
+# Stands in for a body that could not be redacted or parsed safely.
+_UNSANITIZABLE_BODY = "[REDACTED: body could not be sanitized]"
+# Real payloads nest a few dozen levels at most (tool schemas); deeper than this is
+# hostile or broken input, and recursing on it risks RecursionError.
+_MAX_REDACT_DEPTH = 100
+
 
 def _get_default_config() -> Config:
     """Get default configuration from environment."""
@@ -268,10 +293,8 @@ def _redact_secret_keys(value: Any) -> Any:
     return value
 
 
-def _sanitize_body(body: str | dict | None) -> str | dict | None:
-    """Redact credentials embedded in a parsed JSON body."""
-    if not isinstance(body, dict):
-        return body
+def _redact_data_sources(body: dict) -> dict:
+    """Redact Azure OpenAI data-source credentials in a dict body."""
     present = [f for f in DATA_SOURCE_FIELDS if f in body]
     if not present:
         return body
@@ -287,6 +310,74 @@ def _sanitize_body(body: str | dict | None) -> str | dict | None:
         for field in present:
             sanitized[field] = "[REDACTED]"
         return sanitized
+
+
+def _redact_known_secret_fields(value: Any, depth: int = 0) -> Any:
+    """Redact well-known credential fields anywhere in a parsed JSON body.
+
+    Walks dicts and lists (and tuples, which a non-JSON caller such as the Copilot
+    interceptor may hand over). Never mutates its input: a container is copied
+    only when something inside it changed, so an ordinary body is returned as the
+    same object. Raises ``ValueError`` past ``_MAX_REDACT_DEPTH`` so the caller
+    fails closed rather than recursing on hostile input.
+    """
+    if depth > _MAX_REDACT_DEPTH:
+        raise ValueError("body nested too deeply to redact")
+    if isinstance(value, dict):
+        out: dict | None = None
+        sibling_keys: set[str] | None = None
+        for k, x in value.items():
+            lowered = k.lower() if isinstance(k, str) else None
+            if lowered in _SECRET_BODY_KEYS and not (
+                isinstance(x, dict) and "type" in x
+            ):
+                # A dict value with a "type" is a tool/JSON-schema property that
+                # merely shares the name ({"authorization": {"type": "string"}}),
+                # not a credential. It falls through to be walked, so a secret
+                # nested inside it is still caught.
+                new: Any = _REDACTED
+            elif lowered == "headers" and isinstance(x, dict):
+                if sibling_keys is None:
+                    sibling_keys = {sk.lower() for sk in value if isinstance(sk, str)}
+                if sibling_keys & _MCP_URL_KEYS:
+                    # MCP server definition: every header value is a credential
+                    # candidate (custom auth headers have no fixed name).
+                    new = {name: _REDACTED for name in x}
+                else:
+                    new = _redact_known_secret_fields(x, depth + 1)
+            else:
+                new = _redact_known_secret_fields(x, depth + 1)
+            if new is not x:
+                if out is None:
+                    out = dict(value)
+                out[k] = new
+        return value if out is None else out
+    if isinstance(value, (list, tuple)):
+        items = [_redact_known_secret_fields(i, depth + 1) for i in value]
+        if all(n is o for n, o in zip(items, value, strict=True)):
+            return value
+        return items if isinstance(value, list) else tuple(items)
+    return value
+
+
+def _sanitize_body(body: str | dict | list | None) -> str | dict | list | None:
+    """Redact credentials embedded in a parsed JSON body.
+
+    Two passes: the Azure ``data_sources`` subtree (any key that looks like a
+    credential), then a narrow by-name pass over the whole body. Only parsed
+    JSON is walked; a body that did not parse (a streamed/SSE transcript, plain
+    text) is returned as is.
+    """
+    if not isinstance(body, (dict, list)):
+        return body
+    try:
+        if isinstance(body, dict):
+            body = _redact_data_sources(body)
+        return _redact_known_secret_fields(body)
+    except Exception:
+        # Fail closed: if redaction itself breaks (e.g. hostile nesting), drop the
+        # whole body rather than forward a partly redacted one.
+        return _UNSANITIZABLE_BODY
 
 
 def _parse_body(body: str | bytes | dict | None) -> str | dict | None:
@@ -309,6 +400,10 @@ def _parse_body(body: str | bytes | dict | None) -> str | dict | None:
     if isinstance(body, str):
         try:
             return json.loads(body)
+        except RecursionError:
+            # Nested past what the parser accepts. It is JSON we cannot walk, so
+            # returning the raw text would forward it unredacted: fail closed.
+            return _UNSANITIZABLE_BODY
         except Exception:
             return body
 

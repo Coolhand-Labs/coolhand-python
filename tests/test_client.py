@@ -380,6 +380,276 @@ class TestSanitizeBody:
         assert "super-secret" not in json.dumps(result)
 
 
+def _nested(depth: int, leaf: dict) -> dict:
+    """A dict wrapped in ``depth`` levels of single-key dicts."""
+    value = leaf
+    for _ in range(depth):
+        value = {"a": value}
+    return value
+
+
+class TestSanitizeBodyKnownSecrets:
+    """Tests for the by-name credential pass (issue #249)."""
+
+    def test_redacts_anthropic_mcp_authorization_token(self):
+        body = {
+            "model": "claude-sonnet-4-5",
+            "max_tokens": 1024,
+            "mcp_servers": [
+                {
+                    "type": "url",
+                    "url": "https://mcp.example.com/sse",
+                    "name": "example",
+                    "authorization_token": "SECRET-ANTHROPIC-TOKEN",
+                }
+            ],
+        }
+        result = _sanitize_body(body)
+
+        server = result["mcp_servers"][0]
+        assert server["authorization_token"] == "[REDACTED]"
+        assert "SECRET-ANTHROPIC-TOKEN" not in json.dumps(result)
+        # Neighbouring fields, including max_tokens, are not touched.
+        assert server["url"] == "https://mcp.example.com/sse"
+        assert result["max_tokens"] == 1024
+        # The caller's dict is never mutated.
+        assert body["mcp_servers"][0]["authorization_token"] == (
+            "SECRET-ANTHROPIC-TOKEN"
+        )
+
+    def test_redacts_openai_responses_mcp_authorization_and_headers(self):
+        body = {
+            "model": "gpt-4.1",
+            "tools": [
+                {
+                    "type": "mcp",
+                    "server_label": "deepwiki",
+                    "server_url": "https://mcp.example.com/mcp",
+                    "authorization": "SECRET-OAUTH-TOKEN",
+                    "headers": {
+                        "Authorization": "Bearer SECRET-HEADER",
+                        "X-Custom-Auth": "SECRET-CUSTOM",
+                    },
+                }
+            ],
+        }
+        result = _sanitize_body(body)
+
+        tool = result["tools"][0]
+        assert tool["authorization"] == "[REDACTED]"
+        # Every header value goes: custom auth headers have no fixed name.
+        assert tool["headers"] == {
+            "Authorization": "[REDACTED]",
+            "X-Custom-Auth": "[REDACTED]",
+        }
+        dumped = json.dumps(result)
+        for secret in ("SECRET-OAUTH-TOKEN", "SECRET-HEADER", "SECRET-CUSTOM"):
+            assert secret not in dumped
+        assert tool["server_url"] == "https://mcp.example.com/mcp"
+
+    def test_redacts_headers_beside_url_key(self):
+        """Anthropic-style definitions use ``url`` rather than ``server_url``."""
+        body = {"url": "https://mcp.example.com", "headers": {"X-Api": "SECRET"}}
+        assert _sanitize_body(body)["headers"] == {"X-Api": "[REDACTED]"}
+
+    def test_leaves_headers_without_url_sibling(self):
+        """A bare ``headers`` field is not an MCP definition and is left alone."""
+        body = {"headers": {"X-Trace": "abc"}, "model": "gpt-4o"}
+        assert _sanitize_body(body) is body
+
+    def test_redacts_realtime_client_secret_in_response(self):
+        body = {
+            "id": "sess_1",
+            "model": "gpt-realtime",
+            "client_secret": {"value": "ek_SECRET-EPHEMERAL", "expires_at": 1},
+        }
+        result = _sanitize_body(body)
+
+        assert result["client_secret"] == "[REDACTED]"
+        assert "ek_SECRET-EPHEMERAL" not in json.dumps(result)
+        assert result["model"] == "gpt-realtime"
+
+    @pytest.mark.parametrize(
+        "key",
+        [
+            "authorization_token",
+            "authorization",
+            "client_secret",
+            "api_key",
+            "apikey",
+            "access_token",
+            "bearer_token",
+        ],
+    )
+    def test_each_listed_key_is_redacted(self, key):
+        assert _sanitize_body({key: "SECRET"}) == {key: "[REDACTED]"}
+
+    @pytest.mark.parametrize(
+        "key", ["Authorization", "AUTHORIZATION_TOKEN", "Client_Secret", "apiKey"]
+    )
+    def test_key_matching_is_case_insensitive(self, key):
+        assert _sanitize_body({key: "SECRET"}) == {key: "[REDACTED]"}
+
+    def test_does_not_over_redact_similar_names(self):
+        """Exact names only: no substring matching on 'token' or 'key'."""
+        body = {
+            "max_tokens": 100,
+            "key_points": ["a"],
+            "token_count": 3,
+            "authorized": True,
+            "secret_santa": "x",
+        }
+        assert _sanitize_body(body) is body
+
+    def test_tool_schema_property_named_authorization_is_not_mangled(self):
+        body = {
+            "tools": [
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "call_api",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {
+                                "authorization": {
+                                    "type": "string",
+                                    "description": "Bearer token to use",
+                                },
+                                "api_key": {"type": "string"},
+                            },
+                            "required": ["authorization"],
+                        },
+                    },
+                }
+            ]
+        }
+        result = _sanitize_body(body)
+
+        assert result == body
+        props = result["tools"][0]["function"]["parameters"]["properties"]
+        assert props["authorization"]["type"] == "string"
+
+    def test_schema_property_guard_still_walks_nested_values(self):
+        """A dict with a ``type`` is not itself redacted, but is still searched."""
+        body = {"authorization": {"type": "string", "client_secret": "SECRET"}}
+        result = _sanitize_body(body)
+
+        assert result["authorization"]["type"] == "string"
+        assert result["authorization"]["client_secret"] == "[REDACTED]"
+
+    def test_redacts_secrets_nested_in_lists_and_dicts(self):
+        body = {
+            "input": [
+                {"role": "user", "content": "hi"},
+                [{"deep": [{"access_token": "SECRET-1"}]}],
+            ],
+            "metadata": {"nested": {"bearer_token": "SECRET-2"}},
+        }
+        result = _sanitize_body(body)
+
+        assert "SECRET-1" not in json.dumps(result)
+        assert "SECRET-2" not in json.dumps(result)
+        assert result["input"][0] == {"role": "user", "content": "hi"}
+
+    def test_top_level_list_body_is_walked(self):
+        body = [{"api_key": "SECRET"}, {"ok": 1}]
+        assert _sanitize_body(body) == [{"api_key": "[REDACTED]"}, {"ok": 1}]
+
+    def test_non_string_keys_are_skipped_not_crashed(self):
+        body = {1: {"api_key": "SECRET"}, "authorization": "SECRET"}
+        result = _sanitize_body(body)
+
+        assert result[1] == {"api_key": "[REDACTED]"}
+        assert result["authorization"] == "[REDACTED]"
+
+    def test_data_source_pass_still_runs_first(self):
+        body = {
+            "data_sources": [{"parameters": {"authentication": {"key": "SECRET-A"}}}],
+            "authorization": "SECRET-B",
+        }
+        dumped = json.dumps(_sanitize_body(body))
+
+        assert "SECRET-A" not in dumped
+        assert "SECRET-B" not in dumped
+
+    def test_deeply_nested_payload_within_limit_is_redacted(self):
+        body = _nested(90, {"authorization_token": "SECRET"})
+        assert "SECRET" not in json.dumps(_sanitize_body(body))
+
+    def test_hostile_nesting_fails_closed(self):
+        """Past the depth limit the whole body is dropped, not partly forwarded."""
+        body = _nested(500, {"authorization_token": "SECRET"})
+        result = _sanitize_body(body)
+
+        assert result == "[REDACTED: body could not be sanitized]"
+
+    def test_hostile_nesting_in_raw_json_fails_closed(self):
+        """json.loads itself gives up on extreme nesting; the text must not leak."""
+        raw = '{"a":' * 100_000 + '{"authorization_token": "SECRET"}' + "}" * 100_000
+        result = _sanitize_body(_parse_body(raw))
+
+        assert result == "[REDACTED: body could not be sanitized]"
+
+    def test_fails_closed_when_redaction_raises(self, monkeypatch):
+        def boom(*_args, **_kwargs):
+            raise RuntimeError("redaction broke")
+
+        monkeypatch.setattr("coolhand.client._redact_known_secret_fields", boom)
+        result = _sanitize_body({"authorization": "SECRET"})
+
+        assert result == "[REDACTED: body could not be sanitized]"
+
+    def test_non_json_bodies_pass_through(self):
+        """Unparsed text (e.g. an SSE transcript) is out of scope and unchanged."""
+        sse = 'data: {"client_secret": {"value": "x"}}\n\n'
+        assert _sanitize_body(sse) == sse
+
+    def test_log_interaction_redacts_request_and_response(self, reset_global_instance):
+        """End to end: raw JSON text in, redacted bodies queued."""
+        client = CoolhandClient(auto_submit=False, silent=True)
+        request_body = json.dumps(
+            {"mcp_servers": [{"url": "https://m", "authorization_token": "SECRET-REQ"}]}
+        )
+        response_body = json.dumps({"client_secret": {"value": "SECRET-RES"}})
+        client.log_interaction(
+            {
+                "method": "POST",
+                "url": "https://api.openai.com/v1/realtime/sessions",
+                "body": request_body,
+            },
+            {"status_code": 200, "body": response_body},
+        )
+
+        queued = client._queue[0]
+        assert queued["request_body"]["mcp_servers"][0]["authorization_token"] == (
+            "[REDACTED]"
+        )
+        assert queued["response_body"] == {"client_secret": "[REDACTED]"}
+        assert "SECRET" not in json.dumps(queued)
+
+    def test_log_interaction_fails_closed_on_unredactable_body(
+        self, reset_global_instance, monkeypatch
+    ):
+        def boom(*_args, **_kwargs):
+            raise RuntimeError("redaction broke")
+
+        monkeypatch.setattr("coolhand.client._redact_known_secret_fields", boom)
+        client = CoolhandClient(auto_submit=False, silent=True)
+        client.log_interaction(
+            {
+                "method": "POST",
+                "url": "https://api.openai.com/v1/x",
+                "body": json.dumps({"authorization": "SECRET"}),
+            },
+            {"status_code": 200, "body": json.dumps({"client_secret": "SECRET"})},
+        )
+
+        queued = client._queue[0]
+        assert "SECRET" not in json.dumps(queued)
+        assert queued["request_body"] == "[REDACTED: body could not be sanitized]"
+        assert queued["response_body"] == "[REDACTED: body could not be sanitized]"
+
+
 class TestParseBody:
     """Tests for _parse_body function."""
 

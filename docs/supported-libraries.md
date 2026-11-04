@@ -97,6 +97,21 @@ See [Excluding API Patterns](./configuration.md#excluding-api-patterns).
 
 Azure OpenAI's [On Your Data](https://learn.microsoft.com/azure/ai-foundry/openai/concepts/use-your-data) feature carries datastore credentials in the request body (`data_sources[*].parameters.authentication.key`) rather than in a header. Those are redacted before capture, scoped to the `data_sources` config subtree so message content is logged verbatim.
 
+### Credentials in request and response bodies
+
+After that step, a narrow redaction pass runs over every captured JSON request and response body (nested objects and arrays included). A field is replaced with `"[REDACTED]"` when its name is one of the following, compared case-insensitively:
+
+`authorization_token`, `authorization`, `client_secret`, `api_key`, `apikey`, `access_token`, `bearer_token`
+
+This covers Anthropic `mcp_servers[].authorization_token`, OpenAI Responses MCP tool `authorization`, and the `client_secret` of a realtime ephemeral key in a response. In an MCP server definition (an object with a `server_url` or `url` field), every value in its `headers` object is redacted too.
+
+Deliberate limits:
+
+- Names are matched exactly, never as substrings, so `max_tokens` and `key_points` are untouched.
+- A tool or JSON-schema property that is merely named `authorization` (its value is an object with a `type`) is left intact, although credentials nested inside it are still redacted.
+- Only bodies that parse as JSON are walked. A streamed (server-sent events) response, plain text, or a JSON document stored inside a string field (such as a function call's `arguments`) is captured as is.
+- A body nested more than 100 levels deep, or one that otherwise cannot be redacted, is replaced whole with `"[REDACTED: body could not be sanitized]"` rather than forwarded. The request your app sends is never changed.
+
 Non-inference management traffic is filtered by the deny-list rather than the allow-list. Azure OpenAI's `/openai/files`, `/openai/batches`, `/openai/fine_tuning` and `/openai/models` paths are excluded by default, as are their v1 API twins (`/openai/v1/...`) and the equivalent Vertex AI training, dataset and pipeline paths. Fine-tuning file uploads and `client.models.list()` calls therefore aren't captured.
 
 To override: pass `intercept_addresses=[...]` to `Coolhand()`. See [Advanced Configuration](./configuration.md#custom-intercept-addresses).

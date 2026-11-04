@@ -406,6 +406,63 @@ class SearchLogsResponse(TypedDict):
     pagination: LogPagination
 
 
+# Who the fix belongs to, as `GET /api/v2/llm_request_logs/failure_summary` sorts it.
+FailureCategory = Literal[
+    "client_error",
+    "rate_limit",
+    "server_error",
+    "provider_error",
+    "relayed_upstream",
+]
+
+
+class FailureErrorPattern(TypedDict):
+    """One entry of `FailureSummaryResponse["error_breakdown"]`."""
+
+    error_pattern: str  # Pass as `error_contains` to `search_logs` to list its logs
+    source_api: str | None
+    count: int
+    first_seen_at: str  # ISO-8601 UTC
+    last_seen_at: str  # ISO-8601 UTC
+    category: FailureCategory
+    example_error_details: str
+    example_log_ids: list[str]  # Up to 3
+    example_log_urls: list[str]
+
+
+class FailureTemplateBreakdown(TypedDict):
+    """One entry of `FailureSummaryResponse["by_template"]`."""
+
+    template_id: str | None  # Hashid; None for logs with no assigned template
+    template_name: str
+    failed_count: int
+    # The definition types the items only as `object`; `category`, `count`, `error`
+    # and `source_api` are what the server sends today.
+    error_patterns: list[dict[str, Any]]
+    example_log_ids: list[str]
+    example_log_urls: list[str]
+
+
+class FailureActionableSummary(TypedDict):
+    """`client_fixable_count` / `server_side_count` across every pattern."""
+
+    client_fixable_count: int
+    server_side_count: int
+
+
+class FailureSummaryResponse(TypedDict):
+    """Result of `LogService.failure_summary`."""
+
+    client_id: str
+    client_name: str
+    days_analyzed: int
+    total_failed_count: int
+    provider_outage_excluded_count: int
+    error_breakdown: list[FailureErrorPattern]  # The 50 most frequent patterns
+    by_template: list[FailureTemplateBreakdown]
+    actionable_summary: FailureActionableSummary
+
+
 class LlmRequestLogContent(TypedDict, total=False):
     """A log from `GET /api/v2/llm_request_logs/{id}`.
 

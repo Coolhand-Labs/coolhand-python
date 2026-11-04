@@ -265,7 +265,7 @@ Invalid declarations raise `ValueError` before your code runs. `WorkloadService.
 
 ## Reading Workloads and Cost Metrics
 
-`search_workloads` lists your workloads, and `include_metrics` adds the dashboard's cost and performance numbers to workloads and templates, over a rolling `days_back` window or an explicit `since`/`until` one. `search_logs` returns a per-log `cost` and can filter and sort on it. All need your **private** API key:
+`search_workloads` lists your workloads, and `include_metrics` adds the dashboard's cost and performance numbers to workloads and templates, over a rolling `days_back` window or an explicit `since`/`until` one. `search_logs` returns a per-log `cost` and can filter and sort on it, and `failure_summary` rolls failed requests up by error pattern. All need your **private** API key:
 
 ```python
 from datetime import datetime, timezone
@@ -278,9 +278,14 @@ logs = ch.search_logs(
     min_cost=0.5,
     order='cost_desc',
 )['logs']
+
+summary = ch.failure_summary(days_back=30)
+if summary['error_breakdown']:
+    pattern = summary['error_breakdown'][0]['error_pattern']
+    failed = ch.search_logs(error_contains=pattern, days_back=30)['logs']
 ```
 
-See [Reading Workloads](./docs/workloads.md) for the workload reference, [Reading Templates](./docs/templates.md#metrics) for the `metrics` fields and window rules, and [Reading Logs](./docs/logs.md) for log search and `get_log`.
+See [Reading Workloads](./docs/workloads.md) for the workload reference, [Reading Templates](./docs/templates.md#metrics) for the `metrics` fields and window rules, and [Reading Logs](./docs/logs.md) for log search, `get_log` and `failure_summary`.
 
 ## Reading the Help Center
 
@@ -364,7 +369,7 @@ See [Verifying Interception in Your Tests](./docs/testing.md) for what it catche
 - [Declared Workloads and Templates](./docs/declared-workloads.md) — declare the workload/template of captured calls with `with_context`, and create or rename them with `upsert` (private API key)
 - [Examples and live smoke tests](./examples/README.md) — runnable examples, plus `make live-examples` to validate OpenAI and Anthropic calls against real keys
 - [Reading Workloads](./docs/workloads.md) — list workloads with cost and performance metrics over a rolling or explicit window
-- [Reading Logs](./docs/logs.md) — search logs by cost, time window and more, and fetch one log's content and cost breakdown
+- [Reading Logs](./docs/logs.md) — search logs by cost, time window and more, and fetch one log's content and cost breakdown, summarize failures by error pattern
 - [Reading the Help Center](./docs/help-center.md) — search and read Coolhand's help center articles with `HelpCenterDocs`, no API key required
 
 ## Related Packages

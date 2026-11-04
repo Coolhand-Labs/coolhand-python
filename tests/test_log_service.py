@@ -6,7 +6,7 @@ from urllib.parse import urlparse
 import pytest
 
 from coolhand import Coolhand, CoolhandAPIError, LogService
-from coolhand.log_service import LOGS_ENDPOINT
+from coolhand.log_service import FAILURE_SUMMARY_ENDPOINT, LOGS_ENDPOINT
 
 from .fake_transport import (
     BASE_URL,
@@ -58,6 +58,7 @@ ALL_SEARCH_ARGS = {
     "workload_id": "wkld1",
     "system_prompt_contains": "sys",
     "user_prompt_contains": "usr",
+    "error_contains": "rate limit",
     "model": "gpt-4o",
     "source_api": "openai",
     "source_api_result": "failed",
@@ -81,6 +82,7 @@ ALL_SEARCH_QUERY = {
     "workload_id": ["wkld1"],
     "system_prompt_contains": ["sys"],
     "user_prompt_contains": ["usr"],
+    "error_contains": ["rate limit"],
     "model": ["gpt-4o"],
     "source_api": ["openai"],
     "source_api_result": ["failed"],
@@ -97,6 +99,45 @@ ALL_SEARCH_QUERY = {
     "include_total": ["true"],
     "page": ["2"],
     "per": ["50"],
+}
+
+FAILURE_SUMMARY = {
+    "client_id": "client123",
+    "client_name": "Test Client",
+    "days_analyzed": 7,
+    "total_failed_count": 3,
+    "provider_outage_excluded_count": 1,
+    "error_breakdown": [
+        {
+            "error_pattern": "Rate limit exceeded",
+            "source_api": "openai",
+            "count": 3,
+            "first_seen_at": "2026-09-01T00:00:00Z",
+            "last_seen_at": "2026-09-02T00:00:00Z",
+            "category": "rate_limit",
+            "example_error_details": "429 Rate limit exceeded",
+            "example_log_ids": ["log123abc456"],
+            "example_log_urls": ["/c/1/llm_request_logs/log123abc456"],
+        }
+    ],
+    "by_template": [
+        {
+            "template_id": None,
+            "template_name": "Unmatched",
+            "failed_count": 3,
+            "error_patterns": [
+                {
+                    "category": "rate_limit",
+                    "count": 3,
+                    "error": "Rate limit exceeded",
+                    "source_api": "openai",
+                }
+            ],
+            "example_log_ids": ["log123abc456"],
+            "example_log_urls": ["/c/1/llm_request_logs/log123abc456"],
+        }
+    ],
+    "actionable_summary": {"client_fixable_count": 0, "server_side_count": 3},
 }
 
 ALL_GET_ARGS = {
@@ -323,6 +364,76 @@ class TestGetLog:
             service.get_log("log123abc456")
 
 
+class TestFailureSummary:
+    def test_targets_the_failure_summary_endpoint_with_the_private_key(self):
+        service = build_service(FAILURE_SUMMARY)
+
+        service.failure_summary()
+
+        request = service._opener.request
+        parsed = urlparse(request.full_url)
+        assert parsed.path == FAILURE_SUMMARY_ENDPOINT
+        assert parsed.path == f"{LOGS_ENDPOINT}/failure_summary"
+        assert parsed.query == ""
+        assert request.get_method() == "GET"
+        assert request.get_header("X-api-key") == "test-private-key"
+
+    def test_sends_days_back_only_when_given(self):
+        service = build_service(FAILURE_SUMMARY)
+
+        service.failure_summary(days_back=30)
+
+        assert query_of(service._opener.request) == {"days_back": ["30"]}
+
+    @pytest.mark.parametrize("days_back", [0, -1])
+    def test_does_not_validate_days_back_client_side(self, days_back):
+        service = build_service(FAILURE_SUMMARY)
+
+        service.failure_summary(days_back=days_back)
+
+        assert query_of(service._opener.request) == {"days_back": [str(days_back)]}
+
+    def test_returns_the_body_unchanged(self):
+        service = build_service(FAILURE_SUMMARY)
+
+        assert service.failure_summary() == FAILURE_SUMMARY
+
+    @pytest.mark.parametrize(
+        ("status", "body"),
+        [
+            (401, '{"error":"API key is required"}'),
+            (422, '{"errors":{"days_back":["must be a positive integer"]}}'),
+            (504, '{"errors":{"system":["timed out"]}}'),
+        ],
+    )
+    def test_a_non_2xx_raises_with_the_status_and_body(self, status, body):
+        service = build_service(
+            error=fake_http_error(f"{BASE_URL}{FAILURE_SUMMARY_ENDPOINT}", status, body)
+        )
+
+        with pytest.raises(CoolhandAPIError) as caught:
+            service.failure_summary(days_back=0)
+
+        assert caught.value.status == status
+        assert body in str(caught.value)
+
+    def test_a_non_object_body_raises(self):
+        service = build_service([])
+
+        with pytest.raises(CoolhandAPIError, match="not a JSON object") as caught:
+            service.failure_summary()
+
+        assert caught.value.status is None
+
+    def test_invalid_json_raises_without_a_status(self):
+        service = build_service("<html>")
+
+        with pytest.raises(CoolhandAPIError, match="not valid JSON") as caught:
+            service.failure_summary()
+
+        assert caught.value.status is None
+
+
 class TestErrors:
     @pytest.mark.parametrize(
         ("status", "body"),
@@ -349,6 +460,21 @@ class TestErrors:
             service.get_log("missing")
 
         assert caught.value.status == 404
+
+
+class TestPublicSurface:
+    def test_failure_summary_types_are_importable_from_the_package_root(self):
+        import coolhand
+
+        for name in (
+            "FailureSummaryResponse",
+            "FailureCategory",
+            "FailureErrorPattern",
+            "FailureTemplateBreakdown",
+            "FailureActionableSummary",
+        ):
+            assert hasattr(coolhand, name)
+            assert name in coolhand.__all__
 
 
 class TestCoolhandDelegation:
@@ -378,3 +504,16 @@ class TestCoolhandDelegation:
 
         assert log["id"] == "log123abc456"
         assert query_of(instance._log_service._opener.request) == ALL_GET_QUERY
+
+    def test_failure_summary_delegates_days_back(
+        self, mock_config, reset_global_instance
+    ):
+        instance = Coolhand(config=mock_config)
+        instance._log_service._opener = FakeOpener(
+            response=FakeResponse(FAILURE_SUMMARY)
+        )
+
+        summary = instance.failure_summary(days_back=14)
+
+        assert query_of(instance._log_service._opener.request) == {"days_back": ["14"]}
+        assert summary == FAILURE_SUMMARY

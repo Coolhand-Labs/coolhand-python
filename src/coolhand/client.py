@@ -155,6 +155,13 @@ SENSITIVE_QUERY_PARAMS = {
     "pwd",
     "passwd",
     "code_verifier",
+    "apitoken",
+    "accesstoken",
+    "secretkey",
+    "subscription_key",
+    "hf_token",
+    "ocp-apim-subscription-key",
+    "x-goog-credential",
 }
 
 # Azure OpenAI "On Your Data" carries datastore credentials in the *request body*

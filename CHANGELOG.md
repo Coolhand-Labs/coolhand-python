@@ -16,6 +16,9 @@ All notable changes to this project will be documented in this file.
 ### Fixed
 - **A successful response is no longer lost when capturing it fails.** If instrumentation raised while reading or recording a response (`httpx`, `httpx2`, sync and async, and `requests.Session.send`), the error handler recorded it as a failed HTTP request and re-raised it, so a request that had succeeded raised in the caller's code and the response was lost. The response is now returned unchanged, and the capture failure is logged at debug level without being recorded as a request error. (#236, thanks @mikemikimike)
 
+### Security
+- **More query-parameter spellings are redacted.** `apitoken`, `accesstoken`, `secretkey`, `subscription_key`, `hf_token`, `ocp-apim-subscription-key` and `x-goog-credential` (matched case-insensitively) previously reached Coolhand unmasked. Found by the release red-team.
+
 ### Internal
 - `examples/abandoned_stream.py` (offline, no keys) guards the abandoned-stream change end to end: it streams through the real interceptor and Coolhand client to a throwaway local server and fails unless a sync `break`, a sync `close()`, an async `break` and a cancelled task each arrive once with the partial body and `stream_incomplete: true`, and completed streams arrive whole with no marker. It runs in `make verify` through `tests/test_live_examples.py`.
 - Dependency and CI action bumps, all dev/CI-only (none changes the runtime dependencies of the published package): `fastmcp-slim` 3.4.2 → 3.4.10 (#235), `mypy` 2.4.0 → 2.4.1 (#242), `pytest` 9.1.1 → 9.2.0 (#241), `ruff` 0.17.2 → 0.17.3 (#240), `virtualenv` 21.14.9 → 21.14.13 (#227) and `astral-sh/setup-uv` 10.3.2 → 10.3.3 (#239).

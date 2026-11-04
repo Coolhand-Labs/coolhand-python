@@ -179,24 +179,32 @@ SENSITIVE_BODY_KEY_TOKENS = (
 
 DATA_SOURCE_FIELDS = ("data_sources", "dataSources")
 
-# Credential-bearing body fields outside the Azure subtree, matched by exact
-# (case-insensitive) name. Deliberately NOT substring matching: "token" or "key"
-# would mangle max_tokens, key_points and the like. Covers Anthropic
+# Credential-bearing body fields outside the Azure subtree, matched by exact name
+# after lowercasing and stripping ``-``/``_``, so ``authorization_token``,
+# ``authorizationToken`` and ``authorization-token`` all hit (the entries below
+# are written in that normalized form). Deliberately NOT substring matching:
+# "token" or "key" would mangle max_tokens, key_points and the like. Covers Anthropic
 # ``mcp_servers[].authorization_token``, OpenAI Responses MCP tools'
 # ``authorization``, and the ``client_secret`` of a realtime ephemeral key.
 _SECRET_BODY_KEYS = frozenset(
     {
-        "authorization_token",
+        "authorizationtoken",
         "authorization",
-        "client_secret",
-        "api_key",
+        "clientsecret",
         "apikey",
-        "access_token",
-        "bearer_token",
+        "accesstoken",
+        "bearertoken",
     }
 )
 # A ``headers`` dict beside one of these keys is an MCP server definition.
-_MCP_URL_KEYS = frozenset({"server_url", "url"})
+_MCP_URL_KEYS = frozenset({"serverurl", "url"})
+# JSON Schema primitive type names. A ``type`` outside this set (e.g. "bearer",
+# "oauth") marks a credential object, not a schema fragment.
+_JSON_SCHEMA_TYPES = frozenset(
+    {"string", "number", "integer", "boolean", "object", "array", "null"}
+)
+# Schema keywords that can hold a literal (possibly secret) value.
+_SCHEMA_LITERAL_KEYWORDS = ("default", "const", "enum", "examples", "example")
 _REDACTED = "[REDACTED]"
 # Stands in for a body that could not be redacted or parsed safely.
 _UNSANITIZABLE_BODY = "[REDACTED: body could not be sanitized]"
@@ -271,21 +279,59 @@ def _sanitize_url(url: str) -> str:
         return url.split("?", 1)[0]
 
 
+def _normalize_key_name(key: str) -> str:
+    """Lowercase a field name and strip ``-``/``_`` separators."""
+    return key.lower().replace("-", "").replace("_", "")
+
+
 def _is_sensitive_body_key(key: str) -> bool:
     """Whether a body field name looks like it holds a credential.
 
     Separators are stripped before matching so ``connection_string``,
     ``connectionString`` and ``connection-string`` all resolve alike.
     """
-    normalized = key.lower().replace("-", "").replace("_", "")
+    normalized = _normalize_key_name(key)
     return any(token in normalized for token in SENSITIVE_BODY_KEY_TOKENS)
+
+
+def _is_schema_fragment(value: Any) -> bool:
+    """Whether ``value`` is a JSON Schema fragment, e.g. ``{"type": "string"}``.
+
+    A fragment that carries a literal value (``default``, ``const``, ``enum``,
+    ``examples``) is not one: the literal could be a real credential, so the
+    caller redacts the whole fragment.
+    """
+    if not isinstance(value, dict):
+        return False
+    if any(value.get(keyword) is not None for keyword in _SCHEMA_LITERAL_KEYWORDS):
+        return False
+    schema_type = value.get("type")
+    if isinstance(schema_type, str):
+        return schema_type in _JSON_SCHEMA_TYPES
+    return (
+        isinstance(schema_type, list)
+        and bool(schema_type)
+        and all(isinstance(t, str) and t in _JSON_SCHEMA_TYPES for t in schema_type)
+    )
+
+
+def _is_nonempty_dict(value: Any) -> bool:
+    """Whether ``value`` is a dict with at least one entry."""
+    return isinstance(value, dict) and bool(value)
+
+
+def _is_mcp_server(obj: dict) -> bool:
+    """Whether a dict carries a ``server_url``/``url`` field, as MCP servers do."""
+    return any(
+        _normalize_key_name(k) in _MCP_URL_KEYS for k in obj if isinstance(k, str)
+    )
 
 
 def _redact_secret_keys(value: Any) -> Any:
     """Recursively redact secret-bearing keys inside a config subtree."""
     if isinstance(value, dict):
         return {
-            k: ("[REDACTED]" if _is_sensitive_body_key(k) else _redact_secret_keys(v))
+            k: (_REDACTED if _is_sensitive_body_key(k) else _redact_secret_keys(v))
             for k, v in value.items()
         }
     if isinstance(value, list):
@@ -308,43 +354,37 @@ def _redact_data_sources(body: dict) -> dict:
         # config rather than risk forwarding an unredacted datastore key.
         sanitized = dict(body)
         for field in present:
-            sanitized[field] = "[REDACTED]"
+            sanitized[field] = _REDACTED
         return sanitized
 
 
 def _redact_known_secret_fields(value: Any, depth: int = 0) -> Any:
     """Redact well-known credential fields anywhere in a parsed JSON body.
 
-    Walks dicts and lists (and tuples, which a non-JSON caller such as the Copilot
-    interceptor may hand over). Never mutates its input: a container is copied
-    only when something inside it changed, so an ordinary body is returned as the
-    same object. Raises ``ValueError`` past ``_MAX_REDACT_DEPTH`` so the caller
-    fails closed rather than recursing on hostile input.
+    Walks dicts and lists. Never mutates its input: a container is copied only
+    when something inside it changed, so an ordinary body is returned as the same
+    object. Raises ``ValueError`` when a container sits deeper than
+    ``_MAX_REDACT_DEPTH`` so the caller fails closed rather than recursing on
+    hostile input.
     """
+    if not isinstance(value, (dict, list)):
+        return value
     if depth > _MAX_REDACT_DEPTH:
         raise ValueError("body nested too deeply to redact")
     if isinstance(value, dict):
         out: dict | None = None
-        sibling_keys: set[str] | None = None
         for k, x in value.items():
-            lowered = k.lower() if isinstance(k, str) else None
-            if lowered in _SECRET_BODY_KEYS and not (
-                isinstance(x, dict) and "type" in x
-            ):
-                # A dict value with a "type" is a tool/JSON-schema property that
-                # merely shares the name ({"authorization": {"type": "string"}}),
-                # not a credential. It falls through to be walked, so a secret
-                # nested inside it is still caught.
+            name = _normalize_key_name(k) if isinstance(k, str) else None
+            # A schema fragment is a tool/JSON-schema property that merely shares
+            # a secret key's name, e.g. {"authorization": {"type": "string"}}. It
+            # skips the first branch and is walked below, so secrets nested in it
+            # are still caught.
+            if name in _SECRET_BODY_KEYS and not _is_schema_fragment(x):
                 new: Any = _REDACTED
-            elif lowered == "headers" and isinstance(x, dict):
-                if sibling_keys is None:
-                    sibling_keys = {sk.lower() for sk in value if isinstance(sk, str)}
-                if sibling_keys & _MCP_URL_KEYS:
-                    # MCP server definition: every header value is a credential
-                    # candidate (custom auth headers have no fixed name).
-                    new = {name: _REDACTED for name in x}
-                else:
-                    new = _redact_known_secret_fields(x, depth + 1)
+            elif name == "headers" and _is_nonempty_dict(x) and _is_mcp_server(value):
+                # MCP server definition: every header value is a credential
+                # candidate (custom auth headers have no fixed name).
+                new = {header: _REDACTED for header in x}
             else:
                 new = _redact_known_secret_fields(x, depth + 1)
             if new is not x:
@@ -352,12 +392,10 @@ def _redact_known_secret_fields(value: Any, depth: int = 0) -> Any:
                     out = dict(value)
                 out[k] = new
         return value if out is None else out
-    if isinstance(value, (list, tuple)):
-        items = [_redact_known_secret_fields(i, depth + 1) for i in value]
-        if all(n is o for n, o in zip(items, value, strict=True)):
-            return value
-        return items if isinstance(value, list) else tuple(items)
-    return value
+    items = [_redact_known_secret_fields(i, depth + 1) for i in value]
+    if all(n is o for n, o in zip(items, value, strict=True)):
+        return value
+    return items
 
 
 def _sanitize_body(body: str | dict | list | None) -> str | dict | list | None:
@@ -373,20 +411,21 @@ def _sanitize_body(body: str | dict | list | None) -> str | dict | list | None:
     try:
         if isinstance(body, dict):
             body = _redact_data_sources(body)
-        return _redact_known_secret_fields(body)
+        redacted: dict | list = _redact_known_secret_fields(body)
+        return redacted
     except Exception:
         # Fail closed: if redaction itself breaks (e.g. hostile nesting), drop the
         # whole body rather than forward a partly redacted one.
         return _UNSANITIZABLE_BODY
 
 
-def _parse_body(body: str | bytes | dict | None) -> str | dict | None:
+def _parse_body(body: str | bytes | dict | list | None) -> str | dict | list | None:
     """Parse body to JSON object if possible, otherwise return as string."""
     if body is None:
         return None
 
-    # Already a dict
-    if isinstance(body, dict):
+    # Already a dict or list
+    if isinstance(body, (dict, list)):
         return body
 
     # Convert bytes to string
@@ -399,13 +438,19 @@ def _parse_body(body: str | bytes | dict | None) -> str | dict | None:
     # Try to parse as JSON
     if isinstance(body, str):
         try:
-            return json.loads(body)
-        except RecursionError:
-            # Nested past what the parser accepts. It is JSON we cannot walk, so
-            # returning the raw text would forward it unredacted: fail closed.
-            return _UNSANITIZABLE_BODY
-        except Exception:
+            # A leading BOM makes json.loads reject valid JSON, which would then
+            # be captured as unwalked text.
+            # (A bare JSON scalar such as ``12`` also lands here; _sanitize_body
+            # passes anything that is not a dict or list through untouched.)
+            parsed: str | dict | list | None = json.loads(body.removeprefix("\ufeff"))
+            return parsed
+        except json.JSONDecodeError:
             return body
+        except Exception:
+            # Not a syntax error, so this may be valid JSON the parser refused
+            # (nested past its recursion limit, an integer over Python's digit
+            # cap). Returning the raw text would forward it unredacted.
+            return _UNSANITIZABLE_BODY
 
     return str(body)
 

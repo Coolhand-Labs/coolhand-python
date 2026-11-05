@@ -8,15 +8,15 @@ through the real interceptor and the real Coolhand client, which delivers to a t
 local HTTP server standing in for the Coolhand API. The check is on what that server
 receives: the exact ``raw_request`` of each POST. A stream read to the end must arrive
 without ``stream_incomplete``; one abandoned part-way (a sync ``break``, an explicit
-``close()``, an async ``break``, a cancelled task) must arrive once, carrying the partial
+``close()``, an async ``break``, a cancelled task, a stream the garbage collector
+finalizes from a reference cycle) must arrive once, carrying the partial
 body and ``stream_incomplete: true``. Exits 1 on any mismatch, 0 otherwise.
 """
 
 import asyncio
-import json
-import threading
-from http.server import BaseHTTPRequestHandler, HTTPServer
+import gc
 
+import _fake_api
 import _live_check
 
 NAME = "abandoned_stream"
@@ -90,6 +90,22 @@ def sync_close() -> bool:
     return True
 
 
+def sync_gc_finalized() -> bool:
+    """An abandoned stream kept alive by a reference cycle: the garbage collector, not
+    the consumer, finalizes it (the OpenAI SDK's Stream does this). The record must
+    still arrive once, handed to a reporter thread rather than sent from the collector."""
+    with sync_client() as client:
+        request = client.build_request("POST", OPENAI_URL, json={})
+        response = client.send(request, stream=True)
+        chunks = response.iter_bytes()
+        next(chunks)
+        holder = [chunks]
+        holder.append(holder)
+        del chunks, holder
+        gc.collect()
+    return True
+
+
 async def async_complete() -> bool:
     async with async_client() as client:
         async with client.stream("POST", OPENAI_URL, json={}) as response:
@@ -130,34 +146,23 @@ SCENARIOS = [
     sync_complete,
     sync_break,
     sync_close,
+    sync_gc_finalized,
     async_complete,
     async_break,
     async_cancelled,
 ]
 
 
-class FakeCoolhandApi(BaseHTTPRequestHandler):
-    received: list[dict] = []
-
-    def do_POST(self) -> None:
-        body = self.rfile.read(int(self.headers.get("content-length", 0)))
-        type(self).received.append(json.loads(body))
-        self.send_response(201)
-        self.send_header("content-type", "application/json")
-        self.end_headers()
-        self.wfile.write(b"{}")
-
-    def log_message(self, *_: object) -> None:
-        pass
-
-
 def delivered_raw_requests() -> list[dict]:
     coolhand.shutdown()
-    return [post["llm_request_log"]["raw_request"] for post in FakeCoolhandApi.received]
+    return [
+        post["llm_request_log"]["raw_request"]
+        for post in _fake_api.FakeCoolhandApi.received
+    ]
 
 
 def run_scenario(scenario) -> None:
-    FakeCoolhandApi.received.clear()
+    _fake_api.FakeCoolhandApi.received.clear()
     result = scenario()
     abandoned = asyncio.run(result) if asyncio.iscoroutine(result) else result
     raw_requests = delivered_raw_requests()
@@ -197,24 +202,21 @@ def run_scenario(scenario) -> None:
 
 
 def main() -> None:
-    server = HTTPServer(("127.0.0.1", 0), FakeCoolhandApi)
-    threading.Thread(target=server.serve_forever, daemon=True).start()
     httpx_interceptor.set_exclude_api_patterns(None)
     try:
-        coolhand.Coolhand(
-            {
-                "api_key": "example-key-0123456789",
-                "base_url": f"http://127.0.0.1:{server.server_port}",
-                "silent": True,
-            }
-        )
-        for scenario in SCENARIOS:
-            run_scenario(scenario)
+        with _fake_api.serve() as base_url:
+            coolhand.Coolhand(
+                {
+                    "api_key": "example-key-0123456789",
+                    "base_url": base_url,
+                    "silent": True,
+                }
+            )
+            for scenario in SCENARIOS:
+                run_scenario(scenario)
     finally:
         httpx_interceptor.unpatch()
         httpx_interceptor.set_handler(None)
-        server.shutdown()
-        server.server_close()
     print(f"PASS {NAME}: {len(SCENARIOS)} scenarios delivered as expected")
 
 

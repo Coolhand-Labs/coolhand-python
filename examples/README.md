@@ -8,6 +8,7 @@ Run any example from the repo root with `uv run python examples/<name>.py`.
 | `auto_monitor_example.py` | Zero-config monitoring (simulated provider calls) |
 | `streaming_capture.py` | Offline pass/fail check: sync SSE streams are captured with their message id and token counts (no keys) |
 | `abandoned_stream.py` | Offline pass/fail check: streams abandoned part-way (`break`, `close()`, async `break`, cancelled task) reach Coolhand with `stream_incomplete: true`, completed ones without it (no keys) |
+| `body_redaction.py` | Offline pass/fail check: credentials in captured request and response bodies (MCP tokens, `client_secret`) are redacted before delivery, ordinary fields are kept (no keys) |
 | `dramatiq_pydantic_ai.py` | Dramatiq + pydantic-ai, see [docs/dramatiq.md](../docs/dramatiq.md) |
 | `band-guesser/` | FastAPI app, see its own README |
 | `live_openai.py`, `live_anthropic.py` | Live smoke tests, below |
@@ -27,11 +28,23 @@ uv run python examples/streaming_capture.py
 `abandoned_stream.py` needs no keys and no outside network. It streams OpenAI-shaped SSE bodies through the real
 interceptor and the real Coolhand client, which delivers to a throwaway local HTTP server standing in for the Coolhand
 API, and exits 1 unless that server receives exactly one log per call: the partial body with `stream_incomplete: true`
-for a sync `break`, a sync `close()`, an async `break` and a cancelled task, and the whole body with no marker for a
+for a sync `break`, a sync `close()`, a stream the garbage collector finalizes from a reference cycle, an async `break` and a cancelled task, and the whole body with no marker for a
 stream read to the end.
 
 ```bash
 uv run python examples/abandoned_stream.py
+```
+
+## Body redaction check
+
+`body_redaction.py` needs no keys and no outside network. It sends Anthropic- and OpenAI-shaped calls that carry
+credentials in the body (an MCP `authorization_token`, an MCP tool's `authorization` and `headers`, a realtime
+`client_secret` in the response) through the real interceptor and Coolhand client to a throwaway local server, and exits 1
+if any secret value appears anywhere in what that server receives, if a secret field is dropped instead of reading
+`[REDACTED]`, or if an ordinary field such as `max_tokens` is altered.
+
+```bash
+uv run python examples/body_redaction.py
 ```
 
 ## Live smoke tests

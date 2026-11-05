@@ -123,6 +123,34 @@ class TestClientCap:
         assert "[REDACTED]" in out
         assert MARKER in out
 
+    def test_known_body_secrets_redacted_before_truncation(self, reset_global_instance):
+        """The by-name pass also runs before the cap, not on the kept prefix."""
+        client = self._client(max_body_bytes=2000)
+        body = json.dumps(
+            {
+                "mcp_servers": [
+                    {"url": "https://m", "authorization_token": "SECRET-TOKEN"}
+                ],
+                "padding": "P" * 50_000,
+            }
+        )
+        client.log_interaction(
+            {"method": "POST", "url": "https://api.anthropic.com/v1/messages"},
+            {"status_code": 200, "body": body},
+        )
+        client.log_interaction(
+            {
+                "method": "POST",
+                "url": "https://api.anthropic.com/v1/messages",
+                "body": body,
+            }
+        )
+        for queued in client._queue:
+            out = queued["request_body"] or queued["response_body"]
+            assert "SECRET-TOKEN" not in out
+            assert "[REDACTED]" in out
+            assert MARKER in out
+
     def test_prefixed_response_not_truncated_twice(self, reset_global_instance):
         client = self._client(max_body_bytes=10)
         pre = "x" * 10 + "[truncated: 500 bytes, kept first 10]"

@@ -157,7 +157,7 @@ The monitor captures:
 - **Timing**: Request timestamp, response timestamp, duration
 - **LLM-Specific**: Model used, token counts, streaming status
 
-Headers containing API keys, sensitive URL query parameters, and datastore credentials embedded in request bodies (such as Azure OpenAI On Your Data) are automatically redacted. See [Supported Libraries](./docs/supported-libraries.md) for the exact scope.
+Headers containing API keys, sensitive URL query parameters, and credentials embedded in request and response bodies (such as MCP server tokens and Azure OpenAI On Your Data) are automatically redacted. See [Supported Libraries](./docs/supported-libraries.md) for the exact scope.
 
 ## Supported Libraries
 
@@ -354,6 +354,7 @@ See [Verifying Interception in Your Tests](./docs/testing.md) for what it catche
 - API keys in request headers are automatically redacted
 - Sensitive URL query parameters (`key`, `api_key`, `token`, etc.) are automatically redacted
 - Datastore credentials embedded in request bodies (e.g. Azure OpenAI On Your Data) are automatically redacted
+- Well-known credential fields in request and response bodies (such as MCP server tokens and `client_secret`) are automatically redacted; see [Supported Libraries](./docs/supported-libraries.md#credentials-in-request-and-response-bodies)
 - No sensitive data is exposed in logs
 - All data is sent via HTTPS to Coolhand servers
 

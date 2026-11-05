@@ -57,7 +57,7 @@ coolhand_client = Coolhand(
 )
 ```
 
-A body over the limit is cut to the first `max_body_bytes` bytes and ends with a marker, for example `[truncated: 5242880 bytes, kept first 1048576]`, where the first number is the original size. It is sent as a plain string rather than parsed JSON, so it will not be structured in the Coolhand dashboard. The cap applies to request bodies, response bodies and streaming responses (the stream accumulator stops buffering once the limit is reached). Credentials in Azure OpenAI `data_sources` are still redacted before truncation.
+A body over the limit is cut to the first `max_body_bytes` bytes and ends with a marker, for example `[truncated: 5242880 bytes, kept first 1048576]`, where the first number is the original size. It is sent as a plain string rather than parsed JSON, so it will not be structured in the Coolhand dashboard. The cap applies to request bodies, response bodies and streaming responses (the stream accumulator stops buffering once the limit is reached). Credentials in Azure OpenAI `data_sources` and other [known body fields](./supported-libraries.md#credentials-in-request-and-response-bodies) are still redacted before truncation.
 
 Set `max_body_bytes=None` (or `0`) to disable the cap and log bodies in full.
 

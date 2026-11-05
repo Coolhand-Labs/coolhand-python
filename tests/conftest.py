@@ -102,10 +102,14 @@ def reset_global_instance():
     httpx_interceptor._handler = None
     httpx_interceptor._intercept_addresses = None
     httpx_interceptor._exclude_api_patterns = None
+    # Stops a reporter thread left over from an earlier test or the auto-created
+    # instance, so each test starts (and ends) with none running.
+    httpx_interceptor.set_handler(None)
 
     yield
 
     # Reset after test
+    httpx_interceptor.set_handler(None)
     client._instance = original_instance
     httpx_interceptor._patched = original_patched
     httpx_interceptor._handler = original_handler

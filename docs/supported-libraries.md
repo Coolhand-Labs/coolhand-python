@@ -101,6 +101,21 @@ Non-inference management traffic is filtered by the deny-list rather than the al
 
 To override: pass `intercept_addresses=[...]` to `Coolhand()`. See [Advanced Configuration](./configuration.md#custom-intercept-addresses).
 
+### Credentials in request and response bodies
+
+Besides the Azure `data_sources` step above, a narrow redaction pass runs over every captured JSON request and response body (nested objects and arrays included). A field is replaced with `"[REDACTED]"` when its name is one of the following, ignoring case and `-`/`_` separators (so `accessToken` and `access-token` match too):
+
+`authorization_token`, `authorization`, `client_secret`, `api_key`, `apikey`, `access_token`, `bearer_token`
+
+This covers Anthropic `mcp_servers[].authorization_token`, OpenAI Responses MCP tool `authorization`, and the `client_secret` of a realtime ephemeral key in a response. In an MCP server definition (an object with a `server_url` or `url` field), every value in its `headers` object is redacted too.
+
+Deliberate limits:
+
+- Names are matched exactly, never as substrings, so `max_tokens` and `key_points` are untouched. Other credential names (for example `refresh_token`, `password`, or the top-level `value` of a GA realtime `client_secrets` response) are not covered.
+- A tool or JSON-schema property that is merely named `authorization` (its value is a schema fragment such as `{"type": "string"}`) is left intact, although credentials nested inside it are still redacted. A fragment that carries a `default`, `const`, `enum`, `example` or `examples` value is redacted whole, since that literal could be a real key. Any other object under one of these names is redacted whole, whatever its fields.
+- Only bodies that parse as JSON are walked. A streamed (server-sent events) response, a form-encoded or other non-JSON body, or a JSON document stored inside a string field (such as a function call's `arguments`) is captured as is.
+- A body that is valid JSON but cannot be parsed or redacted (nested more than 100 levels below the top-level object, an integer over Python's 4300-digit limit, or any error during redaction) is replaced whole with `"[REDACTED: body could not be sanitized]"` rather than forwarded. The request your app sends is never changed.
+
 ---
 
 ## Streaming Support
@@ -130,6 +145,7 @@ A streamed response your code stops reading before it ends is logged with the pa
 - The marker is independent of the size cap. A body longer than `max_body_bytes` that was read to the end is truncated but not marked; one that was abandoned is marked whether or not it was truncated.
 - Exactly one record is sent per response. The first outcome wins, so a late `close()`, a second `aclose()` or a garbage-collection finaliser cannot send another.
 - For an async generator abandoned with `break`, the record is sent when the event loop finalises the generator, so it can arrive a moment after the `break`. A generator that is never finalised (the loop is already closed when it is garbage-collected) sends nothing.
+- A stream finalised by Python's cycle collector (as opposed to `break`, `close()`, `aclose()` or exhaustion, which still report synchronously on your thread) is reported asynchronously, from a daemon thread named `coolhand-abandoned-streams`. The collector can run a finaliser on a thread that is inside the Coolhand client holding one of its locks, so the finaliser only queues the record. The thread starts when monitoring starts and stops on `unpatch()` / `set_handler(None)`, which first deliver anything already queued; `shutdown()` waits briefly for it. A record finalised after monitoring has stopped is dropped.
 - For a sync stream whose iterator is kept alive by a reference cycle (the OpenAI and Anthropic SDK `Stream` objects), a `break` is reported when Python's cycle collector next frees it, which can be later than the `break`. A process that exits before that collection loses the record.
 - A trailing multibyte character split by the cut is dropped from a partial body rather than logged as a replacement character.
 - `requests` calls are unaffected: their streamed bodies are never read, so there is no partial body to send.

@@ -14,6 +14,7 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import parse_qs, urlencode, urlparse, urlunparse
 from urllib.request import Request
 
+from . import httpx_interceptor
 from ._body_limit import DEFAULT_MAX_BODY_BYTES, cap_body
 from ._config import (
     _DEFAULT_BASE_URL,
@@ -762,8 +763,6 @@ class CoolhandClient:
         # Check if httpx is patched
         patched_libs = []
         try:
-            from . import httpx_interceptor
-
             patched_libs += httpx_interceptor.patched_targets()
         except Exception:
             pass
@@ -826,6 +825,12 @@ class CoolhandClient:
         called mid-program rather than right before process exit).
         """
         logger.info("Shutting down Coolhand...")
+        # Abandoned streams reach the handler through a reporter thread; hand over
+        # any it has not delivered yet so the flush below includes them.
+        try:
+            httpx_interceptor.flush_abandoned()
+        except Exception:
+            logger.debug("Could not drain abandoned-stream records", exc_info=True)
         self.flush()
 
         # Guards a narrow race: something enqueued directly onto the dispatch

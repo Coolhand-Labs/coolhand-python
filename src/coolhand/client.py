@@ -156,6 +156,13 @@ SENSITIVE_QUERY_PARAMS = {
     "pwd",
     "passwd",
     "code_verifier",
+    "apitoken",
+    "accesstoken",
+    "secretkey",
+    "subscription_key",
+    "hf_token",
+    "ocp-apim-subscription-key",
+    "x-goog-credential",
 }
 
 # Azure OpenAI "On Your Data" carries datastore credentials in the *request body*
@@ -359,6 +366,16 @@ def _redact_data_sources(body: dict) -> dict:
         return sanitized
 
 
+# Raw field names already classified as harmless (neither a secret key nor ``headers``),
+# so the common key (``role``, ``content``, ``type``) costs one set lookup per request
+# instead of a normalization. A pure function of the name, so a stale or racing entry
+# cannot change a result. Bounded in size and name length so a hostile payload full of
+# distinct or huge keys cannot grow it.
+_BENIGN_BODY_KEYS: set[str] = set()
+_BENIGN_BODY_KEYS_MAX = 4096
+_BENIGN_BODY_KEY_MAX_LEN = 64
+
+
 def _redact_known_secret_fields(value: Any, depth: int = 0) -> Any:
     """Redact well-known credential fields anywhere in a parsed JSON body.
 
@@ -375,25 +392,46 @@ def _redact_known_secret_fields(value: Any, depth: int = 0) -> Any:
     if isinstance(value, dict):
         out: dict | None = None
         for k, x in value.items():
-            name = _normalize_key_name(k) if isinstance(k, str) else None
-            # A schema fragment is a tool/JSON-schema property that merely shares
-            # a secret key's name, e.g. {"authorization": {"type": "string"}}. It
-            # skips the first branch and is walked below, so secrets nested in it
-            # are still caught.
-            if name in _SECRET_BODY_KEYS and not _is_schema_fragment(x):
-                new: Any = _REDACTED
-            elif name == "headers" and _is_nonempty_dict(x) and _is_mcp_server(value):
-                # MCP server definition: every header value is a credential
-                # candidate (custom auth headers have no fixed name).
-                new = {header: _REDACTED for header in x}
+            if k in _BENIGN_BODY_KEYS:
+                # Known harmless name: only its value can matter, and only if nested.
+                if not isinstance(x, (dict, list)):
+                    continue
+                new: Any = _redact_known_secret_fields(x, depth + 1)
             else:
-                new = _redact_known_secret_fields(x, depth + 1)
+                name = _normalize_key_name(k) if isinstance(k, str) else None
+                if (
+                    name is not None
+                    and name not in _SECRET_BODY_KEYS
+                    and name != "headers"
+                    and len(k) <= _BENIGN_BODY_KEY_MAX_LEN
+                    and len(_BENIGN_BODY_KEYS) < _BENIGN_BODY_KEYS_MAX
+                ):
+                    _BENIGN_BODY_KEYS.add(k)
+                # A schema fragment is a tool/JSON-schema property that merely
+                # shares a secret key's name, e.g. {"authorization": {"type":
+                # "string"}}. It skips the first branch and is walked below, so
+                # secrets nested in it are still caught.
+                if name in _SECRET_BODY_KEYS and not _is_schema_fragment(x):
+                    new = _REDACTED
+                elif (
+                    name == "headers" and _is_nonempty_dict(x) and _is_mcp_server(value)
+                ):
+                    # MCP server definition: every header value is a credential
+                    # candidate (custom auth headers have no fixed name).
+                    new = {header: _REDACTED for header in x}
+                elif isinstance(x, (dict, list)):
+                    new = _redact_known_secret_fields(x, depth + 1)
+                else:
+                    new = x
             if new is not x:
                 if out is None:
                     out = dict(value)
                 out[k] = new
         return value if out is None else out
-    items = [_redact_known_secret_fields(i, depth + 1) for i in value]
+    items = [
+        _redact_known_secret_fields(i, depth + 1) if isinstance(i, (dict, list)) else i
+        for i in value
+    ]
     if all(n is o for n, o in zip(items, value, strict=True)):
         return value
     return items

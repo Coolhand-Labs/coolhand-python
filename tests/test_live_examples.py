@@ -207,6 +207,42 @@ class TestStreamingCaptureExample:
         assert "PASS streaming_capture" in result.stdout
 
 
+class TestAbandonedStreamExample:
+    def test_passes_against_the_installed_interceptor(self):
+        """The offline example is the release check for abandoned-stream delivery."""
+        script = REPO_ROOT / "examples" / "abandoned_stream.py"
+        if not script.exists():
+            pytest.skip("examples/ not present")
+        result = subprocess.run(
+            [sys.executable, str(script)],
+            capture_output=True,
+            text=True,
+            timeout=60,
+            cwd=REPO_ROOT / "examples",
+            env={**os.environ, "PYTHONPATH": str(REPO_ROOT / "src")},
+        )
+        assert result.returncode == 0, result.stderr
+        assert "PASS abandoned_stream" in result.stdout
+
+
+class TestBodyRedactionExample:
+    def test_passes_against_the_installed_interceptor(self):
+        """The offline example is the release check for body credential redaction."""
+        script = REPO_ROOT / "examples" / "body_redaction.py"
+        if not script.exists():
+            pytest.skip("examples/ not present")
+        result = subprocess.run(
+            [sys.executable, str(script)],
+            capture_output=True,
+            text=True,
+            timeout=60,
+            cwd=REPO_ROOT / "examples",
+            env={**os.environ, "PYTHONPATH": str(REPO_ROOT / "src")},
+        )
+        assert result.returncode == 0, result.stderr
+        assert "PASS body_redaction" in result.stdout
+
+
 # scripts/ isn't in the sdist, so suites run from an sdist can't exercise the runner.
 requires_runner = pytest.mark.skipif(
     not RUNNER.exists(), reason="scripts/live-examples.sh not present"

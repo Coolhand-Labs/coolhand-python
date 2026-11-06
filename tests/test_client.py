@@ -7,6 +7,7 @@ import threading
 
 import pytest
 
+from coolhand import client as client_module
 from coolhand._config import _normalize_base_url
 from coolhand.client import (
     CoolhandClient,
@@ -778,6 +779,75 @@ class TestSanitizeBodyKnownSecrets:
         assert "SECRET" not in json.dumps(queued)
         assert queued["request_body"] == "[REDACTED: body could not be sanitized]"
         assert queued["response_body"] == "[REDACTED: body could not be sanitized]"
+
+
+class TestBenignKeyCache:
+    """The harmless-key set only speeds the walk up; it never changes a result."""
+
+    @pytest.fixture(autouse=True)
+    def clean_cache(self):
+        client_module._BENIGN_BODY_KEYS.clear()
+        yield
+        client_module._BENIGN_BODY_KEYS.clear()
+
+    def test_a_secret_key_is_never_remembered_as_harmless(self):
+        for _ in range(3):
+            body = {"authorization": "SECRET", "apiKey": "SECRET2", "role": "user"}
+            assert _sanitize_body(body) == {
+                "authorization": "[REDACTED]",
+                "apiKey": "[REDACTED]",
+                "role": "user",
+            }
+        assert "authorization" not in client_module._BENIGN_BODY_KEYS
+        assert "apiKey" not in client_module._BENIGN_BODY_KEYS
+        assert "role" in client_module._BENIGN_BODY_KEYS
+
+    def test_a_schema_property_named_like_a_secret_does_not_whitelist_it(self):
+        schema = {"properties": {"authorization": {"type": "string"}}}
+        assert _sanitize_body(schema) == schema
+        assert _sanitize_body({"authorization": "SECRET"}) == {
+            "authorization": "[REDACTED]"
+        }
+
+    def test_headers_is_never_remembered_as_harmless(self):
+        mcp = {"server_url": "https://m.example", "headers": {"X-Auth": "SECRET"}}
+        for _ in range(2):
+            assert _sanitize_body(mcp)["headers"] == {"X-Auth": "[REDACTED]"}
+        assert "headers" not in client_module._BENIGN_BODY_KEYS
+
+    def test_harmless_keys_still_have_their_nested_values_walked(self):
+        body = {"messages": [{"role": "user", "meta": {"clientSecret": "SECRET"}}]}
+        for _ in range(2):
+            assert _sanitize_body(body)["messages"][0]["meta"] == {
+                "clientSecret": "[REDACTED]"
+            }
+
+    def test_the_set_is_bounded_and_skips_long_names(self):
+        body = {
+            f"field_{i}": i for i in range(client_module._BENIGN_BODY_KEYS_MAX + 500)
+        }
+        body["x" * (client_module._BENIGN_BODY_KEY_MAX_LEN + 1)] = 1
+        body["authorization"] = "SECRET"
+        out = _sanitize_body(body)
+        assert out["authorization"] == "[REDACTED]"
+        assert (
+            len(client_module._BENIGN_BODY_KEYS) <= client_module._BENIGN_BODY_KEYS_MAX
+        )
+        assert not any(
+            len(k) > client_module._BENIGN_BODY_KEY_MAX_LEN
+            for k in client_module._BENIGN_BODY_KEYS
+        )
+
+    def test_results_are_identical_with_a_cold_and_a_warm_cache(self):
+        body = {
+            "model": "m",
+            "messages": [{"role": "user", "content": "hi"}],
+            "mcp_servers": [{"url": "https://m.example", "authorization_token": "S"}],
+        }
+        cold = _sanitize_body(body)
+        warm = _sanitize_body(body)
+        assert cold == warm
+        assert cold["mcp_servers"][0]["authorization_token"] == "[REDACTED]"
 
 
 class TestParseBody:

@@ -39,6 +39,13 @@ class TestUrlAndHeaderRedaction:
             "access_key",
             "client-secret",
             "session_token",
+            "apitoken",
+            "accesstoken",
+            "secretkey",
+            "subscription_key",
+            "hf_token",
+            "Ocp-Apim-Subscription-Key",
+            "X-Goog-Credential",
         ],
     )
     def test_credential_query_param_spellings_are_redacted(self, param):

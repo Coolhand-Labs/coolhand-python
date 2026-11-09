@@ -10,7 +10,7 @@ ruff>=0.6.0
 mypy==2.4.1
 
 # Type checking
-types-requests==2.33.0.20261006
+types-requests==2.33.0.20261030
 
 # Documentation
 sphinx==8.1.3

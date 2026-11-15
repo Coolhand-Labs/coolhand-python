@@ -49,7 +49,7 @@ class SavingsService(ReadService):
         url = f"{self.config['base_url']}{SAVINGS_ENDPOINT}"
         body, _headers = self._get_json_object(url, "Savings")
 
-        savings = cast(RealizedSavings, body)
-        rows = len(savings.get("workloads", []))
+        workloads = body.get("workloads")
+        rows = len(workloads) if isinstance(workloads, list) else 0
         self._log(f"Fetched realized savings for {rows} workload(s)")
-        return savings
+        return cast(RealizedSavings, body)

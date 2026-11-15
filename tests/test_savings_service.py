@@ -81,6 +81,12 @@ class TestGetRealizedSavingsResponse:
 
         assert service.get_realized_savings() == ZERO_SAVINGS
 
+    def test_a_null_workloads_is_returned_as_sent_rather_than_crashing(self):
+        body = {**ZERO_SAVINGS, "workloads": None}
+        service = build_service(body, silent=False)
+
+        assert service.get_realized_savings() == body
+
     def test_a_non_object_body_raises_without_a_status(self):
         service = build_service([])
 

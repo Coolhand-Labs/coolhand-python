@@ -287,6 +287,17 @@ if summary['error_breakdown']:
 
 See [Reading Workloads](./docs/workloads.md) for the workload reference, [Reading Templates](./docs/templates.md#metrics) for the `metrics` fields and window rules, and [Reading Logs](./docs/logs.md) for log search, `get_log` and `failure_summary`.
 
+## Reading Realized Savings
+
+`get_realized_savings` returns what switching templates or models has saved you, in total and per workload (the dashboard's figure). It needs your **private** API key and takes no parameters:
+
+```python
+savings = ch.get_realized_savings()
+savings['total'], savings['percent'], savings['workloads']
+```
+
+The comparison window is fixed server-side and is not windowed by `days_back`, unlike workload `metrics`; join the two on workload `id`. A `503` raises `CoolhandAPIError` and means it could not be computed, not zero savings. See [Reading Realized Savings](./docs/savings.md).
+
 ## Reading the Help Center
 
 `HelpCenterDocs` reads the Coolhand help center (the same pages as coolhandlabs.com/help and /updates). It needs **no API key**, so it works without a `Coolhand` instance:
@@ -370,6 +381,7 @@ See [Verifying Interception in Your Tests](./docs/testing.md) for what it catche
 - [Declared Workloads and Templates](./docs/declared-workloads.md) — declare the workload/template of captured calls with `with_context`, and create or rename them with `upsert` (private API key)
 - [Examples and live smoke tests](./examples/README.md) — runnable examples, plus `make live-examples` to validate OpenAI and Anthropic calls against real keys
 - [Reading Workloads](./docs/workloads.md) — list workloads with cost and performance metrics over a rolling or explicit window
+- [Reading Realized Savings](./docs/savings.md) — get what switching templates or models has saved you, in total and per workload, using the private API key
 - [Reading Logs](./docs/logs.md) — search logs by cost, time window and more, and fetch one log's content and cost breakdown, summarize failures by error pattern
 - [Reading the Help Center](./docs/help-center.md) — search and read Coolhand's help center articles with `HelpCenterDocs`, no API key required
 

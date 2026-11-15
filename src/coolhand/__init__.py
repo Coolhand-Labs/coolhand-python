@@ -24,6 +24,7 @@ from .feedback_service import (
 from .help_center_docs import HelpCenterDocs
 from .httpx_interceptor import DEFAULT_EXCLUDE_API_PATTERNS, DEFAULT_INTERCEPT_ADDRESSES
 from .log_service import LogService
+from .savings_service import SavingsService
 from .template_service import CoolhandAPIError, TemplateService, get_template_service
 from .types import (
     BulkLinkFeedbackResult,
@@ -51,12 +52,14 @@ from .types import (
     LogPagination,
     OptimizationFeedbackLink,
     Pagination,
+    RealizedSavings,
     RequestData,
     ResponseData,
     SearchHelpArticlesResponse,
     SearchLogsResponse,
     SearchTemplatesResponse,
     SearchWorkloadsResponse,
+    WorkloadSavings,
     WorkloadSummary,
     WorkloadTemplate,
 )
@@ -79,6 +82,7 @@ class Coolhand(CoolhandClient):
         self._feedback_service = FeedbackService(self.config)
         self._template_service = TemplateService(self.config)
         self._workload_service = WorkloadService(self.config)
+        self._savings_service = SavingsService(self.config)
         self._feedback_link_service = FeedbackLinkService(self.config)
         self._log_service = LogService(self.config)
         self._help_center_docs = HelpCenterDocs(self.config)
@@ -290,6 +294,34 @@ class Coolhand(CoolhandClient):
             page=page,
             per=per,
         )
+
+    @property
+    def savings_service(self) -> SavingsService:
+        """Get the savings service instance."""
+        return self._savings_service
+
+    def get_realized_savings(self) -> RealizedSavings:
+        """Get the savings this client has realized by switching templates or models.
+
+        Requires the **private** API key and takes no parameters: the client is derived
+        from the key and the comparison window (deprecations in the last three months)
+        is fixed server-side. Each workload row's `id` is the workload hashid, so rows
+        join to `search_workloads` on `id`. The savings are NOT windowed by `days_back`,
+        unlike a workload's `metrics`, so a workload's `savings` can exceed its
+        windowed cost.
+
+        See `SavingsService.get_realized_savings` for the response and error reference.
+
+        Returns:
+            A dict with `total`, `cost_at_previous_versions`, `percent` and `workloads`;
+            zeros and an empty list for a client with nothing to compare.
+
+        Raises:
+            CoolhandAPIError: On a non-2xx response, with the HTTP status on `status`
+                (`401` for a missing/invalid/public key; `503` when the comparison could
+                not be computed, which is retryable and not the same as zero savings).
+        """
+        return self._savings_service.get_realized_savings()
 
     @property
     def log_service(self) -> LogService:
@@ -591,11 +623,14 @@ __all__ = [
     "LogService",
     "Pagination",
     "HelpCenterDocs",
+    "RealizedSavings",
     "SearchHelpArticlesResponse",
     "SearchLogsResponse",
     "SearchTemplatesResponse",
+    "SavingsService",
     "SearchWorkloadsResponse",
     "TemplateService",
+    "WorkloadSavings",
     "WorkloadService",
     "WorkloadSummary",
     "WorkloadTemplate",

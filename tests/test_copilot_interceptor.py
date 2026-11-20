@@ -2473,6 +2473,52 @@ class TestSendAndWait:
         assert "s1" not in copilot_interceptor._pre_pending
 
     @pytest.mark.asyncio
+    async def test_cancelled_turn_does_not_absorb_the_next_turns_messages(
+        self, handler
+    ):
+        import asyncio
+
+        from coolhand import copilot_interceptor
+
+        class Cancellable:
+            async def request(self, method, params=None, timeout=None, **kwargs):
+                if params["prompt"] == "cancel-me":
+                    raise asyncio.CancelledError()
+                self._handle_message(
+                    _assistant_message_notification("s1", "m1", "answer")
+                )
+                return {"messageId": "ack"}
+
+            def _handle_message(self, message):
+                pass
+
+        _inject_fake_sdk(Cancellable)
+        copilot_interceptor.set_handler(handler)
+        copilot_interceptor.patch()
+
+        with pytest.raises(asyncio.CancelledError):
+            await Cancellable().request(
+                "session.sendAndWait", {"sessionId": "s1", "prompt": "cancel-me"}
+            )
+        assert "s1" not in copilot_interceptor._pre_pending
+
+        await Cancellable().request(
+            "session.sendAndWait", {"sessionId": "s1", "prompt": "next"}
+        )
+
+        handler.assert_called_once()
+        assert handler.call_args[0][0]["body"]["prompt"] == "next"
+        assert handler.call_args[0][1]["body"]["content"] == "answer"
+
+    def test_server_url_query_secrets_are_redacted_in_session_config(self):
+        from coolhand import copilot_interceptor
+
+        redacted = copilot_interceptor._redact_session_config(
+            {"mcpServers": {"s": {"serverUrl": "https://m.example/sse?api_key=SECRET"}}}
+        )
+        assert "SECRET" not in str(redacted)
+
+    @pytest.mark.asyncio
     async def test_failure_after_messages_does_not_log_request_error(self, handler):
         from coolhand import copilot_interceptor
 

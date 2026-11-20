@@ -4,6 +4,21 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [0.12.1] - 2026-11-20
+
+### Fixed
+- **Copilot `send_and_wait` agent runs are now captured, one log per model call.** The Copilot interceptor only handled `session.send`, so an agent run started with `send_and_wait` (which sends `session.sendAndWait`) recorded nothing, and even a plain `send` logged only the first `assistant.message`, dropping every later model call in a tool loop, including the one that writes the answer. The interceptor now handles `session.sendAndWait` too: it keeps the request open for the whole call and logs one record per `assistant.message`, each carrying the same request body and timed from the previous message. A turn that fails after logging messages is not also logged again as a request error, and a turn that is still producing messages is not evicted by the 300-second stale-entry sweep. Each Copilot response body now also carries the message id as `id` (alongside `messageId`), so you can pass it as `llm_provider_unique_id` to `create_feedback`. **Migration:** nothing to change. A plain `session.send` is unchanged (first message only, since there is no way to tell when that turn ends), and `send_and_wait` users simply start seeing records. This was verified against a fake `copilot._jsonrpc` and an offline example; see [Copilot](./docs/supported-libraries.md). (#264)
+
+- **A cancelled Copilot `send_and_wait` no longer corrupts the session's later records.** If a `sendAndWait` turn was cancelled (for example the user pressed stop), its pending entry stayed at the head of the session's queue, absorbed every later `assistant.message` for that session (logging them against the cancelled turn's prompt) and grew by one entry per later turn. The entry is now dropped on cancellation. Found by the release red-team.
+
+### Security
+- **Wider credential redaction in URLs and headers.** Found by the release red-team; all fail toward redacting. Query parameters are now matched with `-`/`_` ignored and by credential-like substrings (`token`, `secret`, `password`, `apikey`, `privatekey`, `signature`, `jwt`), so `authToken`, `bearerToken`, `sessionToken`, `privateKey`, `apiSecret`, `idToken`, `sas_token` and `jwt` are masked (names ending in `tokens`, such as `max_tokens`, are kept). A URL fragment (`#access_token=...`) is dropped, and the fail-closed fallback also strips `user:pass@`. Header names that carry no listed substring are masked too: `Token`, `X-Token`, `X-Id-Token`, `X-Refresh-Token`, `Cf-Access-Jwt-Assertion`, `X-Key`, `Auth`, `X-Password` and similar, while rate-limit headers such as `x-ratelimit-remaining-tokens` stay readable. Masked header values of 24 characters or fewer are now fully masked instead of showing their first and last 4 characters. In Copilot session config, query secrets in an MCP server's `serverUrl` / `server_url` are redacted like `url`. **Migration:** a header or query parameter you relied on seeing in Coolhand may now read `[REDACTED]` or `****`; for example `Idempotency-Key` is masked.
+
+### Internal
+- `examples/copilot_send_and_wait.py` (offline, no keys) guards the `send_and_wait` capture: it exits 1 unless each model call of a `sendAndWait` turn arrives as its own record. It is not part of `make verify`; the `/prep-release` skill runs it.
+- The `/prep-release` and `/finish-release` skills now credit outside and first-time contributors in the changelog and release notes, and merge with `gh pr merge --admin` to get past the maintainer-only ruleset on `main` (#246).
+- Dev/CI-only dependency bumps (none changes the runtime dependencies of the published package): `opentelemetry-api` 1.45.1 → 1.45.2 (#260), `ruff` 0.17.3 → 0.17.4 (#258), `certifi` 2026.10.19 → 2026.10.23 in the lock file (#257), `pytest-asyncio` 1.4.0 → 1.4.1.post1 (#256) and `types-requests` 2.33.0.20261006 → 2.33.0.20261030 (#259). The lock file also moves `dnspython` 2.9.0 → 2.9.2, which clears CVE-2026-128089 flagged by the CI `pip-audit` step; it is a transitive dev-only dependency (via `email-validator`) and is not part of the published package.
+
 ## [0.12.0] - 2026-11-05
 
 ### Added

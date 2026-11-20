@@ -93,7 +93,7 @@ _SESSION_CONFIG_FIELDS = ("provider", "mcpServers", "customAgents")
 # Maps of credential-bearing values whose names (e.g. "Authorization") don't look
 # sensitive, so every value in them is masked.
 _SECRET_VALUE_MAPS = ("headers", "env", "environment")
-_URL_FIELDS = ("url", "baseUrl")
+_URL_FIELDS = ("url", "baseUrl", "serverUrl", "server_url")
 
 
 def _redact_session_config(value: Any) -> Any:
@@ -402,6 +402,13 @@ def patch() -> bool:
 
         try:
             result = await _original_request(self, method, params, timeout, **kwargs)
+        except asyncio.CancelledError:
+            # A cancelled turn (user hit stop) is a BaseException, so the handler
+            # below misses it. Drop its entry so it cannot sit at the head of the
+            # queue and absorb every later message for this session.
+            with _lock:
+                _remove_from_pre_pending(session_id, entry)
+            raise
         except Exception as e:
             with _lock:
                 still_owned = _remove_from_pre_pending(session_id, entry)

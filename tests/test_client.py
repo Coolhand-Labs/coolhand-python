@@ -28,21 +28,20 @@ class TestMaskValue:
     """Tests for _mask_value helper function."""
 
     def test_mask_short_string(self):
-        """Strings <= 8 chars are fully masked."""
+        """Strings <= 24 chars are fully masked (no partial reveal of short secrets)."""
         assert _mask_value("abc") == "***"
         assert _mask_value("12345678") == "********"
+        assert _mask_value("123456789") == "*********"
+        assert _mask_value("sk-1234567890abcdef") == "*" * 19
+        assert _mask_value("a" * 24) == "*" * 24
 
     def test_mask_long_string(self):
-        """Strings > 8 chars keep first/last 4 chars."""
-        result = _mask_value("sk-1234567890abcdef")
+        """Strings > 24 chars keep first/last 4 chars."""
+        value = "sk-1234567890abcdefghijklmnop"
+        result = _mask_value(value)
         assert result.startswith("sk-1")
-        assert result.endswith("cdef")
-        assert "****" in result
-
-    def test_mask_exactly_9_chars(self):
-        """Edge case: 9 char string has 1 asterisk in middle."""
-        result = _mask_value("123456789")
-        assert result == "1234*6789"
+        assert result.endswith("mnop")
+        assert result == f"sk-1{'*' * (len(value) - 8)}mnop"
 
 
 class TestSanitizeHeaders:

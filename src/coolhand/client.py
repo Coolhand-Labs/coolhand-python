@@ -5,6 +5,7 @@ import json
 import logging
 import os
 import queue
+import re
 import threading
 import time
 import uuid
@@ -236,16 +237,56 @@ def _get_default_config() -> Config:
 
 def _mask_value(value: str) -> str:
     """Mask a sensitive value, keeping first/last 4 chars."""
-    if len(value) <= 8:
+    # Revealing 8 characters of a short secret leaks a large share of it.
+    if len(value) <= 24:
         return "*" * len(value)
     return f"{value[:4]}{'*' * (len(value) - 8)}{value[-4:]}"
+
+
+# Credential header names that carry none of the SENSITIVE_HEADERS substrings
+# (``X-Token``, ``X-Id-Token``, ``Cf-Access-Jwt-Assertion``, ``X-Key``,
+# ``X-Password``). ``tokens`` is excluded so rate-limit headers such as
+# ``x-ratelimit-remaining-tokens`` stay readable.
+_SENSITIVE_HEADER_RE = re.compile(r"token(?!s)|jwt|passw|(?:^|[-_])(?:key|auth)$")
+
+# Substrings that mark a query parameter as a credential once ``-``/``_`` are
+# stripped and the name is lowercased (``authToken``, ``sas_token``, ``privateKey``).
+_SENSITIVE_QUERY_SUBSTRINGS = (
+    "token",
+    "secret",
+    "password",
+    "passwd",
+    "apikey",
+    "privatekey",
+    "signature",
+    "jwt",
+)
+_SENSITIVE_QUERY_NORMALIZED = frozenset(
+    p.replace("-", "").replace("_", "") for p in SENSITIVE_QUERY_PARAMS
+)
+
+
+def _is_sensitive_query_param(name: str) -> bool:
+    """Whether a query parameter name looks like it holds a credential."""
+    lowered = name.lower()
+    if lowered in SENSITIVE_QUERY_PARAMS:
+        return True
+    normalized = lowered.replace("-", "").replace("_", "")
+    if normalized in _SENSITIVE_QUERY_NORMALIZED:
+        return True
+    return not normalized.endswith("tokens") and any(
+        s in normalized for s in _SENSITIVE_QUERY_SUBSTRINGS
+    )
 
 
 def _sanitize_headers(headers: dict[str, str]) -> dict[str, str]:
     """Sanitize sensitive headers."""
     result = {}
     for key, value in headers.items():
-        if any(s in key.lower() for s in SENSITIVE_HEADERS):
+        lowered = key.lower()
+        if any(s in lowered for s in SENSITIVE_HEADERS) or _SENSITIVE_HEADER_RE.search(
+            lowered
+        ):
             result[key] = _mask_value(str(value))
         else:
             result[key] = value
@@ -268,13 +309,18 @@ def _sanitize_url(url: str) -> str:
         redacted = host != parsed.netloc
         if redacted:
             parsed = parsed._replace(netloc=host)
+        # A fragment is never sent to the server, but httpx keeps it in
+        # ``str(request.url)`` and ``#access_token=...`` would be forwarded.
+        if parsed.fragment:
+            parsed = parsed._replace(fragment="")
+            redacted = True
         if parsed.query:
             params = parse_qs(parsed.query, keep_blank_values=True)
             query_redacted = False
             # Every spelling is checked: "Key=a&key=b" must redact both, so do not
             # collapse keys by their lowercased form.
             for actual_key in params:
-                if actual_key.lower() in SENSITIVE_QUERY_PARAMS:
+                if _is_sensitive_query_param(actual_key):
                     params[actual_key] = ["[REDACTED]"]
                     query_redacted = True
             if query_redacted:
@@ -284,7 +330,13 @@ def _sanitize_url(url: str) -> str:
     except Exception:
         # Fail closed: if redaction itself breaks, drop the query string rather
         # than risk forwarding an unredacted secret in it.
-        return url.split("?", 1)[0]
+        # Userinfo (``user:pass@``) is stripped too, since it is a credential.
+        return re.sub(
+            r"^([a-z][a-z0-9+.-]*://)[^/?#]*@",
+            r"\1",
+            url.split("?", 1)[0].split("#", 1)[0],
+            flags=re.IGNORECASE,
+        )
 
 
 def _normalize_key_name(key: str) -> str:

@@ -385,3 +385,73 @@ class TestV0110RedactionSpellings:
     def test_every_entry_point_rejects_credentials_in_base_url(self, build):
         with pytest.raises(ValueError, match="must not contain credentials"):
             build("https://user:hunter2@coolhandlabs.com")
+
+
+class TestV0121RedTeamRedaction:
+    """Credential spellings the v0.12.1 red-team found slipping past redaction."""
+
+    @pytest.mark.parametrize(
+        "param",
+        [
+            "authToken",
+            "bearerToken",
+            "sessionToken",
+            "privateKey",
+            "private_key",
+            "apiSecret",
+            "idToken",
+            "id-token",
+            "jwt",
+            "sas_token",
+        ],
+    )
+    def test_more_query_param_spellings_are_redacted(self, param):
+        result = _sanitize_url(f"https://h.example/p?{param}=SECRETVALUE&ok=1")
+        assert "SECRETVALUE" not in result
+        assert "ok=1" in result
+
+    @pytest.mark.parametrize("param", ["max_tokens", "page", "model", "tokens"])
+    def test_benign_query_params_are_kept(self, param):
+        result = _sanitize_url(f"https://h.example/p?{param}=5")
+        assert f"{param}=5" in result
+
+    def test_url_fragment_credentials_are_dropped(self):
+        result = _sanitize_url("https://h.example/p?ok=1#access_token=SECRETVALUE")
+        assert "SECRETVALUE" not in result
+        assert "ok=1" in result
+
+    def test_fail_closed_url_still_drops_userinfo(self):
+        # An unterminated IPv6 literal makes urlparse raise.
+        result = _sanitize_url("https://user:SECRETPW@[abc/x?key=SECRETKEY")
+        assert "SECRETPW" not in result
+        assert "SECRETKEY" not in result
+
+    @pytest.mark.parametrize(
+        "header",
+        [
+            "Token",
+            "X-Token",
+            "X-Id-Token",
+            "X-Refresh-Token",
+            "Cf-Access-Jwt-Assertion",
+            "X-Key",
+            "Auth",
+            "X-Anthropic-Key",
+            "X-Password",
+        ],
+    )
+    def test_more_credential_header_names_are_masked(self, header):
+        result = _sanitize_headers({header: "SECRETVALUE-0123456789"})
+        assert "SECRETVALUE" not in result[header]
+
+    @pytest.mark.parametrize(
+        "header",
+        [
+            "x-ratelimit-remaining-tokens",
+            "anthropic-ratelimit-tokens-remaining",
+            "Content-Type",
+            "X-Request-Id",
+        ],
+    )
+    def test_rate_limit_and_ordinary_headers_stay_readable(self, header):
+        assert _sanitize_headers({header: "123"})[header] == "123"

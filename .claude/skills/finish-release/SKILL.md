@@ -60,11 +60,15 @@ deploy. No human approval. Say so in the final report.
 
 1. Save the PR's current description outside the repo:
    `gh pr view <n> --json body --jq .body > /tmp/release-pr-<n>-body.md`.
-2. `gh pr merge <n> --squash --delete-branch --subject "release vX.Y.Z (#<n>)"
-   --body-file /tmp/release-pr-<n>-body.md`. This matches history (`release
-   v0.10.1 (#209)`, body = PR description). `--subject` is used verbatim, so
-   keep the `(#<n>)`. Add no attribution lines. Never `--admin` or bypass
-   checks; if the merge is refused, stop and report.
+2. `gh pr merge <n> --squash --delete-branch --admin --subject "release
+   vX.Y.Z (#<n>)" --body-file /tmp/release-pr-<n>-body.md`. This matches
+   history (`release v0.10.1 (#209)`, body = PR description). `--subject` is
+   used verbatim, so keep the `(#<n>)`. Add no attribution lines. `--admin` is
+   needed because the "only maintainers can merge" ruleset rejects a plain
+   merge, and invoking this skill is the user's authorization for it. It is
+   for that ruleset only: Phase 1 step 4 already required green checks, and
+   `--admin` is never the way past a red or pending one. If the merge is still
+   refused, stop and report.
 3. `git fetch origin main --tags`; `<sha>` is `gh pr view <n> --json
    mergeCommit --jq .mergeCommit.oid`. Re-read the three version files at
    `<sha>` and confirm they still say `X.Y.Z`.
@@ -99,6 +103,17 @@ Don't invent a different layout; improve the CHANGELOG in a PR instead.
    rewrite it, but check what it links: every `(#N)` is a merged PR
    (`gh pr view N --json state`) and every `./docs/...` link resolves at
    `<sha>`. Flag, don't silently edit, a `Known gap` the release touched.
+   **Check contributor credit too.** For every `(#N)` in the section,
+   `gh pr view N --json author`; for each author that is neither a bot nor a
+   team member (`gh api repos/{owner}/{repo}/pulls/N --jq .author_association`
+   is not `MEMBER`, `OWNER` or `COLLABORATOR`), the entry must carry `thanks
+   @login` and the section must end with a `### Thanks` naming them. If that
+   author had no commit on `main` before this release (`gh api
+   "repos/{owner}/{repo}/commits?author=<login>&until=<previous-tag-date>"`
+   is `[]`), the thanks must also say it is their first contribution. If any
+   of it is missing, stop and tell the user before publishing, since the
+   release notes are what the contributor sees; don't edit the tagged
+   changelog silently.
 3. `gh release create vX.Y.Z --verify-tag --title "vX.Y.Z" --notes-file
    .context/release-notes-vX.Y.Z.md --latest`. Not a draft and not a
    prerelease, same as the previous release. Confirm with
@@ -109,6 +124,8 @@ Don't invent a different layout; improve the CHANGELOG in a PR instead.
 State, in the final message:
 - The merged PR number and its merge commit (or that it was already merged).
 - The tag and the commit it points at, and the release URL.
+- Outside and first-time contributors credited in the release notes, by `@login`
+  and PR (or that there were none).
 - The Publish run (`gh run list --workflow publish.yml --limit 1`): about 15-20
   minutes, mostly the `pypi-publish` wait timer. Do not approve, re-run or
   publish by any other route. If asked whether it is live: `curl -s -o

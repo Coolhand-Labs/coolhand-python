@@ -9,6 +9,7 @@ Run any example from the repo root with `uv run python examples/<name>.py`.
 | `streaming_capture.py` | Offline pass/fail check: sync SSE streams are captured with their message id and token counts (no keys) |
 | `abandoned_stream.py` | Offline pass/fail check: streams abandoned part-way (`break`, `close()`, async `break`, cancelled task) reach Coolhand with `stream_incomplete: true`, completed ones without it (no keys) |
 | `body_redaction.py` | Offline pass/fail check: credentials in captured request and response bodies (MCP tokens, `client_secret`) are redacted before delivery, ordinary fields are kept (no keys) |
+| `copilot_send_and_wait.py` | Offline pass/fail check: GitHub Copilot `send_and_wait` turns are captured, one log per model call, each with the Copilot message id as `id` (fake SDK, no keys) |
 | `dramatiq_pydantic_ai.py` | Dramatiq + pydantic-ai, see [docs/dramatiq.md](../docs/dramatiq.md) |
 | `band-guesser/` | FastAPI app, see its own README |
 | `live_openai.py`, `live_anthropic.py` | Live smoke tests, below |
@@ -45,6 +46,20 @@ if any secret value appears anywhere in what that server receives, if a secret f
 
 ```bash
 uv run python examples/body_redaction.py
+```
+
+## Copilot `send_and_wait` check
+
+`copilot_send_and_wait.py` needs no keys, no outside network and no `copilot` CLI. A fake `copilot._jsonrpc` module
+stands in for github-copilot-sdk: `session.sendAndWait` stays open for a three-call agent turn and emits one
+`assistant.message` per model call, like the real runtime does in a tool loop. The real interceptor and Coolhand client
+deliver to a throwaway local server, and the script exits 1 unless that server receives all three calls in order, each with
+the request prompt and its own token usage, the last one carrying its message id as `id`, and a plain `session.send` still
+logs only its first message. It exercises the interceptor against a fake runtime, so it doesn't replace a run against the
+real SDK (see `band-guesser/`).
+
+```bash
+uv run python examples/copilot_send_and_wait.py
 ```
 
 ## Live smoke tests

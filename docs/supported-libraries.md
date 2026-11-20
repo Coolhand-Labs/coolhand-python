@@ -39,6 +39,8 @@ Directly patches `JsonRpcClient.request` in the GitHub Copilot SDK. Used because
 
 Each `session.send` is captured with the `session.create` parameters of its session merged into the body (credentials redacted). A session's `systemMessage.content` is also surfaced as a top-level `system` string, matching the shape of Anthropic's `body.system`; `systemMessage` itself is left unchanged. Cloud/remote sessions (`CopilotClient(enable_remote_sessions=True)`) are supported: their `sessionId` is assigned by the server, so the parameters are held until the `session.create` response supplies it. Session context is kept for 300 seconds, so a `session.send` made after that no longer carries the system prompt.
 
+`send_and_wait` (which sends `session.sendAndWait`) is captured too. Because that call stays open for the whole agent turn, every `assistant.message` the model emits during it (each step of a tool loop, including the final one that writes the answer) is logged as its own record, with the same request body and each timed from the previous message. A plain `session.send` still logs only the first `assistant.message` after it, since coolhand can't tell when that turn ends. Each response body also carries the Copilot message id as `id` (alongside `messageId`), so you can pass it as `llm_provider_unique_id` to `create_feedback`.
+
 ---
 
 ## How It Works

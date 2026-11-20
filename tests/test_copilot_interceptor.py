@@ -2302,3 +2302,256 @@ class TestRedTeamHardening:
 
         # Must not raise on the SDK's reader thread
         cls()._handle_message(_assistant_message_notification("s1", "m1", "hi"))
+
+
+# ---------------------------------------------------------------------------
+# send_and_wait (session.sendAndWait): one record per model call in the turn
+# ---------------------------------------------------------------------------
+
+
+def _make_send_and_wait_client(messages, session_id="s1"):
+    """A fake client whose sendAndWait emits assistant.message events while the
+    RPC is still open, like the runtime does for a tool loop."""
+
+    class SendAndWaitClient:
+        async def request(self, method, params=None, timeout=None, **kwargs):
+            if method == "session.sendAndWait":
+                for i, content in enumerate(messages):
+                    # Dispatch through the (patched) class attribute, as the
+                    # SDK's reader does.
+                    self._handle_message(
+                        _assistant_message_notification(
+                            session_id, f"msg-{i}", content, model="gpt-4o"
+                        )
+                    )
+            return {"messageId": "msg-ack"}
+
+        def _handle_message(self, message):
+            pass
+
+    return SendAndWaitClient
+
+
+class TestSendAndWait:
+    @pytest.mark.asyncio
+    async def test_send_and_wait_is_captured(self, handler):
+        from coolhand import copilot_interceptor
+
+        cls = _inject_fake_sdk(_make_send_and_wait_client(["the plan"]))
+        copilot_interceptor.set_handler(handler)
+        copilot_interceptor.patch()
+
+        await cls().request("session.sendAndWait", {"sessionId": "s1", "prompt": "go"})
+
+        handler.assert_called_once()
+        req_data, res_data, err = handler.call_args[0]
+        assert err is None
+        assert req_data["url"] == "copilot://session.send"
+        assert req_data["body"]["prompt"] == "go"
+        assert res_data["body"]["content"] == "the plan"
+        assert res_data["body"]["sessionId"] == "s1"
+        assert "s1" not in copilot_interceptor._pre_pending
+
+    @pytest.mark.asyncio
+    async def test_every_assistant_message_in_the_turn_is_logged(self, handler):
+        from coolhand import copilot_interceptor
+
+        cls = _inject_fake_sdk(_make_send_and_wait_client(["one", "two", "the plan"]))
+        copilot_interceptor.set_handler(handler)
+        copilot_interceptor.patch()
+
+        await cls().request("session.sendAndWait", {"sessionId": "s1", "prompt": "go"})
+
+        assert handler.call_count == 3
+        contents = [c[0][1]["body"]["content"] for c in handler.call_args_list]
+        assert contents == ["one", "two", "the plan"]
+        assert all(c[0][2] is None for c in handler.call_args_list)
+        assert all(c[0][0]["body"]["prompt"] == "go" for c in handler.call_args_list)
+        # Later calls are timed from the previous message, not the request.
+        first_req, first_res, _ = handler.call_args_list[0][0]
+        _, second_res, _ = handler.call_args_list[1][0]
+        second_req = handler.call_args_list[1][0][0]
+        assert first_req["timestamp"] <= first_res["timestamp"]
+        assert second_req["timestamp"] == first_res["timestamp"]
+        assert second_res["duration"] == pytest.approx(
+            second_res["timestamp"] - first_res["timestamp"]
+        )
+        assert "s1" not in copilot_interceptor._pre_pending
+
+    @pytest.mark.asyncio
+    async def test_plain_session_send_still_logs_only_first_message(self, handler):
+        from coolhand import copilot_interceptor
+
+        cls = _inject_fake_sdk()
+        copilot_interceptor.set_handler(handler)
+        copilot_interceptor.patch()
+        instance = cls()
+
+        await instance.request("session.send", {"sessionId": "s1", "prompt": "go"})
+        instance._handle_message(_assistant_message_notification("s1", "m1", "one"))
+        instance._handle_message(_assistant_message_notification("s1", "m2", "two"))
+
+        handler.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_response_body_exposes_message_id_as_id(self, handler):
+        from coolhand import copilot_interceptor
+
+        cls = _inject_fake_sdk(_make_send_and_wait_client(["the plan"]))
+        copilot_interceptor.set_handler(handler)
+        copilot_interceptor.patch()
+
+        await cls().request("session.sendAndWait", {"sessionId": "s1", "prompt": "go"})
+
+        body = handler.call_args[0][1]["body"]
+        assert body["id"] == "msg-0"
+        assert body["messageId"] == "msg-0"
+
+    def test_existing_id_is_not_overwritten(self, handler):
+        from coolhand import copilot_interceptor
+
+        cls = _inject_fake_sdk()
+        copilot_interceptor.set_handler(handler)
+        copilot_interceptor.patch()
+        TestHandleMessageInterception()._prime_pending(copilot_interceptor, "s1")
+        msg = _assistant_message_notification("s1", "msg-001", "hi")
+        msg["params"]["event"]["data"]["id"] = "provider-id"
+
+        cls()._handle_message(msg)
+
+        assert handler.call_args[0][1]["body"]["id"] == "provider-id"
+
+    @pytest.mark.asyncio
+    async def test_no_message_logs_error_via_fallback(self, handler, monkeypatch):
+        import asyncio
+
+        from coolhand import copilot_interceptor
+
+        cls = _inject_fake_sdk(_make_send_and_wait_client([]))
+        copilot_interceptor.set_handler(handler)
+        copilot_interceptor.patch()
+        monkeypatch.setattr(
+            copilot_interceptor, "COPILOT_INTERCEPTOR_FALLBACK_TIMEOUT", 0
+        )
+
+        await cls().request("session.sendAndWait", {"sessionId": "s1", "prompt": "hi"})
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+
+        handler.assert_called_once()
+        _, res_data, err = handler.call_args[0]
+        assert res_data is None
+        assert "no assistant.message" in err
+
+    @pytest.mark.asyncio
+    async def test_late_message_after_fallback_is_delivered_once(
+        self, handler, monkeypatch
+    ):
+        import asyncio
+
+        from coolhand import copilot_interceptor
+
+        cls = _inject_fake_sdk(_make_send_and_wait_client([]))
+        copilot_interceptor.set_handler(handler)
+        copilot_interceptor.patch()
+        monkeypatch.setattr(
+            copilot_interceptor, "COPILOT_INTERCEPTOR_FALLBACK_TIMEOUT", 0
+        )
+        instance = cls()
+
+        await instance.request(
+            "session.sendAndWait", {"sessionId": "s1", "prompt": "hi"}
+        )
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+        instance._handle_message(_assistant_message_notification("s1", "m1", "late"))
+        instance._handle_message(_assistant_message_notification("s1", "m2", "extra"))
+
+        # error record, then exactly one success record; the entry is consumed
+        assert handler.call_count == 2
+        assert handler.call_args_list[1][0][1]["body"]["content"] == "late"
+        assert "s1" not in copilot_interceptor._pre_pending
+
+    @pytest.mark.asyncio
+    async def test_failure_after_messages_does_not_log_request_error(self, handler):
+        from coolhand import copilot_interceptor
+
+        class FailingAfterMessages:
+            async def request(self, method, params=None, timeout=None, **kwargs):
+                self._handle_message(_assistant_message_notification("s1", "m1", "x"))
+                raise TimeoutError("turn timed out")
+
+            def _handle_message(self, message):
+                pass
+
+        _inject_fake_sdk(FailingAfterMessages)
+        copilot_interceptor.set_handler(handler)
+        copilot_interceptor.patch()
+
+        with pytest.raises(TimeoutError):
+            await FailingAfterMessages().request(
+                "session.sendAndWait", {"sessionId": "s1", "prompt": "go"}
+            )
+
+        handler.assert_called_once()
+        assert handler.call_args[0][2] is None
+        assert "s1" not in copilot_interceptor._pre_pending
+
+    @pytest.mark.asyncio
+    async def test_failure_before_any_message_logs_error(self, handler):
+        from coolhand import copilot_interceptor
+
+        class FailingClient:
+            async def request(self, method, params=None, timeout=None, **kwargs):
+                raise ConnectionError("down")
+
+            def _handle_message(self, message):
+                pass
+
+        _inject_fake_sdk(FailingClient)
+        copilot_interceptor.set_handler(handler)
+        copilot_interceptor.patch()
+
+        with pytest.raises(ConnectionError):
+            await FailingClient().request(
+                "session.sendAndWait", {"sessionId": "s1", "prompt": "go"}
+            )
+
+        handler.assert_called_once()
+        assert handler.call_args[0][2] == "down"
+
+    def test_long_turn_is_not_evicted_while_messages_keep_arriving(
+        self, handler, monkeypatch
+    ):
+        """An open sendAndWait entry older than the TTL survives the stale sweep
+        as long as it produced a message recently, and is not reported as
+        unanswered when finally evicted."""
+        from coolhand import copilot_interceptor
+
+        cls = _inject_fake_sdk()
+        copilot_interceptor.set_handler(handler)
+        copilot_interceptor.patch()
+        ttl = copilot_interceptor.COPILOT_INTERCEPTOR_PENDING_TTL_SECONDS
+        now = time.time()
+        entry = {
+            "req_data": {"body": {"prompt": "go"}, "timestamp": now - ttl - 60},
+            "start": now - ttl - 60,
+            "last_end": now - 1,
+            "multi": True,
+            "messages": 5,
+            "logged": False,
+        }
+        with copilot_interceptor._lock:
+            copilot_interceptor._pre_pending["s1"] = [entry]
+
+        cls()._handle_message(
+            {"method": "session.event", "params": {"sessionId": "x", "event": {}}}
+        )
+        assert copilot_interceptor._pre_pending["s1"] == [entry]
+
+        entry["last_end"] = now - ttl - 1
+        cls()._handle_message(
+            {"method": "session.event", "params": {"sessionId": "x", "event": {}}}
+        )
+        assert "s1" not in copilot_interceptor._pre_pending
+        handler.assert_not_called()

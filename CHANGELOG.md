@@ -4,6 +4,16 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [0.12.1] - 2026-11-20
+
+### Fixed
+- **Copilot `send_and_wait` agent runs are now captured, one log per model call.** The Copilot interceptor only handled `session.send`, so an agent run started with `send_and_wait` (which sends `session.sendAndWait`) recorded nothing, and even a plain `send` logged only the first `assistant.message`, dropping every later model call in a tool loop, including the one that writes the answer. The interceptor now handles `session.sendAndWait` too: it keeps the request open for the whole call and logs one record per `assistant.message`, each carrying the same request body and timed from the previous message. A turn that fails after logging messages is not also logged again as a request error, and a turn that is still producing messages is not evicted by the 300-second stale-entry sweep. Each Copilot response body now also carries the message id as `id` (alongside `messageId`), so you can pass it as `llm_provider_unique_id` to `create_feedback`. **Migration:** nothing to change. A plain `session.send` is unchanged (first message only, since there is no way to tell when that turn ends), and `send_and_wait` users simply start seeing records. This was verified against a fake `copilot._jsonrpc` and an offline example; see [Copilot](./docs/supported-libraries.md). (#264)
+
+### Internal
+- `examples/copilot_send_and_wait.py` (offline, no keys) guards the `send_and_wait` capture: it exits 1 unless each model call of a `sendAndWait` turn arrives as its own record. It is not part of `make verify`; the `/prep-release` skill runs it.
+- The `/prep-release` and `/finish-release` skills now credit outside and first-time contributors in the changelog and release notes, and merge with `gh pr merge --admin` to get past the maintainer-only ruleset on `main` (#246).
+- Dev/CI-only dependency bumps (none changes the runtime dependencies of the published package): `opentelemetry-api` 1.45.1 → 1.45.2 (#260), `ruff` 0.17.3 → 0.17.4 (#258), `certifi` 2026.10.19 → 2026.10.23 in the lock file (#257), `pytest-asyncio` 1.4.0 → 1.4.1.post1 (#256) and `types-requests` 2.33.0.20261006 → 2.33.0.20261030 (#259). The lock file also moves `dnspython` 2.9.0 → 2.9.2, which clears CVE-2026-128089 flagged by the CI `pip-audit` step; it is a transitive dev-only dependency (via `email-validator`) and is not part of the published package.
+
 ## [0.12.0] - 2026-11-05
 
 ### Added

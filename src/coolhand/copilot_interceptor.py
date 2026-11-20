@@ -20,6 +20,14 @@ COPILOT_INTERCEPTOR_PENDING_TTL_SECONDS = 300
 # copilot model rejects or drops the request without emitting a notification.
 COPILOT_INTERCEPTOR_FALLBACK_TIMEOUT = 60.0
 
+# JSON-RPC methods that carry a prompt.  ``send_and_wait`` in github-copilot-sdk
+# sends ``session.sendAndWait`` (falling back to ``session.send`` only on older
+# runtimes).  Unlike a plain ``session.send``, the RPC stays open until the whole
+# agent turn finishes, so the model can emit many ``assistant.message`` events
+# (a tool loop) before it returns.
+_SEND_METHOD = "session.send"
+_SEND_AND_WAIT_METHOD = "session.sendAndWait"
+
 _patched = False
 _original_request: Callable | None = None
 _original_handle_message: Callable | None = None
@@ -139,6 +147,16 @@ def _remove_from_pre_pending(session_id: str | None, entry: dict[str, Any]) -> b
     return False
 
 
+def _entry_age_origin(entry: dict[str, Any]) -> float:
+    """Time an entry's staleness is measured from.
+
+    A sendAndWait entry stays open across many model calls, so a long agent run
+    must not be evicted while it is still producing messages: measure from its
+    most recent message rather than from the request.
+    """
+    return float(entry.get("last_end", entry["start"]))
+
+
 def _sweep_stale() -> None:
     """Evict stale entries from all session caches.
 
@@ -154,7 +172,8 @@ def _sweep_stale() -> None:
         for sid, queue in list(_pre_pending.items()):
             while (
                 queue
-                and now - queue[0]["start"] > COPILOT_INTERCEPTOR_PENDING_TTL_SECONDS
+                and now - _entry_age_origin(queue[0])
+                > COPILOT_INTERCEPTOR_PENDING_TTL_SECONDS
             ):
                 stale_entries.append(queue.pop(0))
             if not queue:
@@ -185,7 +204,8 @@ def _sweep_stale() -> None:
             del _session_usage[k]
 
     for entry in stale_entries:
-        if not entry.get("logged"):
+        # A sendAndWait entry that already produced records is not "unanswered".
+        if not entry.get("logged") and not entry.get("messages"):
             entry["logged"] = True
             _log_no_response(entry)
 
@@ -245,7 +265,11 @@ def _fallback_log(session_id: str | None, entry: dict[str, Any]) -> None:
     """
     with _lock:
         queue = _pre_pending.get(session_id, [])
-        still_pending = any(e is entry for e in queue) and not entry.get("logged")
+        still_pending = (
+            any(e is entry for e in queue)
+            and not entry.get("logged")
+            and not entry.get("messages")
+        )
         if still_pending:
             entry["logged"] = True
     if still_pending:
@@ -335,8 +359,9 @@ def patch() -> bool:
                     )
             return result
 
-        if method != "session.send":
+        if method not in (_SEND_METHOD, _SEND_AND_WAIT_METHOD):
             return await _original_request(self, method, params, timeout, **kwargs)
+        multi = method == _SEND_AND_WAIT_METHOD
 
         start = time.time()
         p = params or {}
@@ -367,6 +392,10 @@ def patch() -> bool:
             "start": start,
             "timer": None,
             "logged": False,
+            # sendAndWait: the entry stays queued for the whole call and yields
+            # one record per assistant.message (see patched_handle_message).
+            "multi": multi,
+            "messages": 0,
         }
         with _lock:
             _pre_pending.setdefault(session_id, []).append(entry)
@@ -376,7 +405,9 @@ def patch() -> bool:
         except Exception as e:
             with _lock:
                 still_owned = _remove_from_pre_pending(session_id, entry)
-            if still_owned:
+            # A sendAndWait that already logged some model calls before failing
+            # must not also log its request again as an error.
+            if still_owned and not entry["messages"]:
                 try:
                     _handler(req_data, None, str(e))
                 except Exception:
@@ -389,6 +420,13 @@ def patch() -> bool:
         # suspended in the await above (the same pre-existing race the
         # exception branch above guards against with _remove_from_pre_pending).
         with _lock:
+            if multi:
+                # The turn is over.  Close the entry if it produced records;
+                # otherwise leave it for the fallback, and let a late message
+                # consume it like a plain session.send (see "done").
+                entry["done"] = True
+                if entry["messages"]:
+                    _remove_from_pre_pending(session_id, entry)
             still_pending = any(e is entry for e in _pre_pending.get(session_id, []))
         if still_pending:
             # patched_request only runs as an awaited coroutine, so a running
@@ -454,9 +492,18 @@ def patch() -> bool:
                             }
                 elif event_type == "assistant.message":
                     data = event.get("data", {})
+                    end = time.time()
                     with _lock:
                         queue = _pre_pending.get(session_id, [])
-                        if queue:
+                        call_start = None
+                        if queue and queue[0].get("multi") and not queue[0].get("done"):
+                            # sendAndWait still running: keep the entry open for
+                            # the turn's next model call and log this one.
+                            pending = queue[0]
+                            call_start = pending.get("last_end", pending["start"])
+                            pending["last_end"] = end
+                            pending["messages"] += 1
+                        elif queue:
                             pending = queue.pop(0)
                             if not queue:
                                 del _pre_pending[session_id]
@@ -468,22 +515,36 @@ def patch() -> bool:
                         )
                     if pending:
                         _cancel_timer(pending)
-                        end = time.time()
+                        req_data = pending["req_data"]
+                        if call_start is not None and pending["messages"] > 1:
+                            # Later model calls of a sendAndWait turn: same
+                            # request, timed from the previous message.
+                            req_data = {**req_data, "timestamp": call_start}
+                        duration_start = (
+                            call_start if call_start is not None else pending["start"]
+                        )
+                        res_body: dict[str, Any] = {
+                            **data,
+                            **cached_usage,
+                            "sessionId": session_id,
+                            "model": data.get("model") or cached_model,
+                        }
+                        # Feedback matches on llm_provider_unique_id, and the
+                        # Copilot message id is the closest thing to a provider
+                        # request id, so also expose it as "id".
+                        message_id = data.get("messageId")
+                        if "id" not in res_body and isinstance(message_id, str):
+                            res_body["id"] = message_id
                         res_data: ResponseData = {
                             "status_code": 200,
                             "headers": {},
-                            "body": {
-                                **data,
-                                **cached_usage,
-                                "sessionId": session_id,
-                                "model": data.get("model") or cached_model,
-                            },
+                            "body": res_body,
                             "timestamp": end,
-                            "duration": end - pending["start"],
+                            "duration": end - duration_start,
                             "is_streaming": False,
                         }
                         try:
-                            _handler(pending["req_data"], res_data, None)
+                            _handler(req_data, res_data, None)
                         except Exception as e:
                             logger.warning("Copilot handler error: %s", e)
         except Exception as e:

@@ -48,6 +48,11 @@ class Config(TypedDict, total=False):
     # truncated and end with a "[truncated: N bytes, ...]" marker. ``None`` or 0
     # disables the limit. Defaults to 1 MiB.
     max_body_bytes: int | None
+    # Max serialized bytes of captured bodies that may wait for delivery at once.
+    # Once exceeded (for example while Coolhand is unreachable) new interactions
+    # are dropped instead of queued, and counted in ``dropped_count``. ``None`` or
+    # 0 disables the limit. Defaults to 16 MiB.
+    max_queued_bytes: int | None
     # Timeout in seconds for every call to the Coolhand API: interaction delivery,
     # feedback submission, templates and feedback links. Defaults to 30. Must be a
     # finite number greater than zero and at most 2**31 - 1; anything else raises

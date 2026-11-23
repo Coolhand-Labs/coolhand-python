@@ -3,12 +3,18 @@
 import asyncio
 import itertools
 import logging
+import os
+import re
 import threading
 import time
 from collections.abc import Callable
 from typing import Any
 
-from .client import _is_sensitive_body_key, _sanitize_url
+from .client import (
+    _is_sensitive_body_key,
+    _is_sensitive_query_param,
+    _sanitize_url,
+)
 from .declared_context import attach_snapshot
 from .types import RequestData, ResponseData
 
@@ -68,6 +74,20 @@ _session_usage: dict[str | None, dict[str, Any]] = {}
 _lock = threading.Lock()
 
 
+def _reset_after_fork() -> None:
+    """A forked child gets this module's lock in whatever state another parent
+    thread left it (a held lock would hang the child's first Copilot call), and
+    the parent's in-flight requests, whose timers and event loop belong to the
+    parent, which logs them itself."""
+    global _lock
+    _lock = threading.Lock()
+    _pre_pending.clear()
+
+
+if hasattr(os, "register_at_fork"):
+    os.register_at_fork(after_in_child=_reset_after_fork)
+
+
 def _promote_system_prompt(body: dict[str, Any]) -> None:
     """Surface Copilot's nested systemMessage.content as a top-level `system`
     string field, mirroring Anthropic's body.system shape so the backend's
@@ -96,6 +116,58 @@ _SECRET_VALUE_MAPS = ("headers", "env", "environment")
 _URL_FIELDS = ("url", "baseUrl", "serverUrl", "server_url")
 
 
+_AUTH_ARG_NAMES = frozenset({"auth", "authorization", "bearer", "credentials"})
+_HEADER_ARG_RE = re.compile(r"^\s*([A-Za-z][A-Za-z0-9-]*)\s*:\s*\S")
+
+
+def _is_sensitive_arg_name(name: str) -> bool:
+    """Whether a command-line flag name (``--api-key``, ``-t``-less) is a credential."""
+    bare = name.lstrip("-")
+    if not bare:
+        return False
+    return (
+        _is_sensitive_body_key(bare)
+        or _is_sensitive_query_param(bare)
+        or bare.lower() in _AUTH_ARG_NAMES
+    )
+
+
+def _redact_args(args: list[Any]) -> list[Any]:
+    """Redact credentials in an MCP stdio server's ``args`` list.
+
+    Handles ``--token VALUE``, ``--api-key=VALUE``, a ``Name: value`` header
+    such as ``Authorization: Bearer ...`` (``curl``/``mcp-remote --header``), and
+    URLs carrying userinfo or a secret query parameter. A flag with a sensitive
+    name redacts the argument after it, so ``--token`` followed by a secret is
+    covered however the secret is spelled.
+    """
+    result: list[Any] = []
+    redact_next = False
+    for arg in args:
+        if not isinstance(arg, str):
+            result.append(_redact_session_config(arg))
+            redact_next = False
+            continue
+        if redact_next:
+            result.append("[REDACTED]")
+            redact_next = False
+            continue
+        if arg.startswith("-") and "=" in arg:
+            name, _, _value = arg.partition("=")
+            result.append(f"{name}=[REDACTED]" if _is_sensitive_arg_name(name) else arg)
+            continue
+        if arg.startswith("-") and _is_sensitive_arg_name(arg):
+            result.append(arg)
+            redact_next = True
+            continue
+        header = _HEADER_ARG_RE.match(arg)
+        if header and _is_sensitive_arg_name(header.group(1)):
+            result.append(f"{header.group(1)}: [REDACTED]")
+            continue
+        result.append(_sanitize_url(arg) if "://" in arg else arg)
+    return result
+
+
 def _redact_session_config(value: Any) -> Any:
     """Recursively redact credentials inside a Copilot session config subtree."""
     if isinstance(value, dict):
@@ -107,6 +179,8 @@ def _redact_session_config(value: Any) -> Any:
                 redacted[k] = "[REDACTED]"
             elif k in _URL_FIELDS and isinstance(v, str):
                 redacted[k] = _sanitize_url(v)
+            elif k == "args" and isinstance(v, list):
+                redacted[k] = _redact_args(v)
             else:
                 redacted[k] = _redact_session_config(v)
         return redacted
@@ -398,7 +472,23 @@ def patch() -> bool:
             "messages": 0,
         }
         with _lock:
-            _pre_pending.setdefault(session_id, []).append(entry)
+            queue = _pre_pending.setdefault(session_id, [])
+            # A sendAndWait that returned without a single assistant.message is
+            # kept briefly for a late message, but once this session starts a new
+            # turn that message can no longer be told apart from this turn's: drop
+            # the old entry so it cannot consume the new turn's answer.
+            abandoned = [
+                e
+                for e in queue
+                if e.get("multi") and e.get("done") and not e["messages"]
+            ]
+            for old in abandoned:
+                queue.remove(old)
+                old["logged"] = True
+            queue.append(entry)
+        for old in abandoned:
+            _cancel_timer(old)
+            _log_no_response(old)
 
         try:
             result = await _original_request(self, method, params, timeout, **kwargs)

@@ -2519,6 +2519,76 @@ class TestSendAndWait:
         assert "SECRET" not in str(redacted)
 
     @pytest.mark.asyncio
+    async def test_empty_turn_does_not_consume_the_next_turns_message(self, handler):
+        from coolhand import copilot_interceptor
+
+        class EmptyThenAnswer:
+            async def request(self, method, params=None, timeout=None, **kwargs):
+                if params["prompt"] == "B":
+                    self._handle_message(
+                        _assistant_message_notification("s1", "mB", "answer to B")
+                    )
+                return {"messageId": "ack"}
+
+            def _handle_message(self, message):
+                pass
+
+        _inject_fake_sdk(EmptyThenAnswer)
+        copilot_interceptor.set_handler(handler)
+        copilot_interceptor.patch()
+        client = EmptyThenAnswer()
+
+        # Turn A returns without a single assistant.message.
+        await client.request("session.sendAndWait", {"sessionId": "s1", "prompt": "A"})
+        await client.request("session.sendAndWait", {"sessionId": "s1", "prompt": "B"})
+
+        calls = [
+            (c[0][0]["body"]["prompt"], c[0][1], c[0][2])
+            for c in handler.call_args_list
+        ]
+        # A is reported as unanswered; B's message is logged against B, not A.
+        assert calls[0] == ("A", None, "no assistant.message event received")
+        assert calls[1][0] == "B"
+        assert calls[1][1]["body"]["content"] == "answer to B"
+        assert calls[1][2] is None
+        assert len(calls) == 2
+
+    def test_stdio_mcp_args_are_redacted(self):
+        from coolhand import copilot_interceptor
+
+        redacted = copilot_interceptor._redact_session_config(
+            {
+                "mcpServers": {
+                    "s": {
+                        "command": "npx",
+                        "args": [
+                            "-y",
+                            "some-mcp",
+                            "--token",
+                            "ARG1",
+                            "--api-key=ARG2",
+                            "--password",
+                            "ARG3",
+                            "--header",
+                            "Authorization: Bearer ARG4",
+                            "--url",
+                            "https://u:ARG5@m.example/sse?access_key=ARG6&ok=1",
+                            "--port",
+                            "8080",
+                        ],
+                    }
+                }
+            }
+        )
+        args = redacted["mcpServers"]["s"]["args"]
+        assert "ARG" not in str(args)
+        # Non-secret arguments survive.
+        assert args[:2] == ["-y", "some-mcp"]
+        assert "8080" in args
+        assert "ok=1" in str(args)
+        assert "--header" in args
+
+    @pytest.mark.asyncio
     async def test_failure_after_messages_does_not_log_request_error(self, handler):
         from coolhand import copilot_interceptor
 

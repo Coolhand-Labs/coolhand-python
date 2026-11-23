@@ -455,3 +455,179 @@ class TestV0121RedTeamRedaction:
     )
     def test_rate_limit_and_ordinary_headers_stay_readable(self, header):
         assert _sanitize_headers({header: "123"})[header] == "123"
+
+
+class TestV0121FollowUps:
+    """Follow-ups to the v0.12.1 red-team: memory budget, fork safety, error text."""
+
+    @staticmethod
+    def _client(**config):
+        from unittest.mock import patch
+
+        from coolhand.client import CoolhandClient
+
+        client = CoolhandClient(
+            auto_submit=False, api_key="real-api-key-12345", **config
+        )
+        # Keep the worker from draining, so the backlog is observable.
+        patcher = patch.object(client, "_ensure_worker_locked", return_value=True)
+        patcher.start()
+        return client, patcher
+
+    def test_queue_is_bounded_by_bytes_not_just_count(self, reset_global_instance):
+        client, patcher = self._client(max_queued_bytes=100_000, max_body_bytes=60_000)
+        try:
+            for _ in range(10):
+                client.log_interaction(
+                    {"method": "POST", "url": LLM_URL, "body": {"p": "x" * 50_000}},
+                    {"status_code": 200, "body": {"r": "y" * 50_000}},
+                )
+            assert client.flush() is False
+            stats = client.get_stats()["logging"]
+            # Only the first (empty queue) item fits; the rest are purged.
+            assert stats["pending_delivery"] == 1
+            assert stats["dropped_count"] == 9
+            assert 0 < stats["queued_bytes"] <= 120_000
+            assert len(client._queue) == 0
+        finally:
+            patcher.stop()
+
+    def test_byte_budget_is_released_after_delivery(self, reset_global_instance):
+        client, patcher = self._client(max_queued_bytes=100_000)
+        try:
+            client.log_interaction(
+                {"method": "POST", "url": LLM_URL, "body": {"p": "x" * 1000}}
+            )
+            client.flush()
+            assert client._queued_bytes > 0
+            item = client._dispatch_queue.get_nowait()
+            client._send_one = lambda i: True  # type: ignore[method-assign]
+            client._deliver(item)
+            assert client._queued_bytes == 0
+        finally:
+            patcher.stop()
+
+    def test_budget_can_be_disabled(self, reset_global_instance):
+        client, patcher = self._client(max_queued_bytes=0, max_body_bytes=60_000)
+        try:
+            for _ in range(5):
+                client.log_interaction(
+                    {"method": "POST", "url": LLM_URL, "body": {"p": "x" * 50_000}}
+                )
+            assert client.flush() is True
+            assert client.get_stats()["logging"]["pending_delivery"] == 5
+        finally:
+            patcher.stop()
+
+    def test_queued_weight_is_not_sent_to_coolhand(self, reset_global_instance):
+        from unittest.mock import patch
+
+        client, patcher = self._client()
+        patcher.stop()
+        client.log_interaction({"method": "POST", "url": LLM_URL, "body": {"a": 1}})
+        item = client._queue[0]
+        assert item["_weight"] > 0
+        with patch("coolhand.client._opener") as opener:
+            opener.open.return_value.__enter__.return_value.status = 200
+            assert client._send_one(item) is True
+            sent = opener.open.call_args[0][0].data.decode()
+        assert "_weight" not in sent
+
+    def test_drop_warning_is_rate_limited(self, reset_global_instance, caplog):
+        client, patcher = self._client(max_queued_bytes=1)
+        try:
+            with caplog.at_level(logging.WARNING, logger="coolhand.client"):
+                for _ in range(20):
+                    client.log_interaction(
+                        {"method": "POST", "url": LLM_URL, "body": {"a": 1}}
+                    )
+                    client.flush()
+            warnings = [r for r in caplog.records if "Dropped" in r.getMessage()]
+            assert len(warnings) == 1
+            assert client._dropped_count == 19
+        finally:
+            patcher.stop()
+
+    def test_plain_fork_resets_inherited_client_state(self, reset_global_instance):
+        import os
+
+        client, patcher = self._client()
+        patcher.stop()
+        client.log_interaction({"method": "POST", "url": LLM_URL, "body": {"a": 1}})
+        client._state_lock.acquire()  # a parent thread mid-update at fork time
+        read_fd, write_fd = os.pipe()
+        pid = os.fork()
+        if pid == 0:  # child: must not hang and must not own the parent's items
+            try:
+                import signal
+
+                signal.alarm(5)
+                client.log_interaction(
+                    {"method": "POST", "url": LLM_URL, "body": {"child": 1}}
+                )
+                os.write(write_fd, str(len(client._queue)).encode())
+            finally:
+                os._exit(0)
+        os.close(write_fd)
+        client._state_lock.release()
+        data = os.read(read_fd, 10)
+        os.waitpid(pid, 0)
+        assert data == b"1"  # only the child's own interaction, not the parent's
+
+    def test_error_text_is_forwarded_and_scrubbed(self, reset_global_instance):
+        client, patcher = self._client()
+        patcher.stop()
+        client.log_interaction(
+            {"method": "POST", "url": LLM_URL, "body": {"a": 1}},
+            None,
+            "HTTPSConnectionPool: Max retries exceeded with url: "
+            "https://api.openai.com/v1/x?key=SECRET123&ok=1 "
+            "Authorization: Bearer sk-abcdefghijklmnop api_key=SECRET456",
+        )
+        error = client._queue[0]["error"]
+        assert "SECRET123" not in error
+        assert "SECRET456" not in error
+        assert "abcdefghijklmnop" not in error
+        assert "Max retries exceeded" in error
+        assert "ok=1" in error
+
+    def test_no_error_field_without_an_error(self, reset_global_instance):
+        client, patcher = self._client()
+        patcher.stop()
+        client.log_interaction({"method": "POST", "url": LLM_URL}, {"status_code": 200})
+        assert "error" not in client._queue[0]
+
+    def test_error_text_is_truncated(self, reset_global_instance):
+        from coolhand.client import _sanitize_error
+
+        assert len(_sanitize_error("e" * 5000)) == 1000
+
+    @pytest.mark.parametrize(
+        "path",
+        [
+            "/v1/organization/admin_api_keys",
+            "/v1/files",
+            "/v1/uploads/upload_1/parts",
+            "/v1/batches",
+            "/v1/fine_tuning/jobs",
+            "/v1/models",
+            "/v1/realtime/client_secrets",
+        ],
+    )
+    def test_openai_non_inference_endpoints_are_not_captured(self, path):
+        interceptor.set_exclude_api_patterns(None)
+        assert interceptor._should_capture_url(f"https://api.openai.com{path}") is False
+
+    @pytest.mark.parametrize(
+        "path",
+        [
+            "/v1/chat/completions",
+            "/v1/responses",
+            "/v1/embeddings",
+            "/v1/audio/transcriptions",
+            "/v1/images/generations",
+        ],
+    )
+    def test_openai_inference_endpoints_are_still_captured(self, path):
+        interceptor.set_exclude_api_patterns(None)
+        assert interceptor._should_capture_url(f"https://api.openai.com{path}") is True

@@ -32,7 +32,7 @@ coolhand_client = Coolhand(
 )
 ```
 
-### Default excluded patterns (Vertex AI, Azure OpenAI and Cohere non-inference endpoints)
+### Default excluded patterns (Vertex AI, Azure OpenAI, OpenAI and Cohere non-inference endpoints)
 
 ```python
 from coolhand import DEFAULT_EXCLUDE_API_PATTERNS
@@ -40,7 +40,7 @@ print(DEFAULT_EXCLUDE_API_PATTERNS)
 # ['/batchPredictionJobs/', '/datasets/', '/trainingPipelines/', ...]
 ```
 
-These are excluded because they're management operations — Vertex AI training, dataset and pipeline endpoints, and Azure OpenAI file, batch, fine-tuning and model-listing endpoints — not LLM inference calls.
+These are excluded because they're management operations — Vertex AI training, dataset and pipeline endpoints, Azure OpenAI and `api.openai.com` file, upload, batch, fine-tuning and model-listing endpoints, the OpenAI `/v1/organization` administration endpoints (which include admin API keys) and `/v1/realtime/client_secrets` (which returns an ephemeral key) — not LLM inference calls. `api.openai.com` is otherwise captured host-wide, so another non-inference endpoint you do not want logged needs its own `exclude_api_patterns` entry.
 
 ---
 
@@ -60,6 +60,20 @@ coolhand_client = Coolhand(
 A body over the limit is cut to the first `max_body_bytes` bytes and ends with a marker, for example `[truncated: 5242880 bytes, kept first 1048576]`, where the first number is the original size. It is sent as a plain string rather than parsed JSON, so it will not be structured in the Coolhand dashboard. The cap applies to request bodies, response bodies and streaming responses (the stream accumulator stops buffering once the limit is reached). Credentials in Azure OpenAI `data_sources` and other [known body fields](./supported-libraries.md#credentials-in-request-and-response-bodies) are still redacted before truncation.
 
 Set `max_body_bytes=None` (or `0`) to disable the cap and log bodies in full.
+
+
+### Limiting queued memory
+
+Captured interactions wait on a background delivery queue (at most 1000 items). While Coolhand is unreachable or slow that backlog grows, and a body is held as parsed Python objects that take several times its serialized size. `max_queued_bytes` bounds the serialized size of everything waiting for delivery (default **16 MiB**):
+
+```python
+coolhand = Coolhand(
+    api_key="your-api-key",
+    max_queued_bytes=8 * 1024 * 1024,  # 8 MiB; 0 or None disables the limit
+)
+```
+
+Once the backlog is over the limit, new interactions are dropped, not queued, and counted in `get_stats()["logging"]["dropped_count"]`. Your application's calls are never slowed or failed by this. An interaction larger than the whole limit is still accepted when the queue is empty. The memory is released as each queued item is delivered.
 
 ---
 

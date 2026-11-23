@@ -2473,6 +2473,204 @@ class TestSendAndWait:
         assert "s1" not in copilot_interceptor._pre_pending
 
     @pytest.mark.asyncio
+    async def test_cancelled_turn_does_not_absorb_the_next_turns_messages(
+        self, handler
+    ):
+        import asyncio
+
+        from coolhand import copilot_interceptor
+
+        class Cancellable:
+            async def request(self, method, params=None, timeout=None, **kwargs):
+                if params["prompt"] == "cancel-me":
+                    raise asyncio.CancelledError()
+                self._handle_message(
+                    _assistant_message_notification("s1", "m1", "answer")
+                )
+                return {"messageId": "ack"}
+
+            def _handle_message(self, message):
+                pass
+
+        _inject_fake_sdk(Cancellable)
+        copilot_interceptor.set_handler(handler)
+        copilot_interceptor.patch()
+
+        with pytest.raises(asyncio.CancelledError):
+            await Cancellable().request(
+                "session.sendAndWait", {"sessionId": "s1", "prompt": "cancel-me"}
+            )
+        assert "s1" not in copilot_interceptor._pre_pending
+
+        await Cancellable().request(
+            "session.sendAndWait", {"sessionId": "s1", "prompt": "next"}
+        )
+
+        handler.assert_called_once()
+        assert handler.call_args[0][0]["body"]["prompt"] == "next"
+        assert handler.call_args[0][1]["body"]["content"] == "answer"
+
+    def test_server_url_query_secrets_are_redacted_in_session_config(self):
+        from coolhand import copilot_interceptor
+
+        redacted = copilot_interceptor._redact_session_config(
+            {"mcpServers": {"s": {"serverUrl": "https://m.example/sse?api_key=SECRET"}}}
+        )
+        assert "SECRET" not in str(redacted)
+
+    @pytest.mark.asyncio
+    async def test_empty_turn_does_not_consume_the_next_turns_message(self, handler):
+        from coolhand import copilot_interceptor
+
+        class EmptyThenAnswer:
+            async def request(self, method, params=None, timeout=None, **kwargs):
+                if params["prompt"] == "B":
+                    self._handle_message(
+                        _assistant_message_notification("s1", "mB", "answer to B")
+                    )
+                return {"messageId": "ack"}
+
+            def _handle_message(self, message):
+                pass
+
+        _inject_fake_sdk(EmptyThenAnswer)
+        copilot_interceptor.set_handler(handler)
+        copilot_interceptor.patch()
+        client = EmptyThenAnswer()
+
+        # Turn A returns without a single assistant.message.
+        await client.request("session.sendAndWait", {"sessionId": "s1", "prompt": "A"})
+        await client.request("session.sendAndWait", {"sessionId": "s1", "prompt": "B"})
+
+        calls = [
+            (c[0][0]["body"]["prompt"], c[0][1], c[0][2])
+            for c in handler.call_args_list
+        ]
+        # A is reported as unanswered; B's message is logged against B, not A.
+        assert calls[0] == ("A", None, "no assistant.message event received")
+        assert calls[1][0] == "B"
+        assert calls[1][1]["body"]["content"] == "answer to B"
+        assert calls[1][2] is None
+        assert len(calls) == 2
+
+    def test_stdio_mcp_args_are_redacted(self):
+        from coolhand import copilot_interceptor
+
+        redacted = copilot_interceptor._redact_session_config(
+            {
+                "mcpServers": {
+                    "s": {
+                        "command": "npx",
+                        "args": [
+                            "-y",
+                            "some-mcp",
+                            "--token",
+                            "ARG1",
+                            "--api-key=ARG2",
+                            "--password",
+                            "ARG3",
+                            "--header",
+                            "Authorization: Bearer ARG4",
+                            "--url",
+                            "https://u:ARG5@m.example/sse?access_key=ARG6&ok=1",
+                            "--port",
+                            "8080",
+                        ],
+                    }
+                }
+            }
+        )
+        args = redacted["mcpServers"]["s"]["args"]
+        assert "ARG" not in str(args)
+        # Non-secret arguments survive.
+        assert args[:2] == ["-y", "some-mcp"]
+        assert "8080" in args
+        assert "ok=1" in str(args)
+        assert "--header" in args
+
+    @pytest.mark.asyncio
+    async def test_abandoned_turn_already_reported_by_fallback_is_not_reported_twice(
+        self, handler, monkeypatch
+    ):
+        import asyncio
+
+        from coolhand import copilot_interceptor
+
+        class Silent:
+            async def request(self, method, params=None, timeout=None, **kwargs):
+                return {"messageId": "ack"}
+
+            def _handle_message(self, message):
+                pass
+
+        _inject_fake_sdk(Silent)
+        copilot_interceptor.set_handler(handler)
+        copilot_interceptor.patch()
+        monkeypatch.setattr(
+            copilot_interceptor, "COPILOT_INTERCEPTOR_FALLBACK_TIMEOUT", 0
+        )
+        client = Silent()
+        await client.request("session.sendAndWait", {"sessionId": "s1", "prompt": "A"})
+        await asyncio.sleep(0.01)  # fallback fires: A reported once
+        await client.request("session.sendAndWait", {"sessionId": "s1", "prompt": "B"})
+
+        prompts = [c[0][0]["body"]["prompt"] for c in handler.call_args_list]
+        assert prompts.count("A") == 1
+
+    def test_stdio_args_other_forms_are_redacted(self):
+        from coolhand import copilot_interceptor
+
+        args = copilot_interceptor._redact_args(
+            [
+                "--header=Authorization: Bearer ARG1",
+                "--url=https://user:ARG2@host/x",
+                "--server-url=https://h/x?token=ARG3",
+                "-e",
+                "GITHUB_TOKEN=ARG4",
+                "--env",
+                "API_KEY=ARG5",
+                "TOKEN=ARG6",
+                "-e",
+                "LOG_LEVEL=debug",
+            ]
+        )
+        assert "ARG" not in str(args)
+        assert "LOG_LEVEL=debug" in args
+
+    def test_stdio_arg_secret_starting_with_a_dash_is_redacted(self):
+        from coolhand import copilot_interceptor
+
+        args = copilot_interceptor._redact_args(
+            ["--password", "-abc123SECRET", "--api-key", "-x9y8SECRET", "--port", "1"]
+        )
+        assert "SECRET" not in str(args)
+        assert args[-2:] == ["--port", "1"]
+
+    def test_stdio_args_counters_and_boolean_flags_are_not_swallowed(self):
+        from coolhand import copilot_interceptor
+
+        args = copilot_interceptor._redact_args(
+            [
+                "--max-tokens",
+                "100",
+                "--tokenizer",
+                "gpt2",
+                "--use-token",
+                "--port",
+                "8080",
+            ]
+        )
+        assert args == [
+            "--max-tokens",
+            "100",
+            "--tokenizer",
+            "gpt2",
+            "--use-token",
+            "--port",
+            "8080",
+        ]
+
+    @pytest.mark.asyncio
     async def test_failure_after_messages_does_not_log_request_error(self, handler):
         from coolhand import copilot_interceptor
 

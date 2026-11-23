@@ -94,7 +94,7 @@ python -m dramatiq tasks
 > )
 > ```
 
-> **Note:** In a forked worker, `after_process_boot` also resets the inherited client's delivery queue, locks and worker state, so a lock that was held in the parent at fork time can't hang the child. Interactions the parent had queued but not yet delivered are *not* carried into the child — the parent still delivers them — which avoids duplicates.
+> **Note:** In a forked worker, the inherited client's delivery queue, locks and worker state are reset (automatically at fork, and again by `after_process_boot`, which is now redundant but harmless), so a lock that was held in the parent at fork time can't hang the child. Interactions the parent had queued but not yet delivered are *not* carried into the child — the parent still delivers them — which avoids duplicates.
 
 ---
 

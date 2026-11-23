@@ -125,3 +125,21 @@ def _normalize_base_url(url: str) -> str:
         f"base_url must use https:// (got {shown!r}). "
         "For local development, http://localhost is allowed."
     )
+
+
+def _resolve_max_queued_bytes(config: Mapping[str, Any]) -> int | None:
+    """Validate ``max_queued_bytes``: a non-negative int, or ``None``/``0`` to disable.
+
+    Raises ValueError for anything else (a string, a float, a bool, a negative
+    number) so a bad value fails at construction rather than inside ``flush()``,
+    on the caller's thread, after it has already taken the queued items.
+    """
+    value = config.get("max_queued_bytes")
+    if value is None:
+        return None
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        raise ValueError(
+            f"max_queued_bytes must be a non-negative integer number of bytes, "
+            f"or None/0 to disable (got {value!r})."
+        )
+    return value or None

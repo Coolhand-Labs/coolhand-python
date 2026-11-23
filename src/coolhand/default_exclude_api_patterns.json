@@ -19,6 +19,13 @@
   "/openai/v1/fine_tuning",
   "/openai/models",
   "/openai/v1/models",
+  "api.openai.com/v1/files",
+  "api.openai.com/v1/uploads",
+  "api.openai.com/v1/batches",
+  "api.openai.com/v1/fine_tuning",
+  "api.openai.com/v1/models",
+  "api.openai.com/v1/organization",
+  "api.openai.com/v1/realtime/client_secrets",
   "api.cohere.com/v1/embed-jobs",
   "api.cohere.ai/v1/embed-jobs"
 ]

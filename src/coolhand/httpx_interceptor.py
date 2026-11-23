@@ -705,10 +705,13 @@ def _reset_reporter_after_fork() -> None:
     ``_StreamCapture.__init__``); a stream inherited from the parent that is
     finalized in the child before then is dropped rather than reported twice."""
     global _reporter, _reporter_stop, _reporter_lock, _abandoned, _patch_lock
+    global _intercept_count_lock
     _reporter = _reporter_stop = None
     _reporter_lock = threading.RLock()
     # _sync_reporter takes this one too, on a child's first capture.
     _patch_lock = threading.RLock()
+    # Another parent thread may have held this at fork time.
+    _intercept_count_lock = threading.Lock()
     # Replaced, not drained: the parent's reporter was blocked inside get() at fork
     # time, which can leave the inherited queue's internal lock held forever.
     _abandoned = queue.SimpleQueue()

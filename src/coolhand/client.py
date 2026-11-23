@@ -5,9 +5,11 @@ import json
 import logging
 import os
 import queue
+import re
 import threading
 import time
 import uuid
+import weakref
 from datetime import datetime, timezone
 from typing import Any
 from urllib.error import HTTPError, URLError
@@ -15,11 +17,12 @@ from urllib.parse import parse_qs, urlencode, urlparse, urlunparse
 from urllib.request import Request
 
 from . import httpx_interceptor
-from ._body_limit import DEFAULT_MAX_BODY_BYTES, cap_body
+from ._body_limit import DEFAULT_MAX_BODY_BYTES, cap_body_sized
 from ._config import (
     _DEFAULT_BASE_URL,
     _build_opener,
     _normalize_base_url,
+    _resolve_max_queued_bytes,
     _resolve_request_timeout,
 )
 from .httpx_interceptor import DEFAULT_EXCLUDE_API_PATTERNS
@@ -36,6 +39,19 @@ _opener = _build_opener()
 # flush() drops new items rather than blocking the caller (which may be an
 # asyncio event loop thread).
 _MAX_DISPATCH_QUEUE_SIZE = 1000
+
+# Bound on the memory those queued interactions may hold, in serialized bytes
+# (the captured bodies plus a fixed per-item allowance). The item count alone is
+# not enough: with a 1 MiB body cap, 1000 near-cap interactions would hold gigabytes
+# once parsed into Python objects while Coolhand is unreachable. Past this budget
+# flush() drops (purges) new interactions, exactly as it does for a full queue. An
+# interaction larger than the whole budget is still accepted into an empty queue.
+# Override with the ``max_queued_bytes`` config option (``0``/``None`` disables).
+DEFAULT_MAX_QUEUED_BYTES = 16 * 1024 * 1024
+_ITEM_OVERHEAD_BYTES = 2048
+
+# At most one "dropped" warning per this many seconds; the rest are counted into it.
+_DROP_WARNING_INTERVAL = 30.0
 
 # How long shutdown() waits for the worker thread to drain the dispatch queue
 # before giving up. Bounded so a dead/unreachable backend can't hang process exit.
@@ -231,21 +247,67 @@ def _get_default_config() -> Config:
         "session_id": f"session_{int(time.time() * 1000)}",
         "exclude_api_patterns": list(DEFAULT_EXCLUDE_API_PATTERNS),
         "max_body_bytes": DEFAULT_MAX_BODY_BYTES,
+        "max_queued_bytes": DEFAULT_MAX_QUEUED_BYTES,
     }
 
 
 def _mask_value(value: str) -> str:
-    """Mask a sensitive value, keeping first/last 4 chars."""
-    if len(value) <= 8:
+    """Mask a sensitive value: fully if 24 chars or fewer, else keep first/last 4."""
+    # Revealing 8 characters of a short secret leaks a large share of it.
+    if len(value) <= 24:
         return "*" * len(value)
     return f"{value[:4]}{'*' * (len(value) - 8)}{value[-4:]}"
+
+
+def _normalize_key_name(key: str) -> str:
+    """Lowercase a field name and strip ``-``/``_`` separators."""
+    return key.lower().replace("-", "").replace("_", "")
+
+
+# Credential header names that carry none of the SENSITIVE_HEADERS substrings
+# (``X-Token``, ``X-Id-Token``, ``Cf-Access-Jwt-Assertion``, ``X-Key``,
+# ``X-Password``). ``tokens`` is excluded so rate-limit headers such as
+# ``x-ratelimit-remaining-tokens`` stay readable.
+_SENSITIVE_HEADER_RE = re.compile(r"token(?!s)|jwt|passw|(?:^|[-_])(?:key|auth)$")
+
+# Substrings that mark a query parameter as a credential once ``-``/``_`` are
+# stripped and the name is lowercased (``authToken``, ``sas_token``, ``privateKey``).
+_SENSITIVE_QUERY_SUBSTRINGS = (
+    "token",
+    "secret",
+    "password",
+    "passwd",
+    "apikey",
+    "privatekey",
+    "signature",
+    "jwt",
+)
+_SENSITIVE_QUERY_NORMALIZED = frozenset(
+    _normalize_key_name(p) for p in SENSITIVE_QUERY_PARAMS
+)
+
+
+def _is_sensitive_query_param(name: str) -> bool:
+    """Whether a query parameter name looks like it holds a credential."""
+    lowered = name.lower()
+    if lowered in SENSITIVE_QUERY_PARAMS:
+        return True
+    normalized = _normalize_key_name(name)
+    if normalized in _SENSITIVE_QUERY_NORMALIZED:
+        return True
+    return not normalized.endswith("tokens") and any(
+        s in normalized for s in _SENSITIVE_QUERY_SUBSTRINGS
+    )
 
 
 def _sanitize_headers(headers: dict[str, str]) -> dict[str, str]:
     """Sanitize sensitive headers."""
     result = {}
     for key, value in headers.items():
-        if any(s in key.lower() for s in SENSITIVE_HEADERS):
+        lowered = key.lower()
+        if any(s in lowered for s in SENSITIVE_HEADERS) or _SENSITIVE_HEADER_RE.search(
+            lowered
+        ):
             result[key] = _mask_value(str(value))
         else:
             result[key] = value
@@ -268,13 +330,18 @@ def _sanitize_url(url: str) -> str:
         redacted = host != parsed.netloc
         if redacted:
             parsed = parsed._replace(netloc=host)
+        # A fragment is never sent to the server, but httpx keeps it in
+        # ``str(request.url)`` and ``#access_token=...`` would be forwarded.
+        if parsed.fragment:
+            parsed = parsed._replace(fragment="")
+            redacted = True
         if parsed.query:
             params = parse_qs(parsed.query, keep_blank_values=True)
             query_redacted = False
             # Every spelling is checked: "Key=a&key=b" must redact both, so do not
             # collapse keys by their lowercased form.
             for actual_key in params:
-                if actual_key.lower() in SENSITIVE_QUERY_PARAMS:
+                if _is_sensitive_query_param(actual_key):
                     params[actual_key] = ["[REDACTED]"]
                     query_redacted = True
             if query_redacted:
@@ -284,12 +351,13 @@ def _sanitize_url(url: str) -> str:
     except Exception:
         # Fail closed: if redaction itself breaks, drop the query string rather
         # than risk forwarding an unredacted secret in it.
-        return url.split("?", 1)[0]
-
-
-def _normalize_key_name(key: str) -> str:
-    """Lowercase a field name and strip ``-``/``_`` separators."""
-    return key.lower().replace("-", "").replace("_", "")
+        # Userinfo (``user:pass@``) is stripped too, since it is a credential.
+        return re.sub(
+            r"^([a-z][a-z0-9+.-]*://)[^/?#]*@",
+            r"\1",
+            url.split("?", 1)[0].split("#", 1)[0],
+            flags=re.IGNORECASE,
+        )
 
 
 def _is_sensitive_body_key(key: str) -> bool:
@@ -458,6 +526,52 @@ def _sanitize_body(body: str | dict | list | None) -> str | dict | list | None:
         return _UNSANITIZABLE_BODY
 
 
+_MAX_ERROR_CHARS = 1000
+# Input is cut to this before any regex runs, so scrubbing cost is bounded no
+# matter how long the exception text is (it runs on the caller's thread).
+_MAX_ERROR_SCAN_CHARS = 4000
+_ERROR_URL_RE = re.compile(r"https?://[^\s'\"<>)]+", re.IGNORECASE)
+_ERROR_BEARER_RE = re.compile(
+    r"\b(bearer|basic)\s+[A-Za-z0-9._~+/=-]{8,}", re.IGNORECASE
+)
+_ERROR_KEY_RE = re.compile(r"\b(?:sk|pk|rk)-[A-Za-z0-9_-]{8,}")
+# ``name=value``, ``name: value``, ``"name": "value"`` and ``name='value'`` for a
+# credential-looking name. The name part is length-bounded to keep matching linear.
+_ERROR_PAIR_RE = re.compile(
+    r"""(?P<name>[A-Za-z0-9_-]{0,64}(?:key|token|secret|password|passwd|signature|jwt)"""
+    r"""[A-Za-z0-9_-]{0,64})(?P<quote1>["']?)(?P<sep>\s*[=:]\s*)"""
+    r"""(?:"[^"]*"|'[^']*'|[^\s&,;'"}\]]+)""",
+    re.IGNORECASE,
+)
+
+
+def _mask_error_pair(match: "re.Match[str]") -> str:
+    name = match.group("name")
+    # Already masked (the value stops at the closing bracket): leave it alone.
+    if match.group(0).endswith("[REDACTED"):
+        return match.group(0)
+    # Counters such as ``max_tokens=100`` are not credentials.
+    if _normalize_key_name(name).endswith("tokens"):
+        return match.group(0)
+    return f"{name}{match.group('quote1')}{match.group('sep')}[REDACTED]"
+
+
+def _sanitize_error(error: str) -> str:
+    """Make an exception message safe to forward: URLs lose query secrets and
+    userinfo (``requests`` embeds the full URL in its errors), bearer tokens,
+    ``sk-`` style keys and credential-named pairs are masked, and the text is
+    truncated. Fails closed to a fixed string."""
+    try:
+        text = str(error)[:_MAX_ERROR_SCAN_CHARS]
+        text = _ERROR_URL_RE.sub(lambda m: _sanitize_url(m.group(0)), text)
+        text = _ERROR_BEARER_RE.sub(lambda m: f"{m.group(1)} [REDACTED]", text)
+        text = _ERROR_KEY_RE.sub("[REDACTED]", text)
+        text = _ERROR_PAIR_RE.sub(_mask_error_pair, text)
+        return text[:_MAX_ERROR_CHARS]
+    except Exception:
+        return "[REDACTED: error could not be sanitized]"
+
+
 def _parse_body(body: str | bytes | dict | list | None) -> str | dict | list | None:
     """Parse body to JSON object if possible, otherwise return as string."""
     if body is None:
@@ -517,6 +631,29 @@ def _log_response_warnings(resp: Any) -> None:
         )
 
 
+# Every live client, so a fork() child can reset all of them (see below).
+_live_clients: "weakref.WeakSet[CoolhandClient]" = weakref.WeakSet()
+
+
+def _reset_clients_after_fork() -> None:
+    """Runs in a fork() child (``os.fork``, ``multiprocessing``'s fork start
+    method, gunicorn/uWSGI preload). The child inherits each client's locks in
+    whatever state another parent thread left them (a held lock stays held
+    forever here) and the parent's pending interactions, which the parent still
+    delivers. Without this, the child could hang on its first captured call or
+    send every inherited interaction a second time. The Dramatiq middleware's
+    explicit reset stays valid: it is a no-op once this has run."""
+    for client in list(_live_clients):
+        try:
+            client._reset_after_fork()
+        except Exception:
+            pass
+
+
+if hasattr(os, "register_at_fork"):
+    os.register_at_fork(after_in_child=_reset_clients_after_fork)
+
+
 class CoolhandClient:
     """Simple client for submitting interactions to Coolhand."""
 
@@ -530,8 +667,10 @@ class CoolhandClient:
             self.config.get("base_url", _DEFAULT_BASE_URL)
         )
         self.config["request_timeout"] = _resolve_request_timeout(self.config)
+        self.config["max_queued_bytes"] = _resolve_max_queued_bytes(self.config)
 
         self._init_runtime_state()
+        _live_clients.add(self)
 
         if not self.config.get("silent"):
             self._configure_coolhand_logging()
@@ -554,6 +693,11 @@ class CoolhandClient:
             maxsize=_MAX_DISPATCH_QUEUE_SIZE
         )
         self._dropped_count = 0
+        # Serialized bytes currently held by items on the dispatch queue (or being
+        # delivered); bounded by max_queued_bytes. Guarded by _state_lock.
+        self._queued_bytes = 0
+        self._dropped_since_warning = 0
+        self._last_drop_warning = float("-inf")
         self._delivery_failure_count = 0
         self._worker_thread: threading.Thread | None = None
         self._worker_lock = threading.Lock()
@@ -609,6 +753,16 @@ class CoolhandClient:
         duration_seconds = response.get("duration", 0.0) if response else 0.0
 
         max_body_bytes = self.config.get("max_body_bytes")
+        request_body, request_size = cap_body_sized(
+            _sanitize_body(_parse_body(request.get("body"))), max_body_bytes
+        )
+        if response:
+            response_body, response_size = cap_body_sized(
+                _sanitize_body(_parse_body(response.get("body"))),
+                None if response.get("body_truncated") else max_body_bytes,
+            )
+        else:
+            response_body, response_size = None, 0
 
         # Build flat interaction data (matching Ruby/Node format)
         interaction = {
@@ -617,25 +771,21 @@ class CoolhandClient:
             "method": request.get("method", "").lower(),
             "url": _sanitize_url(request.get("url", "")),
             "headers": _sanitize_headers(request.get("headers", {})),
-            "request_body": cap_body(
-                _sanitize_body(_parse_body(request.get("body"))), max_body_bytes
-            ),
+            "request_body": request_body,
             "response_headers": (
                 _sanitize_headers(response.get("headers", {})) if response else {}
             ),
-            "response_body": (
-                cap_body(
-                    _sanitize_body(_parse_body(response.get("body"))),
-                    None if response.get("body_truncated") else max_body_bytes,
-                )
-                if response
-                else None
-            ),
+            "response_body": response_body,
             "status_code": response.get("status_code", 0) if response else 0,
             "duration_ms": round(duration_seconds * 1000, 2),
             "completed_at": _to_iso8601(res_timestamp),
             "is_streaming": response.get("is_streaming", False) if response else False,
         }
+
+        # Why a call failed (a transport error, a timeout). Scrubbed first: a
+        # ``requests`` error message embeds the full URL, query string included.
+        if error:
+            interaction["error"] = _sanitize_error(error)
 
         # Only a strict true is acted on by the backend; completed streams omit it.
         if response and response.get("stream_incomplete") is True:
@@ -646,6 +796,9 @@ class CoolhandClient:
         declared = request.get("declared")
         if declared:
             interaction["_declared"] = declared
+
+        # Memory this interaction will hold while queued; popped before sending.
+        interaction["_weight"] = request_size + response_size + _ITEM_OVERHEAD_BYTES
 
         # Debug output when not silent
         if not self.config.get("silent"):
@@ -681,6 +834,7 @@ class CoolhandClient:
 
         try:
             interaction = dict(interaction)
+            interaction.pop("_weight", None)
             declared = interaction.pop("_declared", None)
             llm_request_log: dict[str, Any] = {
                 "raw_request": interaction,
@@ -861,6 +1015,13 @@ class CoolhandClient:
                     return
             self._deliver(item)
 
+    def _release_bytes(self, interaction: dict[str, Any]) -> None:
+        """Give back the memory budget an interaction held while queued."""
+        weight = interaction.get("_weight", 0) if isinstance(interaction, dict) else 0
+        if weight:
+            with self._state_lock:
+                self._queued_bytes = max(0, self._queued_bytes - weight)
+
     def _deliver(self, interaction: dict[str, Any]) -> None:
         """Call _send_one, guarding the worker loop against it ever raising
         (it's total today, but a subclass override or monkeypatch could
@@ -871,6 +1032,9 @@ class CoolhandClient:
         except Exception:
             logger.exception("Unexpected error delivering interaction")
             delivered = False
+        finally:
+            # Held until the attempt ends: the item's memory is live until then.
+            self._release_bytes(interaction)
 
         if not delivered:
             # Distinct from dropped_count: a drop means the item never made
@@ -911,6 +1075,7 @@ class CoolhandClient:
         # between "a worker is available" and the item actually landing in
         # the queue. put_nowait() never blocks, so holding the lock across
         # it is cheap.
+        budget = self.config.get("max_queued_bytes")
         with self._worker_lock:
             worker_available = self._ensure_worker_locked()
 
@@ -919,20 +1084,46 @@ class CoolhandClient:
             else:
                 dropped = 0
                 for interaction in items:
+                    weight = interaction.get("_weight", 0)
+                    with self._state_lock:
+                        # An interaction bigger than the whole budget is still
+                        # accepted into an empty queue, or it could never be sent.
+                        over_budget = bool(
+                            budget
+                            and self._queued_bytes
+                            and self._queued_bytes + weight > budget
+                        )
+                        if not over_budget:
+                            self._queued_bytes += weight
+                    if over_budget:
+                        dropped += 1
+                        continue
                     try:
                         self._dispatch_queue.put_nowait(interaction)
                     except queue.Full:
+                        self._release_bytes(interaction)
                         dropped += 1
 
         if dropped:
             # Locked: flush() is called concurrently from multiple interceptor
             # threads, and this is a plain read-modify-write.
+            now = time.monotonic()
             with self._state_lock:
                 self._dropped_count += dropped
-            logger.warning(
-                f"Dropped {dropped}/{len(items)} interactions "
-                "(dispatch queue full or delivery worker unavailable)"
-            )
+                self._dropped_since_warning += dropped
+                warn = now - self._last_drop_warning >= _DROP_WARNING_INTERVAL
+                if warn:
+                    self._last_drop_warning = now
+                    warned_total = self._dropped_since_warning
+                    self._dropped_since_warning = 0
+            # Rate-limited: during an outage every request would otherwise add a
+            # line to the host application's logs.
+            if warn:
+                logger.warning(
+                    f"Dropped {warned_total} interactions since the last warning "
+                    "(dispatch queue full, over its memory budget, or delivery "
+                    "worker unavailable)"
+                )
 
         return dropped == 0
 
@@ -968,6 +1159,8 @@ class CoolhandClient:
                 "interaction_count": self._interaction_count,
                 "queue_size": len(self._queue),
                 "dropped_count": self._dropped_count,
+                # Serialized bytes held by interactions waiting for (or in) delivery.
+                "queued_bytes": self._queued_bytes,
                 # Distinct from dropped_count: this counts items that made it
                 # onto the dispatch queue but whose POST failed (bad API key,
                 # non-2xx status, network error).

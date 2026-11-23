@@ -27,6 +27,27 @@ def truncate_text(text: str, total: int, cap: int) -> str:
     return f"{kept}[truncated: {total} bytes, kept first {cap}]"
 
 
+def cap_body_sized(body: Any, cap: int | None) -> tuple[Any, int]:
+    """Like :func:`cap_body`, also returning the size in bytes of what is returned.
+
+    The size is measured even when ``cap`` disables the limit, so a caller can
+    account for the memory a body will hold while it waits for delivery.
+    """
+    if body is None:
+        return None, 0
+    total = body_size(body)
+    if not cap or total <= cap:
+        return body, total
+    if isinstance(body, bytes):
+        text = body.decode("utf-8", errors="replace")
+    elif isinstance(body, str):
+        text = body
+    else:
+        text = json.dumps(body, default=str)
+    truncated = truncate_text(text, total, cap)
+    return truncated, len(truncated.encode("utf-8", errors="replace"))
+
+
 def cap_body(body: Any, cap: int | None) -> Any:
     """Return ``body`` unchanged if it fits in ``cap`` bytes, else a truncated string.
 
@@ -34,13 +55,4 @@ def cap_body(body: Any, cap: int | None) -> Any:
     """
     if not cap or body is None:
         return body
-    total = body_size(body)
-    if total <= cap:
-        return body
-    if isinstance(body, bytes):
-        text = body.decode("utf-8", errors="replace")
-    elif isinstance(body, str):
-        text = body
-    else:
-        text = json.dumps(body, default=str)
-    return truncate_text(text, total, cap)
+    return cap_body_sized(body, cap)[0]

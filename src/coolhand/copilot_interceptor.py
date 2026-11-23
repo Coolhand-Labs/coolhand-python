@@ -3,12 +3,19 @@
 import asyncio
 import itertools
 import logging
+import os
+import re
 import threading
 import time
 from collections.abc import Callable
 from typing import Any
 
-from .client import _is_sensitive_body_key, _sanitize_url
+from .client import (
+    _is_sensitive_body_key,
+    _is_sensitive_query_param,
+    _normalize_key_name,
+    _sanitize_url,
+)
 from .declared_context import attach_snapshot
 from .types import RequestData, ResponseData
 
@@ -68,6 +75,20 @@ _session_usage: dict[str | None, dict[str, Any]] = {}
 _lock = threading.Lock()
 
 
+def _reset_after_fork() -> None:
+    """A forked child gets this module's lock in whatever state another parent
+    thread left it (a held lock would hang the child's first Copilot call), and
+    the parent's in-flight requests, whose timers and event loop belong to the
+    parent, which logs them itself."""
+    global _lock
+    _lock = threading.Lock()
+    _pre_pending.clear()
+
+
+if hasattr(os, "register_at_fork"):
+    os.register_at_fork(after_in_child=_reset_after_fork)
+
+
 def _promote_system_prompt(body: dict[str, Any]) -> None:
     """Surface Copilot's nested systemMessage.content as a top-level `system`
     string field, mirroring Anthropic's body.system shape so the backend's
@@ -93,7 +114,88 @@ _SESSION_CONFIG_FIELDS = ("provider", "mcpServers", "customAgents")
 # Maps of credential-bearing values whose names (e.g. "Authorization") don't look
 # sensitive, so every value in them is masked.
 _SECRET_VALUE_MAPS = ("headers", "env", "environment")
-_URL_FIELDS = ("url", "baseUrl")
+_URL_FIELDS = ("url", "baseUrl", "serverUrl", "server_url")
+
+
+_AUTH_ARG_NAMES = frozenset({"auth", "authorization", "bearer", "credentials"})
+_HEADER_ARG_RE = re.compile(r"^\s*([A-Za-z][A-Za-z0-9-]*)\s*:\s*\S")
+_ENV_ASSIGN_RE = re.compile(r"^([A-Za-z_][A-Za-z0-9_.-]*)=(.*)$", re.DOTALL)
+# Flags whose next argument is a ``NAME=value`` environment assignment.
+_ENV_FLAGS = frozenset({"-e", "--env", "--env-var"})
+# What a flag looks like: ``--name``, ``--name=value`` or a lone ``-x``. Anything
+# else starting with ``-`` (``-abc123``) is a value, not a flag.
+_FLAG_RE = re.compile(r"^(--[A-Za-z][\w-]*(=|$)|-[A-Za-z]$)")
+
+
+def _is_sensitive_arg_name(name: str) -> bool:
+    """Whether a command-line flag or variable name (``--api-key``, ``GITHUB_TOKEN``)
+    is a credential. ``--max-tokens`` and ``--tokenizer`` are not."""
+    bare = name.lstrip("-")
+    if not bare or _normalize_key_name(bare).endswith(("tokens", "tokenizer")):
+        return False
+    return (
+        _is_sensitive_body_key(bare)
+        or _is_sensitive_query_param(bare)
+        or bare.lower() in _AUTH_ARG_NAMES
+    )
+
+
+def _redact_arg_value(arg: str) -> str:
+    """Redact one argument that is not itself a flag: a ``Name: value`` header, a
+    ``NAME=value`` assignment with a credential name, or a URL with secrets."""
+    header = _HEADER_ARG_RE.match(arg)
+    if header and _is_sensitive_arg_name(header.group(1)):
+        return f"{header.group(1)}: [REDACTED]"
+    assign = _ENV_ASSIGN_RE.match(arg)
+    if assign and _is_sensitive_arg_name(assign.group(1)):
+        return f"{assign.group(1)}=[REDACTED]"
+    return _sanitize_url(arg) if "://" in arg else arg
+
+
+def _redact_args(args: list[Any]) -> list[Any]:
+    """Redact credentials in an MCP stdio server's ``args`` list.
+
+    Handles ``--token VALUE``, ``--api-key=VALUE``, ``--header=Name: value`` and
+    ``--url=https://u:p@host``, ``-e NAME=value`` / ``--env NAME=value``, bare
+    ``NAME=value`` and ``Name: value`` header arguments, and URL arguments with
+    userinfo or a secret query parameter. A credential-named flag redacts the
+    argument after it unless that argument is itself a flag (a value that merely
+    begins with ``-``, such as a base64url secret, is still redacted).
+    """
+    result: list[Any] = []
+    redact_next = False
+    env_next = False
+    for arg in args:
+        if not isinstance(arg, str):
+            result.append(_redact_session_config(arg))
+            redact_next = env_next = False
+            continue
+        if redact_next and not _FLAG_RE.match(arg):
+            result.append("[REDACTED]")
+            redact_next = False
+            continue
+        redact_next = False
+        if env_next:
+            result.append(_redact_arg_value(arg))
+            env_next = False
+            continue
+        if _FLAG_RE.match(arg):
+            name, eq, value = arg.partition("=")
+            if eq:
+                result.append(
+                    f"{name}=[REDACTED]"
+                    if _is_sensitive_arg_name(name)
+                    else f"{name}={_redact_arg_value(value)}"
+                )
+            else:
+                result.append(arg)
+                if arg in _ENV_FLAGS:
+                    env_next = True
+                elif _is_sensitive_arg_name(arg):
+                    redact_next = True
+            continue
+        result.append(_redact_arg_value(arg))
+    return result
 
 
 def _redact_session_config(value: Any) -> Any:
@@ -107,6 +209,8 @@ def _redact_session_config(value: Any) -> Any:
                 redacted[k] = "[REDACTED]"
             elif k in _URL_FIELDS and isinstance(v, str):
                 redacted[k] = _sanitize_url(v)
+            elif k == "args" and isinstance(v, list):
+                redacted[k] = _redact_args(v)
             else:
                 redacted[k] = _redact_session_config(v)
         return redacted
@@ -398,10 +502,37 @@ def patch() -> bool:
             "messages": 0,
         }
         with _lock:
-            _pre_pending.setdefault(session_id, []).append(entry)
+            queue = _pre_pending.setdefault(session_id, [])
+            # A sendAndWait that returned without a single assistant.message is
+            # kept briefly for a late message, but once this session starts a new
+            # turn that message can no longer be told apart from this turn's: drop
+            # the old entry so it cannot consume the new turn's answer.
+            abandoned = [
+                e
+                for e in queue
+                if e.get("multi") and e.get("done") and not e["messages"]
+            ]
+            # Whether the fallback timer already reported each one, so it is not
+            # reported twice.
+            unreported = [e for e in abandoned if not e.get("logged")]
+            for old in abandoned:
+                queue.remove(old)
+                old["logged"] = True
+            queue.append(entry)
+        for old in abandoned:
+            _cancel_timer(old)
+        for old in unreported:
+            _log_no_response(old)
 
         try:
             result = await _original_request(self, method, params, timeout, **kwargs)
+        except asyncio.CancelledError:
+            # A cancelled turn (user hit stop) is a BaseException, so the handler
+            # below misses it. Drop its entry so it cannot sit at the head of the
+            # queue and absorb every later message for this session.
+            with _lock:
+                _remove_from_pre_pending(session_id, entry)
+            raise
         except Exception as e:
             with _lock:
                 still_owned = _remove_from_pre_pending(session_id, entry)

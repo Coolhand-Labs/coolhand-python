@@ -13,6 +13,7 @@ from typing import Any
 from .client import (
     _is_sensitive_body_key,
     _is_sensitive_query_param,
+    _normalize_key_name,
     _sanitize_url,
 )
 from .declared_context import attach_snapshot
@@ -118,12 +119,19 @@ _URL_FIELDS = ("url", "baseUrl", "serverUrl", "server_url")
 
 _AUTH_ARG_NAMES = frozenset({"auth", "authorization", "bearer", "credentials"})
 _HEADER_ARG_RE = re.compile(r"^\s*([A-Za-z][A-Za-z0-9-]*)\s*:\s*\S")
+_ENV_ASSIGN_RE = re.compile(r"^([A-Za-z_][A-Za-z0-9_.-]*)=(.*)$", re.DOTALL)
+# Flags whose next argument is a ``NAME=value`` environment assignment.
+_ENV_FLAGS = frozenset({"-e", "--env", "--env-var"})
+# What a flag looks like: ``--name``, ``--name=value`` or a lone ``-x``. Anything
+# else starting with ``-`` (``-abc123``) is a value, not a flag.
+_FLAG_RE = re.compile(r"^(--[A-Za-z][\w-]*(=|$)|-[A-Za-z]$)")
 
 
 def _is_sensitive_arg_name(name: str) -> bool:
-    """Whether a command-line flag name (``--api-key``, ``-t``-less) is a credential."""
+    """Whether a command-line flag or variable name (``--api-key``, ``GITHUB_TOKEN``)
+    is a credential. ``--max-tokens`` and ``--tokenizer`` are not."""
     bare = name.lstrip("-")
-    if not bare:
+    if not bare or _normalize_key_name(bare).endswith(("tokens", "tokenizer")):
         return False
     return (
         _is_sensitive_body_key(bare)
@@ -132,39 +140,61 @@ def _is_sensitive_arg_name(name: str) -> bool:
     )
 
 
+def _redact_arg_value(arg: str) -> str:
+    """Redact one argument that is not itself a flag: a ``Name: value`` header, a
+    ``NAME=value`` assignment with a credential name, or a URL with secrets."""
+    header = _HEADER_ARG_RE.match(arg)
+    if header and _is_sensitive_arg_name(header.group(1)):
+        return f"{header.group(1)}: [REDACTED]"
+    assign = _ENV_ASSIGN_RE.match(arg)
+    if assign and _is_sensitive_arg_name(assign.group(1)):
+        return f"{assign.group(1)}=[REDACTED]"
+    return _sanitize_url(arg) if "://" in arg else arg
+
+
 def _redact_args(args: list[Any]) -> list[Any]:
     """Redact credentials in an MCP stdio server's ``args`` list.
 
-    Handles ``--token VALUE``, ``--api-key=VALUE``, a ``Name: value`` header
-    such as ``Authorization: Bearer ...`` (``curl``/``mcp-remote --header``), and
-    URLs carrying userinfo or a secret query parameter. A flag with a sensitive
-    name redacts the argument after it, so ``--token`` followed by a secret is
-    covered however the secret is spelled.
+    Handles ``--token VALUE``, ``--api-key=VALUE``, ``--header=Name: value`` and
+    ``--url=https://u:p@host``, ``-e NAME=value`` / ``--env NAME=value``, bare
+    ``NAME=value`` and ``Name: value`` header arguments, and URL arguments with
+    userinfo or a secret query parameter. A credential-named flag redacts the
+    argument after it unless that argument is itself a flag (a value that merely
+    begins with ``-``, such as a base64url secret, is still redacted).
     """
     result: list[Any] = []
     redact_next = False
+    env_next = False
     for arg in args:
         if not isinstance(arg, str):
             result.append(_redact_session_config(arg))
-            redact_next = False
+            redact_next = env_next = False
             continue
-        if redact_next:
+        if redact_next and not _FLAG_RE.match(arg):
             result.append("[REDACTED]")
             redact_next = False
             continue
-        if arg.startswith("-") and "=" in arg:
-            name, _, _value = arg.partition("=")
-            result.append(f"{name}=[REDACTED]" if _is_sensitive_arg_name(name) else arg)
+        redact_next = False
+        if env_next:
+            result.append(_redact_arg_value(arg))
+            env_next = False
             continue
-        if arg.startswith("-") and _is_sensitive_arg_name(arg):
-            result.append(arg)
-            redact_next = True
+        if _FLAG_RE.match(arg):
+            name, eq, value = arg.partition("=")
+            if eq:
+                result.append(
+                    f"{name}=[REDACTED]"
+                    if _is_sensitive_arg_name(name)
+                    else f"{name}={_redact_arg_value(value)}"
+                )
+            else:
+                result.append(arg)
+                if arg in _ENV_FLAGS:
+                    env_next = True
+                elif _is_sensitive_arg_name(arg):
+                    redact_next = True
             continue
-        header = _HEADER_ARG_RE.match(arg)
-        if header and _is_sensitive_arg_name(header.group(1)):
-            result.append(f"{header.group(1)}: [REDACTED]")
-            continue
-        result.append(_sanitize_url(arg) if "://" in arg else arg)
+        result.append(_redact_arg_value(arg))
     return result
 
 
@@ -482,12 +512,16 @@ def patch() -> bool:
                 for e in queue
                 if e.get("multi") and e.get("done") and not e["messages"]
             ]
+            # Whether the fallback timer already reported each one, so it is not
+            # reported twice.
+            unreported = [e for e in abandoned if not e.get("logged")]
             for old in abandoned:
                 queue.remove(old)
                 old["logged"] = True
             queue.append(entry)
         for old in abandoned:
             _cancel_timer(old)
+        for old in unreported:
             _log_no_response(old)
 
         try:

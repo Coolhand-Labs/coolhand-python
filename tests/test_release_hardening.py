@@ -1,6 +1,7 @@
 """Regressions for the v0.10.0 pre-release security review."""
 
 import logging
+import os
 import time
 
 import httpx
@@ -548,9 +549,9 @@ class TestV0121FollowUps:
         finally:
             patcher.stop()
 
+    @pytest.mark.skipif(not hasattr(os, "fork"), reason="needs os.fork")
+    @pytest.mark.filterwarnings("ignore:.*fork.*:DeprecationWarning")
     def test_plain_fork_resets_inherited_client_state(self, reset_global_instance):
-        import os
-
         client, patcher = self._client()
         patcher.stop()
         client.log_interaction({"method": "POST", "url": LLM_URL, "body": {"a": 1}})
@@ -631,3 +632,129 @@ class TestV0121FollowUps:
     def test_openai_inference_endpoints_are_still_captured(self, path):
         interceptor.set_exclude_api_patterns(None)
         assert interceptor._should_capture_url(f"https://api.openai.com{path}") is True
+
+
+class TestV0121ReviewFollowUps:
+    @pytest.mark.parametrize(
+        "text",
+        [
+            "failed password='hunter2' retry",
+            'api_key="abc123456" retry',
+            "token = 'abcdef' retry",
+            "payload {'api_key': 'abcd1234xyz'} retry",
+            'payload {"token": "abcdef"} retry',
+            "Bearer abcdefghijklmnop retry",
+        ],
+    )
+    def test_error_scrub_covers_quoted_and_json_style_pairs(self, text):
+        from coolhand.client import _sanitize_error
+
+        result = _sanitize_error(text)
+        for secret in (
+            "hunter2",
+            "abc123456",
+            "abcdef",
+            "abcd1234xyz",
+            "abcdefghijklmnop",
+        ):
+            assert secret not in result
+        assert "retry" in result
+
+    def test_error_scrub_keeps_counters(self):
+        from coolhand.client import _sanitize_error
+
+        assert "max_tokens=100" in _sanitize_error("bad max_tokens=100")
+
+    @pytest.mark.parametrize("text", ["a-" * 50_000, "x" * 100_000, "key" * 40_000])
+    def test_error_scrub_is_fast_on_hostile_input(self, text):
+        from coolhand.client import _sanitize_error
+
+        started = time.perf_counter()
+        result = _sanitize_error(text)
+        assert time.perf_counter() - started < 1.0
+        assert len(result) <= 1000
+
+    @pytest.mark.parametrize("bad", ["16", -1, 1.5, True])
+    def test_invalid_max_queued_bytes_fails_at_construction(self, bad):
+        from coolhand.client import CoolhandClient
+
+        with pytest.raises(ValueError, match="max_queued_bytes"):
+            CoolhandClient(auto_submit=False, max_queued_bytes=bad)
+
+    @pytest.mark.parametrize("off", [None, 0])
+    def test_max_queued_bytes_can_be_disabled(self, off):
+        from coolhand.client import CoolhandClient
+
+        client = CoolhandClient(auto_submit=False, max_queued_bytes=off)
+        assert client.config["max_queued_bytes"] is None
+
+    def test_budget_is_released_when_the_dispatch_queue_is_full(
+        self, reset_global_instance
+    ):
+        from unittest.mock import patch
+
+        from coolhand import client as client_module
+        from coolhand.client import CoolhandClient
+
+        with patch.object(client_module, "_MAX_DISPATCH_QUEUE_SIZE", 1):
+            client = CoolhandClient(auto_submit=False, api_key="real-api-key-12345")
+        with patch.object(client, "_ensure_worker_locked", return_value=True):
+            for _ in range(3):
+                client.log_interaction(
+                    {"method": "POST", "url": LLM_URL, "body": {"a": 1}}
+                )
+            client.flush()
+        # Only the one item that fit still holds budget.
+        weight = client._dispatch_queue.get_nowait()["_weight"]
+        assert client._queued_bytes == weight
+        assert client._dropped_count == 2
+
+    def test_budget_is_released_when_delivery_raises(self, reset_global_instance):
+        from coolhand.client import CoolhandClient
+
+        client = CoolhandClient(auto_submit=False, api_key="real-api-key-12345")
+        client._queued_bytes = 500
+
+        def boom(_item):
+            raise RuntimeError("boom")
+
+        client._send_one = boom  # type: ignore[method-assign]
+        client._deliver({"_weight": 500})
+        assert client._queued_bytes == 0
+        assert client._delivery_failure_count == 1
+
+    def test_cap_body_sized_reports_size_of_what_is_kept(self):
+        from coolhand._body_limit import cap_body_sized
+
+        assert cap_body_sized(None, 10) == (None, 0)
+        body, size = cap_body_sized({"a": "b"}, 1000)
+        assert body == {"a": "b"} and size == len('{"a": "b"}')
+        truncated, size = cap_body_sized("x" * 5000, 100)
+        assert truncated.startswith("x" * 100) and "truncated" in truncated
+        assert size == len(truncated.encode())
+        # No cap: still measured, so the memory budget can account for it.
+        assert cap_body_sized("x" * 5000, None) == ("x" * 5000, 5000)
+
+    def test_fork_hooks_replace_module_locks(self):
+        from coolhand import copilot_interceptor
+
+        before = copilot_interceptor._lock
+        copilot_interceptor._pre_pending["s"] = [{"x": 1}]
+        try:
+            copilot_interceptor._reset_after_fork()
+            assert copilot_interceptor._lock is not before
+            assert copilot_interceptor._pre_pending == {}
+        finally:
+            copilot_interceptor._pre_pending.clear()
+
+        before = interceptor._intercept_count_lock
+        interceptor._reset_reporter_after_fork()
+        assert interceptor._intercept_count_lock is not before
+        assert interceptor.get_intercept_count() >= 0  # still usable
+
+    def test_error_scrub_is_idempotent(self):
+        from coolhand.client import _sanitize_error
+
+        once = _sanitize_error("token=SECRETVALUE1 x")
+        assert once == "token=[REDACTED] x"
+        assert _sanitize_error(once) == once

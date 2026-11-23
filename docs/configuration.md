@@ -61,7 +61,6 @@ A body over the limit is cut to the first `max_body_bytes` bytes and ends with a
 
 Set `max_body_bytes=None` (or `0`) to disable the cap and log bodies in full.
 
-
 ### Limiting queued memory
 
 Captured interactions wait on a background delivery queue (at most 1000 items). While Coolhand is unreachable or slow that backlog grows, and a body is held as parsed Python objects that take several times its serialized size. `max_queued_bytes` bounds the serialized size of everything waiting for delivery (default **16 MiB**):
@@ -73,7 +72,7 @@ coolhand = Coolhand(
 )
 ```
 
-Once the backlog is over the limit, new interactions are dropped, not queued, and counted in `get_stats()["logging"]["dropped_count"]`. Your application's calls are never slowed or failed by this. An interaction larger than the whole limit is still accepted when the queue is empty. The memory is released as each queued item is delivered.
+Once the backlog is over the limit, new interactions are dropped, not queued, and counted in `get_stats()["logging"]["dropped_count"]`. Your application's calls are never slowed or failed by this. An interaction larger than the whole limit is still accepted when nothing else is queued or being delivered. The memory is released as each queued item is delivered.
 
 ---
 

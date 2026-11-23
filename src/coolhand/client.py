@@ -22,6 +22,7 @@ from ._config import (
     _DEFAULT_BASE_URL,
     _build_opener,
     _normalize_base_url,
+    _resolve_max_queued_bytes,
     _resolve_request_timeout,
 )
 from .httpx_interceptor import DEFAULT_EXCLUDE_API_PATTERNS
@@ -251,11 +252,16 @@ def _get_default_config() -> Config:
 
 
 def _mask_value(value: str) -> str:
-    """Mask a sensitive value, keeping first/last 4 chars."""
+    """Mask a sensitive value: fully if 24 chars or fewer, else keep first/last 4."""
     # Revealing 8 characters of a short secret leaks a large share of it.
     if len(value) <= 24:
         return "*" * len(value)
     return f"{value[:4]}{'*' * (len(value) - 8)}{value[-4:]}"
+
+
+def _normalize_key_name(key: str) -> str:
+    """Lowercase a field name and strip ``-``/``_`` separators."""
+    return key.lower().replace("-", "").replace("_", "")
 
 
 # Credential header names that carry none of the SENSITIVE_HEADERS substrings
@@ -277,7 +283,7 @@ _SENSITIVE_QUERY_SUBSTRINGS = (
     "jwt",
 )
 _SENSITIVE_QUERY_NORMALIZED = frozenset(
-    p.replace("-", "").replace("_", "") for p in SENSITIVE_QUERY_PARAMS
+    _normalize_key_name(p) for p in SENSITIVE_QUERY_PARAMS
 )
 
 
@@ -286,7 +292,7 @@ def _is_sensitive_query_param(name: str) -> bool:
     lowered = name.lower()
     if lowered in SENSITIVE_QUERY_PARAMS:
         return True
-    normalized = lowered.replace("-", "").replace("_", "")
+    normalized = _normalize_key_name(name)
     if normalized in _SENSITIVE_QUERY_NORMALIZED:
         return True
     return not normalized.endswith("tokens") and any(
@@ -352,11 +358,6 @@ def _sanitize_url(url: str) -> str:
             url.split("?", 1)[0].split("#", 1)[0],
             flags=re.IGNORECASE,
         )
-
-
-def _normalize_key_name(key: str) -> str:
-    """Lowercase a field name and strip ``-``/``_`` separators."""
-    return key.lower().replace("-", "").replace("_", "")
 
 
 def _is_sensitive_body_key(key: str) -> bool:
@@ -526,29 +527,46 @@ def _sanitize_body(body: str | dict | list | None) -> str | dict | list | None:
 
 
 _MAX_ERROR_CHARS = 1000
+# Input is cut to this before any regex runs, so scrubbing cost is bounded no
+# matter how long the exception text is (it runs on the caller's thread).
+_MAX_ERROR_SCAN_CHARS = 4000
 _ERROR_URL_RE = re.compile(r"https?://[^\s'\"<>)]+", re.IGNORECASE)
 _ERROR_BEARER_RE = re.compile(
     r"\b(bearer|basic)\s+[A-Za-z0-9._~+/=-]{8,}", re.IGNORECASE
 )
 _ERROR_KEY_RE = re.compile(r"\b(?:sk|pk|rk)-[A-Za-z0-9_-]{8,}")
+# ``name=value``, ``name: value``, ``"name": "value"`` and ``name='value'`` for a
+# credential-looking name. The name part is length-bounded to keep matching linear.
 _ERROR_PAIR_RE = re.compile(
-    r"\b([A-Za-z0-9_-]*(?:key|token|secret|password|passwd|signature|jwt)[A-Za-z0-9_-]*)"
-    r"(\s*[=:]\s*)(?!\[REDACTED\])[^\s&,;'\"]+",
+    r"""(?P<name>[A-Za-z0-9_-]{0,64}(?:key|token|secret|password|passwd|signature|jwt)"""
+    r"""[A-Za-z0-9_-]{0,64})(?P<quote1>["']?)(?P<sep>\s*[=:]\s*)"""
+    r"""(?:"[^"]*"|'[^']*'|[^\s&,;'"}\]]+)""",
     re.IGNORECASE,
 )
+
+
+def _mask_error_pair(match: "re.Match[str]") -> str:
+    name = match.group("name")
+    # Already masked (the value stops at the closing bracket): leave it alone.
+    if match.group(0).endswith("[REDACTED"):
+        return match.group(0)
+    # Counters such as ``max_tokens=100`` are not credentials.
+    if _normalize_key_name(name).endswith("tokens"):
+        return match.group(0)
+    return f"{name}{match.group('quote1')}{match.group('sep')}[REDACTED]"
 
 
 def _sanitize_error(error: str) -> str:
     """Make an exception message safe to forward: URLs lose query secrets and
     userinfo (``requests`` embeds the full URL in its errors), bearer tokens,
-    ``sk-`` style keys and ``key=value`` credential pairs are masked, and the
-    text is truncated. Fails closed to a fixed string."""
+    ``sk-`` style keys and credential-named pairs are masked, and the text is
+    truncated. Fails closed to a fixed string."""
     try:
-        text = str(error)
+        text = str(error)[:_MAX_ERROR_SCAN_CHARS]
         text = _ERROR_URL_RE.sub(lambda m: _sanitize_url(m.group(0)), text)
         text = _ERROR_BEARER_RE.sub(lambda m: f"{m.group(1)} [REDACTED]", text)
         text = _ERROR_KEY_RE.sub("[REDACTED]", text)
-        text = _ERROR_PAIR_RE.sub(lambda m: f"{m.group(1)}{m.group(2)}[REDACTED]", text)
+        text = _ERROR_PAIR_RE.sub(_mask_error_pair, text)
         return text[:_MAX_ERROR_CHARS]
     except Exception:
         return "[REDACTED: error could not be sanitized]"
@@ -649,6 +667,7 @@ class CoolhandClient:
             self.config.get("base_url", _DEFAULT_BASE_URL)
         )
         self.config["request_timeout"] = _resolve_request_timeout(self.config)
+        self.config["max_queued_bytes"] = _resolve_max_queued_bytes(self.config)
 
         self._init_runtime_state()
         _live_clients.add(self)

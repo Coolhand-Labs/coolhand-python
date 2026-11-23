@@ -165,7 +165,7 @@ Responses with an `audio/*`, `video/*`, `image/*`, or `application/octet-stream`
 
 - **Thread workers** (Dramatiq, Celery with threads): patches are class-level and visible across all threads. Works out of the box.
 - **Process workers** (forked subprocesses): patches survive `fork()` but not `spawn()`. See the [Dramatiq guide](./dramatiq.md#gap-1--process-based-workers) for the workaround. A forked child (`os.fork()`, `multiprocessing`'s fork start method, a preforking server) gets a fresh delivery queue, fresh locks and no worker thread automatically, so a lock that was held in the parent at fork time can't hang the child. What the parent had queued before the fork is delivered by the parent only, never by the child as well. The Dramatiq middleware's own reset stays valid and does nothing extra once this has run. `spawn()` starts a new interpreter, so nothing is inherited.
-  - **Dramatiq exception:** `CoolhandDramatiqMiddleware`'s `after_process_boot` hook resets the inherited client (fresh locks and queues; the parent's pending interactions are dropped in the child), so the two hazards above don't apply to the client there.
+  - **Dramatiq:** `CoolhandDramatiqMiddleware`'s `after_process_boot` hook performs the same reset explicitly; with the automatic reset above it is now redundant but harmless.
 - **asyncio**: async patching is fully compatible with any event loop. `asyncio.run()` inside a thread worker also works correctly.
 
 ---

@@ -255,6 +255,22 @@ class TestSanitizeRedTeamGaps:
         assert "SECRETVALUE" not in result
         assert "keep=1" in result
 
+    def test_sanitize_url_semicolon_separator(self):
+        """`;` separates query pairs and path params for some servers."""
+        for url in (
+            "https://api.openai.com/v1/x?a=1;api_key=SEKRET&keep=2",
+            "https://api.openai.com/v1/x;api_key=SEKRET?keep=2",
+            "https://api.openai.com/v1/x?keep=2;Auth%5FToken=SEKRET",
+        ):
+            result = _sanitize_url(url)
+            assert "SEKRET" not in result, url
+            assert "keep=2" in result
+            assert "[REDACTED]" in result
+
+    def test_semicolon_in_a_benign_url_is_left_untouched(self):
+        url = "https://api.openai.com/v1/x;v=2?a=1;b=2"
+        assert _sanitize_url(url) == url
+
     def test_strips_userinfo_with_query(self):
         result = _sanitize_url("https://user:hunter2@api.openai.com/v1/x?a=1")
         assert "hunter2" not in result

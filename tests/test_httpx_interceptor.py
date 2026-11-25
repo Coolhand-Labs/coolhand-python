@@ -463,6 +463,27 @@ class TestDenyListAnchoring:
         url = "https://aiplatform.googleapis.com/v1/p/batchPredictionJobs/1"
         assert _is_excluded(url) is True
 
+    @pytest.mark.parametrize(
+        "path",
+        [
+            "/v1/%2e/files",
+            "/v1/%2E/files",
+            "/v1//files",
+            "/v1/x/%2e%2e/files",
+            "/v1/./files/",
+        ],
+    )
+    def test_percent_encoded_dot_segment_is_excluded(self, path, reset_global_instance):
+        """A server resolves `/./`, `/../` and `//`, so the exclude entry must too."""
+        url = f"https://api.openai.com{path}"
+        assert _is_excluded(url) is True
+        assert _should_capture_url(url) is False
+
+    def test_normalisation_does_not_exclude_neighbouring_paths(
+        self, reset_global_instance
+    ):
+        assert _is_excluded("https://api.openai.com/v1/%2e/chat/completions") is False
+
     def test_host_qualified_pattern_needs_host(self, reset_global_instance):
         assert _is_excluded("https://api.cohere.com/v1/embed-jobs/1") is True
         assert _is_excluded("https://example.com/v1/embed-jobs/1") is False

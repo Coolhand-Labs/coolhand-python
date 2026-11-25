@@ -278,6 +278,33 @@ class SearchWorkloadsResponse(TypedDict):
     pagination: Pagination
 
 
+class WorkloadSavings(TypedDict):
+    """One row of `RealizedSavings["workloads"]`. All five keys are always present."""
+
+    id: str  # Workload hashid, the same `id` as `WorkloadSummary`; rows join on it
+    name: str
+    savings: float  # USD saved on this workload, rounded to 4 decimals
+    # USD the same requests would have cost on the deprecated versions they replaced
+    cost_at_previous_versions: float
+    active_requests: int
+
+
+class RealizedSavings(TypedDict):
+    """The realized-savings figure for the authenticating client.
+
+    From `GET /api/v2/savings`. The comparison window (deprecations in the last three
+    months) is fixed server-side and not tied to any request window, so there is no
+    `days_back`. Money values are USD floats rounded to 4 decimals.
+    """
+
+    total: float  # USD saved by switching templates or models
+    cost_at_previous_versions: float  # The baseline `total` is measured against
+    percent: float  # `total` as a share of the baseline, one decimal; 0.0 when it is 0
+    # Only workloads with a template deprecated in the last three months. Empty for a
+    # client with nothing to compare, which is real zero savings.
+    workloads: list[WorkloadSavings]
+
+
 # `article_kind` on the help center endpoints; a type alias rather than a runtime check,
 # so a new server-side kind does not break callers.
 HelpArticleKind = Literal[

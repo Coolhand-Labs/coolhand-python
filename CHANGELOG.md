@@ -4,6 +4,14 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [0.13.0] - 2026-11-25
+
+### Added
+- **Read what switching templates or models has saved you: `get_realized_savings()`.** New `Coolhand.get_realized_savings()` (backed by a new `SavingsService`, also exported from the package root) calls `GET /api/v2/savings` with the private API key and returns the figure the dashboard shows: `total`, `cost_at_previous_versions`, `percent` and a per-workload `workloads` breakdown (each `id` is the workload hashid, so rows join to `search_workloads`). It takes no parameters: the client comes from the key and the comparison window (deprecations in the last three months) is fixed server-side, so savings are not windowed by `days_back`. A client with nothing to compare gets zeros and an empty `workloads` list. A non-2xx response raises `CoolhandAPIError` with `.status` (`401` for a missing, invalid or public key; `503` when the comparison could not be computed, which is retryable and is not zero savings). The response types `RealizedSavings` and `WorkloadSavings` are exported too. Needs the server's `/api/v2/savings` endpoint, which is already deployed. **Migration:** none, purely additive. See [Reading Realized Savings](./docs/savings.md). (#262)
+
+### Internal
+- Dev/CI-only dependency bumps (none changes the runtime dependencies of the published package): `ruff` 0.17.4 → 0.17.6 (#268), `pytest-asyncio` 1.4.1.post1 → 1.5.0 (#267) and the `astral-sh/setup-uv` GitHub Action 10.3.3 → 10.4.0, in the CI and publish workflows (#266).
+
 ## [0.12.1] - 2026-11-20
 
 ### Added

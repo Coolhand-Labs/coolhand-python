@@ -13,7 +13,7 @@ import weakref
 from datetime import datetime, timezone
 from typing import Any
 from urllib.error import HTTPError, URLError
-from urllib.parse import parse_qs, urlencode, urlparse, urlunparse
+from urllib.parse import parse_qs, unquote_plus, urlencode, urlparse, urlunparse
 from urllib.request import Request
 
 from . import httpx_interceptor
@@ -143,6 +143,14 @@ SENSITIVE_QUERY_PARAMS = {
     "x-api-key",
     "x_api_key",
     "auth",
+    # Short or alternate credential names the substring rules below do not reach.
+    "app_key",
+    "appkey",
+    "pass",
+    "otp",
+    "pat",
+    "sas",
+    "ticket",
     "auth_key",
     "auth-key",
     "auth_token",
@@ -268,7 +276,10 @@ def _normalize_key_name(key: str) -> str:
 # (``X-Token``, ``X-Id-Token``, ``Cf-Access-Jwt-Assertion``, ``X-Key``,
 # ``X-Password``). ``tokens`` is excluded so rate-limit headers such as
 # ``x-ratelimit-remaining-tokens`` stay readable.
-_SENSITIVE_HEADER_RE = re.compile(r"token(?!s)|jwt|passw|(?:^|[-_])(?:key|auth)$")
+_SENSITIVE_HEADER_RE = re.compile(
+    r"token(?!s)|jwt|passw|passphrase|pwd|hmac"
+    r"|(?:^|[-_])(?:key|auth|pass|pat|otp|totp|sas|cred|oauth|refresh|private)$"
+)
 
 # Substrings that mark a query parameter as a credential once ``-``/``_`` are
 # stripped and the name is lowercased (``authToken``, ``sas_token``, ``privateKey``).
@@ -281,6 +292,8 @@ _SENSITIVE_QUERY_SUBSTRINGS = (
     "privatekey",
     "signature",
     "jwt",
+    "passphrase",
+    "hmac",
 )
 _SENSITIVE_QUERY_NORMALIZED = frozenset(
     _normalize_key_name(p) for p in SENSITIVE_QUERY_PARAMS
@@ -314,6 +327,23 @@ def _sanitize_headers(headers: dict[str, str]) -> dict[str, str]:
     return result
 
 
+def _redact_delimited_pairs(text: str, separators: str) -> tuple[str, bool]:
+    """Redact the value of each credential-named ``name=value`` pair in ``text``.
+
+    ``text`` is split on any character in ``separators`` (kept in the output), so
+    ``a=1;api_key=S`` and ``/x;api_key=S`` are handled the way a server that treats
+    ``;`` as a separator reads them. Returns the new text and whether anything changed.
+    """
+    pieces = re.split(f"([{re.escape(separators)}])", text)
+    changed = False
+    for index in range(0, len(pieces), 2):
+        name, eq, _value = pieces[index].partition("=")
+        if eq and _is_sensitive_query_param(unquote_plus(name)):
+            pieces[index] = f"{name}=[REDACTED]"
+            changed = True
+    return "".join(pieces), changed
+
+
 def _sanitize_url(url: str) -> str:
     """Redact sensitive query parameters from URLs.
 
@@ -335,7 +365,23 @@ def _sanitize_url(url: str) -> str:
         if parsed.fragment:
             parsed = parsed._replace(fragment="")
             redacted = True
-        if parsed.query:
+        # ``;`` is a query (and path-parameter) separator for some servers, so
+        # ``?a=1;api_key=S`` and ``/v1/x;api_key=S`` would otherwise hide a credential
+        # inside another value or in the path.
+        if ";" in parsed.query:
+            query, changed = _redact_delimited_pairs(parsed.query, "&;")
+            if changed:
+                parsed = parsed._replace(query=query)
+                redacted = True
+        # urlparse moves the last path segment's ``;params`` into ``.params``.
+        for part in ("path", "params"):
+            value = getattr(parsed, part)
+            if ";" in value or (part == "params" and value):
+                new_value, changed = _redact_delimited_pairs(value, ";")
+                if changed:
+                    parsed = parsed._replace(**{part: new_value})
+                    redacted = True
+        if parsed.query and ";" not in parsed.query:
             params = parse_qs(parsed.query, keep_blank_values=True)
             query_redacted = False
             # Every spelling is checked: "Key=a&key=b" must redact both, so do not

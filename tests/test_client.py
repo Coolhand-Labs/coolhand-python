@@ -66,6 +66,26 @@ class TestSanitizeHeaders:
             assert result[header] != secret
             assert "****" in result[header]
 
+    @pytest.mark.parametrize(
+        "header",
+        ["X-Pass", "X-Passphrase", "X-Pwd", "X-Hmac", "X-Hmac-Sha256", "X-Pat", "X-Otp"]
+        + ["X-Totp", "X-Sas", "X-Cred", "X-Oauth", "X-Refresh", "X-Private"],
+    )
+    def test_masks_short_credential_header_spellings(self, header):
+        """Short credential spellings none of the listed substrings reach are masked."""
+        secret = "abcd1234567890secret"
+        assert _sanitize_headers({header: secret})[header] != secret
+
+    def test_does_not_mask_benign_headers_near_the_new_credential_names(self):
+        """`pass`/`pat`/`sas` only match as a whole trailing segment."""
+        headers = {
+            "X-Passenger-Count": "3",
+            "X-Path": "/a",
+            "Content-Type": "application/json",
+            "x-ratelimit-remaining-tokens": "100",
+        }
+        assert _sanitize_headers(headers) == headers
+
     def test_masks_api_key_header(self):
         """API key headers are masked."""
         headers = {
@@ -218,6 +238,14 @@ class TestSanitizeRedTeamGaps:
             "X_API_KEY",
             "auth_key",
             "Auth-Key",
+            "app_key",
+            "pass",
+            "passphrase",
+            "otp",
+            "pat",
+            "sas",
+            "ticket",
+            "hmac",
         ],
     )
     def test_redacts_additional_query_params(self, param):
@@ -226,6 +254,22 @@ class TestSanitizeRedTeamGaps:
         )
         assert "SECRETVALUE" not in result
         assert "keep=1" in result
+
+    def test_sanitize_url_semicolon_separator(self):
+        """`;` separates query pairs and path params for some servers."""
+        for url in (
+            "https://api.openai.com/v1/x?a=1;api_key=SEKRET&keep=2",
+            "https://api.openai.com/v1/x;api_key=SEKRET?keep=2",
+            "https://api.openai.com/v1/x?keep=2;Auth%5FToken=SEKRET",
+        ):
+            result = _sanitize_url(url)
+            assert "SEKRET" not in result, url
+            assert "keep=2" in result
+            assert "[REDACTED]" in result
+
+    def test_semicolon_in_a_benign_url_is_left_untouched(self):
+        url = "https://api.openai.com/v1/x;v=2?a=1;b=2"
+        assert _sanitize_url(url) == url
 
     def test_strips_userinfo_with_query(self):
         result = _sanitize_url("https://user:hunter2@api.openai.com/v1/x?a=1")

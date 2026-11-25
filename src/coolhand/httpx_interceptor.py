@@ -8,6 +8,7 @@ import ipaddress
 import json
 import logging
 import os
+import posixpath
 import queue
 import re
 import threading
@@ -436,7 +437,7 @@ def _matches_any(
             port = parts.port or _DEFAULT_PORTS.get(parts.scheme)
         except ValueError:
             port = None
-        path = unquote(parts.path)
+        path = _normalize_path(unquote(parts.path))
         return any(
             _compile_entry(entry)(host, port, path)
             for entry in (defaults if override is None else override)
@@ -444,6 +445,21 @@ def _matches_any(
     except Exception:
         logger.debug("Failed to match URL against pattern list", exc_info=True)
         return on_error
+
+
+def _normalize_path(path: str) -> str:
+    """Collapse ``//`` and resolve ``.``/``..`` segments, keeping a trailing slash.
+
+    Run after percent-decoding: a client that keeps ``%2e`` literal (httpx does) sends
+    ``/v1/%2e/files`` to a server that resolves it to ``/v1/files``, which an
+    exclude entry for ``/v1/files`` must still match.
+    """
+    if not path:
+        return path
+    normalized = posixpath.normpath(re.sub(r"/{2,}", "/", path))
+    if path.endswith("/") and normalized != "/":
+        normalized += "/"
+    return normalized
 
 
 def _is_localhost(url: str) -> bool:

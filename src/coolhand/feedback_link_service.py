@@ -25,6 +25,7 @@ from ._read_service import (
     _MAX_ERROR_BODY_CHARS,
     CoolhandAPIError,
     _error_body,
+    _mask_key,
 )
 from .types import BulkLinkFeedbackResult, Config, OptimizationFeedbackLink
 from .version import __version__
@@ -280,15 +281,15 @@ class FeedbackLinkService:
         raw = self._send(request)
         try:
             body = json.loads(raw)
-        except ValueError as error:
+        except (ValueError, RecursionError) as error:
             raise CoolhandAPIError(
                 "Feedback link response was not valid JSON: "
-                f"{raw[:_MAX_ERROR_BODY_CHARS]}"
+                f"{_mask_key(raw[:_MAX_ERROR_BODY_CHARS], self.api_key)}"
             ) from error
         if not isinstance(body, dict):
             raise CoolhandAPIError(
                 "Feedback link response was not a JSON object: "
-                f"{str(body)[:_MAX_ERROR_BODY_CHARS]}"
+                f"{_mask_key(str(body)[:_MAX_ERROR_BODY_CHARS], self.api_key)}"
             )
         return body
 
@@ -299,7 +300,8 @@ class FeedbackLinkService:
                 return response.read().decode("utf-8")
         except HTTPError as error:
             raise CoolhandAPIError(
-                f"Feedback link request failed ({error.code}): {_error_body(error)}",
+                f"Feedback link request failed ({error.code}): "
+                f"{_error_body(error, self.api_key)}",
                 status=error.code,
             ) from error
         except URLError as error:

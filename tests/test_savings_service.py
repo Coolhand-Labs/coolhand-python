@@ -158,3 +158,33 @@ class TestCoolhandDelegation:
         request = instance._savings_service._opener.request
         assert urlparse(request.full_url).path == SAVINGS_ENDPOINT
         assert result == SAVINGS
+
+
+class TestErrorTextDoesNotEchoTheApiKey:
+    """A server or proxy that echoes the credential must not put it in the exception."""
+
+    def test_error_body_with_the_key_is_masked(self):
+        service = build_service(
+            error=http_error(401, '{"error":"Invalid key test-private-key"}')
+        )
+
+        with pytest.raises(CoolhandAPIError) as excinfo:
+            service.get_realized_savings()
+
+        assert "test-private-key" not in str(excinfo.value)
+        assert "[REDACTED]" in str(excinfo.value)
+        assert excinfo.value.status == 401
+
+    def test_invalid_json_body_with_the_key_is_masked(self):
+        service = build_service("not json test-private-key")
+
+        with pytest.raises(CoolhandAPIError) as excinfo:
+            service.get_realized_savings()
+
+        assert "test-private-key" not in str(excinfo.value)
+
+    def test_deeply_nested_json_is_wrapped_not_a_recursion_error(self):
+        service = build_service("[" * 200000)
+
+        with pytest.raises(CoolhandAPIError):
+            service.get_realized_savings()

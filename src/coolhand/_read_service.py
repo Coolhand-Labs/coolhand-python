@@ -1,9 +1,9 @@
 """Shared plumbing for the read-only REST services.
 
-`TemplateService`, `WorkloadService`, `LogService` and `SavingsService` all GET a JSON
-resource with the client's **private** API key (`HelpCenterDocs` alone needs none),
-raise `CoolhandAPIError` on any failure, and read pagination off response headers. That
-machinery lives here once.
+`TemplateService`, `StepTemplateService`, `WorkloadService`, `LogService` and
+`SavingsService` all GET a JSON resource with the client's **private** API key
+(`HelpCenterDocs` alone needs none), raise `CoolhandAPIError` on any failure, and read
+pagination off response headers. That machinery lives here once.
 """
 
 import http.client

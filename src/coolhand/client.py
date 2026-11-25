@@ -143,6 +143,14 @@ SENSITIVE_QUERY_PARAMS = {
     "x-api-key",
     "x_api_key",
     "auth",
+    # Short or alternate credential names the substring rules below do not reach.
+    "app_key",
+    "appkey",
+    "pass",
+    "otp",
+    "pat",
+    "sas",
+    "ticket",
     "auth_key",
     "auth-key",
     "auth_token",
@@ -268,7 +276,10 @@ def _normalize_key_name(key: str) -> str:
 # (``X-Token``, ``X-Id-Token``, ``Cf-Access-Jwt-Assertion``, ``X-Key``,
 # ``X-Password``). ``tokens`` is excluded so rate-limit headers such as
 # ``x-ratelimit-remaining-tokens`` stay readable.
-_SENSITIVE_HEADER_RE = re.compile(r"token(?!s)|jwt|passw|(?:^|[-_])(?:key|auth)$")
+_SENSITIVE_HEADER_RE = re.compile(
+    r"token(?!s)|jwt|passw|passphrase|pwd|hmac"
+    r"|(?:^|[-_])(?:key|auth|pass|pat|otp|totp|sas|cred|oauth|refresh|private)$"
+)
 
 # Substrings that mark a query parameter as a credential once ``-``/``_`` are
 # stripped and the name is lowercased (``authToken``, ``sas_token``, ``privateKey``).
@@ -281,6 +292,8 @@ _SENSITIVE_QUERY_SUBSTRINGS = (
     "privatekey",
     "signature",
     "jwt",
+    "passphrase",
+    "hmac",
 )
 _SENSITIVE_QUERY_NORMALIZED = frozenset(
     _normalize_key_name(p) for p in SENSITIVE_QUERY_PARAMS

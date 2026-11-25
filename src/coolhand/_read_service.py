@@ -193,12 +193,21 @@ def _encode_path_id(value: str, name: str, method: str) -> str:
     return quote(value, safe="")
 
 
-def _error_body(error: HTTPError) -> str:
+def _mask_key(text: str, api_key: str) -> str:
+    """Replace every occurrence of the API key in `text`, so a server (or proxy) that
+    echoes the credential in a response body cannot put it in an exception message."""
+    if api_key:
+        return text.replace(api_key, "[REDACTED]")
+    return text
+
+
+def _error_body(error: HTTPError, api_key: str = "") -> str:
     """Read an error response body for the message, tolerating an unreadable one."""
     try:
-        return error.read().decode("utf-8", errors="replace")[:_MAX_ERROR_BODY_CHARS]
+        text = error.read().decode("utf-8", errors="replace")[:_MAX_ERROR_BODY_CHARS]
     except Exception:
         return ""
+    return _mask_key(text, api_key)
 
 
 def _by_key_url(base_url: str, endpoint: str, key: str, label: str) -> str:
@@ -244,7 +253,7 @@ def _put_json(
             raw = response.read().decode("utf-8")
     except HTTPError as error:
         raise CoolhandAPIError(
-            f"{label} request failed ({error.code}): {_error_body(error)}",
+            f"{label} request failed ({error.code}): {_error_body(error, api_key)}",
             status=error.code,
         ) from error
     except URLError as error:
@@ -262,9 +271,10 @@ def _put_json(
 
     try:
         body = json.loads(raw)
-    except ValueError as error:
+    except (ValueError, RecursionError) as error:
+        snippet = _mask_key(raw[:_MAX_ERROR_BODY_CHARS], api_key)
         raise CoolhandAPIError(
-            f"{label} response was not valid JSON: {raw[:_MAX_ERROR_BODY_CHARS]}",
+            f"{label} response was not valid JSON: {snippet}",
             status=status,
         ) from error
     if not isinstance(body, dict):
@@ -362,7 +372,7 @@ class ReadService:
         except HTTPError as error:
             raise CoolhandAPIError(
                 f"{self._resource_label} request failed ({error.code}): "
-                f"{_error_body(error)}",
+                f"{_error_body(error, self.api_key)}",
                 status=error.code,
             ) from error
         except URLError as error:
@@ -384,10 +394,10 @@ class ReadService:
 
         try:
             return json.loads(raw), response_headers
-        except ValueError as error:
+        except (ValueError, RecursionError) as error:
             raise CoolhandAPIError(
                 f"{self._resource_label} response was not valid JSON: "
-                f"{raw[:_MAX_ERROR_BODY_CHARS]}"
+                f"{_mask_key(raw[:_MAX_ERROR_BODY_CHARS], self.api_key)}"
             ) from error
 
     def _get_json_array(self, url: str, what: str) -> tuple[list[Any], Message]:
@@ -396,7 +406,7 @@ class ReadService:
         if not isinstance(body, list):
             raise CoolhandAPIError(
                 f"{what} response was not a JSON array: "
-                f"{str(body)[:_MAX_ERROR_BODY_CHARS]}"
+                f"{_mask_key(str(body)[:_MAX_ERROR_BODY_CHARS], self.api_key)}"
             )
         return body, headers
 
@@ -406,7 +416,7 @@ class ReadService:
         if not isinstance(body, dict):
             raise CoolhandAPIError(
                 f"{what} response was not a JSON object: "
-                f"{str(body)[:_MAX_ERROR_BODY_CHARS]}"
+                f"{_mask_key(str(body)[:_MAX_ERROR_BODY_CHARS], self.api_key)}"
             )
         return body, headers
 

@@ -66,6 +66,26 @@ class TestSanitizeHeaders:
             assert result[header] != secret
             assert "****" in result[header]
 
+    @pytest.mark.parametrize(
+        "header",
+        ["X-Pass", "X-Passphrase", "X-Pwd", "X-Hmac", "X-Hmac-Sha256", "X-Pat", "X-Otp"]
+        + ["X-Totp", "X-Sas", "X-Cred", "X-Oauth", "X-Refresh", "X-Private"],
+    )
+    def test_masks_short_credential_header_spellings(self, header):
+        """Short credential spellings none of the listed substrings reach are masked."""
+        secret = "abcd1234567890secret"
+        assert _sanitize_headers({header: secret})[header] != secret
+
+    def test_does_not_mask_benign_headers_near_the_new_credential_names(self):
+        """`pass`/`pat`/`sas` only match as a whole trailing segment."""
+        headers = {
+            "X-Passenger-Count": "3",
+            "X-Path": "/a",
+            "Content-Type": "application/json",
+            "x-ratelimit-remaining-tokens": "100",
+        }
+        assert _sanitize_headers(headers) == headers
+
     def test_masks_api_key_header(self):
         """API key headers are masked."""
         headers = {
@@ -218,6 +238,14 @@ class TestSanitizeRedTeamGaps:
             "X_API_KEY",
             "auth_key",
             "Auth-Key",
+            "app_key",
+            "pass",
+            "passphrase",
+            "otp",
+            "pat",
+            "sas",
+            "ticket",
+            "hmac",
         ],
     )
     def test_redacts_additional_query_params(self, param):
